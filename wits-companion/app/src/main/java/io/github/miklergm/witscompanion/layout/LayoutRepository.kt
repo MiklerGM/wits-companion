@@ -1,0 +1,109 @@
+package io.github.miklergm.witscompanion.layout
+
+import android.content.Context
+import android.content.SharedPreferences
+import org.json.JSONArray
+import org.json.JSONObject
+
+/**
+ * Persists presets and user preferences.
+ *
+ * Custom presets are stored as JSON in SharedPreferences; the built-in defaults are
+ * always available and are merged with any user additions.
+ */
+class LayoutRepository(context: Context) {
+
+    private val prefs: SharedPreferences =
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    // ------------------------------------------------------------------ presets
+
+    fun allPresets(): List<LayoutPreset> = DefaultPresets.all() + customPresets()
+
+    fun preset(id: String): LayoutPreset? = allPresets().firstOrNull { it.id == id }
+
+    fun customPresets(): List<LayoutPreset> {
+        val raw = prefs.getString(KEY_CUSTOM_PRESETS, null) ?: return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).map { LayoutPreset.fromJson(arr.getJSONObject(it)) }
+        }.getOrDefault(emptyList())
+    }
+
+    fun saveCustomPreset(preset: LayoutPreset) {
+        val existing = customPresets().filterNot { it.id == preset.id }
+        writeCustom(existing + preset)
+    }
+
+    fun deleteCustomPreset(id: String) {
+        writeCustom(customPresets().filterNot { it.id == id })
+    }
+
+    private fun writeCustom(list: List<LayoutPreset>) {
+        val arr = JSONArray().also { a -> list.forEach { a.put(it.toJson()) } }
+        prefs.edit().putString(KEY_CUSTOM_PRESETS, arr.toString()).apply()
+    }
+
+    // ------------------------------------------------------------- last applied
+
+    var lastAppliedPresetId: String?
+        get() = prefs.getString(KEY_LAST_PRESET, null)
+        set(value) = prefs.edit().putString(KEY_LAST_PRESET, value).apply()
+
+    fun lastAppliedPreset(): LayoutPreset? = lastAppliedPresetId?.let { preset(it) }
+
+    // ------------------------------------------------------------- preferences
+    // All automatic behaviours default to OFF. The user opts in explicitly.
+
+    var restoreOnResume: Boolean
+        get() = prefs.getBoolean(KEY_RESTORE_ON_RESUME, false)
+        set(v) = prefs.edit().putBoolean(KEY_RESTORE_ON_RESUME, v).apply()
+
+    var restoreOnAcc: Boolean
+        get() = prefs.getBoolean(KEY_RESTORE_ON_ACC, false)
+        set(v) = prefs.edit().putBoolean(KEY_RESTORE_ON_ACC, v).apply()
+
+    var restoreOnAndroidSource: Boolean
+        get() = prefs.getBoolean(KEY_RESTORE_ON_SOURCE, false)
+        set(v) = prefs.edit().putBoolean(KEY_RESTORE_ON_SOURCE, v).apply()
+
+    var restoreAfterReverse: Boolean
+        get() = prefs.getBoolean(KEY_RESTORE_AFTER_REVERSE, false)
+        set(v) = prefs.edit().putBoolean(KEY_RESTORE_AFTER_REVERSE, v).apply()
+
+    var restoreOnBoot: Boolean
+        get() = prefs.getBoolean(KEY_RESTORE_ON_BOOT, false)
+        set(v) = prefs.edit().putBoolean(KEY_RESTORE_ON_BOOT, v).apply()
+
+    var simulationEnabled: Boolean
+        get() = prefs.getBoolean(KEY_SIMULATION, false)
+        set(v) = prefs.edit().putBoolean(KEY_SIMULATION, v).apply()
+
+    /** Raw `wits_night_mode` recorded before our first write, for "undo". */
+    var nightModeBackup: String?
+        get() = prefs.getString(KEY_NIGHT_BACKUP, null)
+        set(v) = prefs.edit().putString(KEY_NIGHT_BACKUP, v).apply()
+
+    fun exportPreferences(): JSONObject = JSONObject().apply {
+        put(KEY_RESTORE_ON_RESUME, restoreOnResume)
+        put(KEY_RESTORE_ON_ACC, restoreOnAcc)
+        put(KEY_RESTORE_ON_SOURCE, restoreOnAndroidSource)
+        put(KEY_RESTORE_AFTER_REVERSE, restoreAfterReverse)
+        put(KEY_RESTORE_ON_BOOT, restoreOnBoot)
+        put(KEY_SIMULATION, simulationEnabled)
+        put(KEY_LAST_PRESET, lastAppliedPresetId ?: "none")
+    }
+
+    private companion object {
+        const val PREFS = "wits_companion_layouts"
+        const val KEY_CUSTOM_PRESETS = "custom_presets"
+        const val KEY_LAST_PRESET = "last_preset"
+        const val KEY_RESTORE_ON_RESUME = "restore_on_resume"
+        const val KEY_RESTORE_ON_ACC = "restore_on_acc"
+        const val KEY_RESTORE_ON_SOURCE = "restore_on_android_source"
+        const val KEY_RESTORE_AFTER_REVERSE = "restore_after_reverse"
+        const val KEY_RESTORE_ON_BOOT = "restore_on_boot"
+        const val KEY_SIMULATION = "simulation_enabled"
+        const val KEY_NIGHT_BACKUP = "night_mode_backup"
+    }
+}

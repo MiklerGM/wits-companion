@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      Permission policy (see docs/security.md §3.6):
+        * NO INTERNET              - nothing can be uploaded or remotely triggered
+        * NO SYSTEM_ALERT_WINDOW   - no overlays, especially not over the reverse camera
+        * NO QUERY_ALL_PACKAGES    - explicit <queries> instead
+        * NO Accessibility service
+        * NO root, NO platform signature
+    -->
+
+    <!-- Optional: only used by the opt-in "restore layout at boot" feature. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Optional: only used to write Settings.System/wits_night_mode.
+         This is an appop; the user grants it via ACTION_MANAGE_WRITE_SETTINGS. -->
+    <uses-permission
+        android:name="android.permission.WRITE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+
+    <!-- Package visibility (Android 11+). Deliberately narrow. -->
+    <queries>
+        <package android:name="com.google.android.apps.maps" />
+        <package android:name="com.spotify.music" />
+        <package android:name="com.wits.launcher" />
+        <package android:name="com.wits.pms" />
+
+        <!-- Needed to resolve MediaSession owners for the media panel. -->
+        <intent>
+            <action android:name="android.media.browse.MediaBrowserService" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".app.WitsCompanionApp"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.WitsCompanion">
+
+        <!--
+          MainActivity must be exported to carry the LAUNCHER category.
+          It is only a UI entry point: it performs no action on start, and it
+          exposes no intent extras that could trigger a layout or source change.
+        -->
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          Notification listener: exists ONLY to unlock
+          MediaSessionManager.getActiveSessions(). It reads no notifications.
+          exported=false; the system binds it via the signature-level permission.
+        -->
+        <service
+            android:name=".media.WitsNotificationListenerService"
+            android:exported="false"
+            android:label="@string/media_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!--
+          Boot receiver for the opt-in restore feature. Not exported: BOOT_COMPLETED
+          is a protected system broadcast, so only the system can deliver it.
+        -->
+        <receiver
+            android:name=".layout.BootRestoreReceiver"
+            android:exported="false"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+          NOTE: WitsBroadcastReceiver (car state) is NOT declared here on purpose.
+          It is registered at runtime with RECEIVER_NOT_EXPORTED so that no other
+          app can feed us spoofed vehicle state. See docs/security.md §3.2.
+        -->
+
+    </application>
+</manifest>

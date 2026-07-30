@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Wits Companion</string>
+    <string name="media_listener_label">Wits Companion media access</string>
+    <string name="status_initial">starting…</string>
+    <string name="status_line">source: %1$s · ACC: %2$s · %3$s · signals: %4$d</string>
+</resources>
