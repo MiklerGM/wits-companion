@@ -171,6 +171,60 @@ stale). Watch both.
 Whether the value tracks the NBT knob in real time is still `[HYP]` — needs a marker
 session.
 
+### 3.2 The launcher's own volume dial confirms all of it `[CODE]`
+
+The BMW EVO ID8 profile (`BM_EVOID8_WPW42_2mode`) draws a volume dial. It reads and writes
+this exact key, with no `AudioManager` anywhere in the path —
+`Id8UgCarModelFragment.updateVolume()`:
+
+```java
+int settingsInt = PowerManagerApp.getSettingsInt(UtilSetting.MCU_VOL1);  // "wits_mcu:1"
+mediaVol        = settingsInt & 255;                     // low byte
+int percentInt  = (int)((mediaVol / 40.0f) * 100.0f);    // out of 40
+```
+
+and the dial's write back, which preserves the high byte and replaces only the low one:
+
+```java
+int iVolume  = PowerManagerApp.getSettingsInt(UtilSetting.MCU_VOL1) & 0xFF00;
+int progress = (int)(40.0f * value);
+FileUtils.savaIntData(UtilSetting.MCU_VOL1, iVolume + progress);
+```
+
+It refreshes from a `ContentObserver` on `Settings.System.getUriFor("wits_mcu:1")`.
+
+This independently confirms three things previously inferred from `McuManager`: the key is
+`wits_mcu:1`, the volume is the **low byte**, and the scale is **0–40**.
+
+**It also resolves an apparent contradiction.** The dial typically reads ~70 %, which looks
+incompatible with "Android volume is pinned at maximum". There is no conflict: the dial is a
+view of the **MCU domain**, not the Android domain. 70 % is `28/40`. Android's stream stays
+at maximum as a fixed gain stage while the MCU does the real attenuation — exactly the model
+in §3.
+
+**Why the gate does not apply here.** The gate in §1 sits on `AudioService`'s stream-volume
+entry points. The launcher never calls them; it writes the setting directly, as a
+system-uid app. That path is closed to the companion: it is not a system app, the key is
+vendor-private, and changing MCU settings is outside the agreed boundary (§8). The
+companion therefore **displays this value and never writes it**.
+
+### 3.3 Open question — the steering wheel `[RUNTIME]` needed
+
+Observed 2026-07-31: the dial does **not** move when the steering volume buttons are
+pressed. Since the dial is driven by a `ContentObserver` on `wits_mcu:1`, that means the
+steering keys are not reaching this key at that moment — not that the key is wrong.
+
+Candidate explanations, none yet tested:
+
+- the head unit was on the OEM source, where the car's own amplifier handles volume and the
+  MCU value governs the Android path only;
+- the steering scheme (`control_type`) does not map the volume keys on this profile.
+
+This sharpens the pending audio-gate session: watch `wits_mcu:1` **specifically** while
+pressing the steering volume buttons, and note the source at the time. A `SETTINGS_CHANGE`
+for that key is the positive result; silence with the source on OEM supports the first
+explanation.
+
 ---
 
 ## 4. The OEM / NBT volume — not found

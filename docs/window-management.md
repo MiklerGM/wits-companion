@@ -217,18 +217,95 @@ re-sends `CHANGE_WINDOW` with full bounds instead — idempotent and independent
 
 ## 6. Application order, focus and z-order
 
+### 6.0 `CHANGE_WINDOW` is exclusive; a plain launch is inclusive `[RUNTIME]`
+
+This is the single most important fact about laying out more than one tile, and it was
+established on the device on 2026-07-31 (raw dumps in `research/window-debug/`).
+
+The two primitives have **opposite** properties:
+
+| primitive | sets geometry | effect on other freeform tiles |
+| --- | --- | --- |
+| `CHANGE_WINDOW` | yes | **hides them** — exclusive |
+| plain `startActivity` | only for a task that does not exist yet | **leaves them alone** — inclusive |
+
+Measured directly, one broadcast at a time:
+
+```
+after CHANGE_WINDOW(maps):    maps visible=true   chrome visible=false
+after CHANGE_WINDOW(chrome):  chrome visible=true  maps mode=pinned
+```
+
+The cause is visible in logcat — the hook takes its warm path:
+
+```
+I/ActivityTaskManager: Abel ActivityTaskManagerService.java getFreeformTaskId packageName=com.android.chrome, taskId=37
+D/ActivityTaskManager: startActivityByWindowMode37
+```
+
+`startActivityFromRecents` brings its own task forward and drops the other freeform tasks
+to `visibleRequested=false`.
+
+A plain launch has the mirror-image problem: it makes a task visible without hiding
+neighbours, but a task that does not exist yet is created **fullscreen** — opaque, so it
+occludes the other tile — or **pinned**, for apps with auto-PiP such as Google Maps.
+`ActivityOptions.setLaunchBounds()` (public API) fixes that by creating the task in
+freeform directly; `setLaunchWindowingMode` is `@hide` and is applied reflectively as a
+best effort.
+
+**Therefore the phases must not interleave.** Any "geometry → launch, geometry → launch"
+sequence is broken: the second `CHANGE_WINDOW` hides the tile the first launch just made
+visible. Three orderings were measured; only the last one works:
+
+| ordering | result |
+|---|---|
+| geometry → launch, per tile (interleaved) | one tile hidden |
+| all launches, then all geometry | last tile visible only |
+| **all geometry, then all launches** | **both `visible=true mode=freeform`** |
+
+Retries send **launches only**. Re-sending `CHANGE_WINDOW` would hide every already-placed
+tile and make the layout visibly flash on each pass; a launch repairs a missing tile
+without disturbing the others, and still carries the bounds through `setLaunchBounds`.
+
+One short flash of the first tile remains on apply (~`PHASE_GAP_MS`): its geometry makes it
+visible, the next tile's `CHANGE_WINDOW` hides it, and the launch phase restores it. This
+is inherent to the hook being exclusive and cannot be removed without abandoning
+`CHANGE_WINDOW`.
+
+### 6.0.1 Measure the area from the display, never from our own window `[RUNTIME]`
+
+`usableArea()` must use `WindowManager.getMaximumWindowMetrics()`.
+`getCurrentWindowMetrics()` describes **the window the companion itself is drawn in** — and
+the companion can be one of the tiles it is laying out. On this firmware that holds even
+for an `Application` context.
+
+The failure is self-amplifying: each apply computes the next layout inside the previous
+result. Logged `area` over successive applies with the companion as a tile:
+
+```
+area="1560 99 2400 900"   (840 px wide, should be 2400)
+area="1980 99 2400 900"   (420 px wide)
+```
+
+Both tiles collapse into a corner. Guarded by
+`layout area is measured from the display, never from our own window`.
+
+### 6.1 Ordering strategy
+
 `CHANGE_WINDOW` ends in `startActivity` / `startActivityFromRecents`, so **the last
 window applied becomes the topmost / focused one**. `[HYP]` (follows from AOSP
 semantics; needs `[RUNTIME]` confirmation).
 
 Companion strategy (`LayoutEngine`):
 
-1. Resolve real display bounds and insets.
+1. Resolve display bounds and insets from **maximum** window metrics (§6.0.1).
 2. Sort windows by `focusOrder` **ascending**.
 3. For each window: if `launchIntentUri` is set and the task does not exist yet, fire the
    deep link first, wait a short settle delay.
-4. Send `CHANGE_WINDOW` for each window in that order, with a small inter-window delay.
-5. The window with the **highest** `focusOrder` is applied **last** ⇒ gets focus.
+4. **Phase 1** — send `CHANGE_WINDOW` for every window, `GEOMETRY_DELAY_MS` apart.
+5. Wait `PHASE_GAP_MS` for the geometry to settle.
+6. **Phase 2** — launch every window with freeform launch options, `LAUNCH_DELAY_MS` apart.
+7. The window with the **highest** `focusOrder` is launched **last** ⇒ gets focus.
 
 ## 6.1 Generation token — stale sends must not fire
 
@@ -290,6 +367,67 @@ Presets store normalized bounds, so side order and split ratio are pure geometry
 Both are persisted per preset id in `LayoutRepository` and applied on read, so the
 built-in presets stay untouched and the tweaks survive a reinstall of the preset list.
 The Layouts tab exposes a **⇄ swap sides** button and 50/60/65/70 split buttons.
+
+## 6.4 Mode B — the anchor panel
+
+In Mode B the companion is fullscreen and exactly **one** foreign window (the map) floats
+over it. Everything else — media, volume readouts, vehicle state — is drawn by the
+companion itself rather than given a window, so the vendor hook only has to place a single
+tile.
+
+### It is a separate activity, not a tab `[CODE]`
+
+`DashboardActivity`, not a sixth tab in `MainActivity`. The reasons are not cosmetic:
+
+- the anchor is the screen looked at while driving; a tab strip, monospace dumps and
+  export buttons belong to configuration, not to motion;
+- the anchor is the entire visual background under the floating map — a tab strip would
+  waste the top band and the map would cover content unpredictably;
+- mixing configuration with the working surface is exactly what made the Signals screen
+  confusing.
+
+`LayoutEngine.bringAnchorToFront()` starts it directly. **No vendor hook is involved for
+our own package** — that matters, because the hook can only launch a package's MAIN
+activity (§4.2), so an anchor reachable only through `CHANGE_WINDOW` would have forced the
+dashboard to become the launcher activity.
+
+### The panel leaves the map's strip empty
+
+`LayoutPreset.anchorReservedLeftFraction()` returns the fraction the floating window
+covers, and the panel lays out an empty spacer of exactly that width. Changing the
+preset's split moves the panel with it instead of leaving content hidden underneath.
+
+Guards: a non-anchored preset reserves nothing; a window that is not flush to the left
+edge reserves nothing (the panel stays full width rather than putting the gap in the wrong
+place); the reservation is clamped to `MAX_ANCHOR_RESERVED` = 0.8 so the panel cannot be
+starved.
+
+### What the panel does and does not do
+
+Reads only, with one deliberate exception: media transport (play/pause/next/previous) via
+`MediaSessionRepository`, i.e. the standard Android MediaSession API aimed at the player
+app. Volume is **displayed, never set** — the vendor `AudioService` ignores volume changes
+from any caller other than `com.wits.pms` (`docs/audio-volume.md`), so a slider here would
+be a control that silently does nothing.
+
+PDC and doors are deliberately absent: both are already on the instrument cluster and the
+HUD, and engaging reverse hands the screen to the OEM source anyway.
+
+Enforced by `the anchor panel never writes to the vendor stack` and
+`the anchor panel shows no PDC or door state`.
+
+### Three assumptions still unverified `[HYP]`
+
+Mode B rests on three things that have not been tested on the vehicle:
+
+1. **Parking works** — `CHANGE_WINDOW` with `FULLSCREEN` really removes a stale tile from
+   view instead of leaving it floating over the panel.
+2. **The anchor stays alive and visible** underneath the floating window, rather than being
+   stopped or occluded once the map is placed.
+3. **The vendor stack does not interfere** — WitsLauncher or `com.wits.pms` does not
+   re-arrange or re-focus windows when it notices a non-launcher package fullscreen.
+
+Until these are checked, Mode B is built but unproven.
 
 ## 7. Restore strategy
 
@@ -363,7 +501,7 @@ reserves it (`usable 2400x801 at y=99`); `--inset-top` overrides. The companion'
 `WitsWindowController.usableArea()` already computed this correctly from
 `WindowMetrics` insets, so `LayoutEngine` is unaffected.
 
-### Open defect: cold start does not land in freeform
+### Resolved: tiles replaced each other instead of tiling
 
 **Symptom** `[RUNTIME]` (2026-07-31, from the companion app): applying
 *Maps 65 / Spotify 35* opened Maps, then Maps closed and Spotify opened. The two tiles
@@ -390,10 +528,28 @@ front**. Firing them back to back does not reinforce a layout, it thrashes the s
 leaves whichever package went last on top — exactly the reported "Maps opens, Maps
 closes, Spotify opens".
 
-Fix: retry passes now stagger identically to the initial pass and start only after it
-finishes (`0, 350 | 950, 1300`), and the default drops from 2 retries to 1.
-`LayoutEngine.scheduleFor()` exposes the schedule and `LayoutScheduleTest` asserts that
-no two broadcasts ever share an instant.
+Fix: retry passes stagger and start only after the initial pass finishes, and the default
+drops from 2 retries to 1. `LayoutEngine.scheduleFor()` exposes the schedule and
+`LayoutScheduleTest` asserts that no two broadcasts ever share an instant.
+
+**This was a real bug, but it was not the cause of the tiles replacing each other.** After
+it was fixed the symptom persisted: the user reported seeing Spotify with the OEM dashboard
+beside it, and `dumpsys` showed the missing tile correctly bounded but `visible=false`.
+
+**Actual cause** — `CHANGE_WINDOW` is exclusive (§6.0). It assigns bounds and hides every
+other freeform tile; nothing in the pass ever made the earlier tiles visible again. The
+decisive clue came from the user: tapping the missing app's icon by hand fixed the layout
+without disturbing the other tile, i.e. a plain launch is inclusive where the hook is not.
+Fixed by splitting the pass into an all-geometry phase followed by an all-launch phase.
+
+**A second, independent bug** was then found by changing the split to 50/50 while the
+companion was itself a tile: both tiles collapsed into a third of the screen, because the
+area was measured from the companion's own window (§6.0.1).
+
+**Methodological note.** Two false "fixed" claims were made from `dumpsys` bounds alone
+while `visible=` was still `false`. Bounds without visibility prove nothing — always assert
+`visible=true` **and** `mode=freeform` **and** the rect, and confirm against what is
+actually on the screen.
 
 **Superseded hypothesis** (kept for the record) — the cold-start path:
 
@@ -420,17 +576,24 @@ Competing explanations not yet excluded:
   re-triggering a cold start;
 - Spotify's own `launchMode` / task affinity.
 
-**Verification still owed** (next session):
+**Verified on the device** `[RUNTIME]` 2026-07-31: with the two-phase ordering, Apply from
+the companion tiles Maps and Chrome correctly, and the user confirmed it visually. One
+short flash of the first tile remains, as explained in §6.0.
 
-1. Re-install the rebuilt APK and press Apply — expect proper tiling.
-2. Reproduce the old behaviour deliberately to confirm the diagnosis:
-   `tools/test-layout.sh custom --execute --burst --pkg … --bounds …` fires every window
-   with no gap, exactly as the old retry pass did. If that reproduces the symptom from
-   the shell, the cause is settled and the caller is exonerated.
-3. `tools/test-layout.sh … --retries 1` reproduces the *fixed* staggered pattern.
+**Still owed:**
+
+1. Install the APK carrying the `maximumWindowMetrics` fix and re-test changing the split
+   with the companion itself as a tile — expect the area to stay `0 99 2400 900`. Built and
+   unit-tested, **not yet installed** (the device left ADB before install).
+2. Re-check the OEM → Android round trip on the two-phase build.
+3. Reproduce the old burst behaviour deliberately with
+   `tools/test-layout.sh custom --execute --burst …` (diagnostic only).
 
 ### Still untested
 
 W7 (audio keeps playing while the other tile has focus — needs a player),
 W9/W16 (window modes 3/4), W10 (third window), W12 (package without launcher intent),
-W13 (deep link + reposition), W15 (layout after an OEM → Android round trip).
+W13 (deep link + reposition).
+
+**W15 passed** `[RUNTIME]` 2026-07-31 — after switching to the OEM source and back, both
+tiles were still alive and in the same places.
