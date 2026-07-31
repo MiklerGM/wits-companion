@@ -14,6 +14,7 @@ import android.widget.TextView
 import io.github.miklergm.witscompanion.app.WitsCompanionApp
 import io.github.miklergm.witscompanion.carstate.CarState
 import io.github.miklergm.witscompanion.carstate.PropertyReader
+import io.github.miklergm.witscompanion.layout.DefaultPresets
 import io.github.miklergm.witscompanion.layout.LayoutEngine
 import io.github.miklergm.witscompanion.layout.LayoutPreset
 import io.github.miklergm.witscompanion.layout.LayoutValidator
@@ -192,20 +193,78 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
 class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
     override val title = "Layouts"
 
+    private lateinit var geometryLabel: TextView
+    private lateinit var swapButton: Button
+
     override fun onCreateView(activity: MainActivity): View {
         val c = activity.column()
-        c.addView(activity.heading("Presets"))
+        val repo = app.layoutRepository
+
+        // ------------------------------------------------------------- geometry
+        // One control for the proportion, shared by every combination of apps. Nothing
+        // here re-inflates the section: rebuilding it threw the ScrollView back to the
+        // top on every tap, which made adjusting the ratio needlessly annoying.
+        c.addView(activity.heading("Proportion"))
+        geometryLabel = activity.body("", mono = true)
+        c.addView(geometryLabel)
+
+        c.addView(android.widget.SeekBar(activity).apply {
+            max = SPLIT_STEPS
+            progress = splitToProgress(repo.split)
+            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: android.widget.SeekBar, p: Int, fromUser: Boolean) {
+                    // Live feedback while dragging; persisted only when the user lets go.
+                    updateGeometryLabel(progressToSplit(p))
+                }
+
+                override fun onStartTrackingTouch(sb: android.widget.SeekBar) = Unit
+
+                override fun onStopTrackingTouch(sb: android.widget.SeekBar) {
+                    repo.split = progressToSplit(sb.progress)
+                }
+            })
+        })
+
+        swapButton = activity.button("") {
+            repo.swapped = !repo.swapped
+            updateGeometryLabel(repo.split)
+        }
+        c.addView(swapButton)
+        updateGeometryLabel(repo.split)
+
         c.addView(activity.body(
-            "Each preset places real Android tasks side by side using the vendor " +
-                "window hook. Re-applying is idempotent."
+            "The proportion applies to whichever combination you pick below. " +
+                "Changing it does not move any window until you apply a combination."
         ))
 
+        // --------------------------------------------------------- combinations
+        c.addView(activity.heading("Apps"))
         app.layoutRepository.allPresets().forEach { preset ->
             c.addView(presetRow(activity, preset))
         }
 
+        c.addView(activity.heading("Mode B — anchor panel"))
+        c.addView(activity.body(
+            "Keeps the companion fullscreen underneath and floats one app (the map) over " +
+                "it. Media, volume readouts and source are drawn by the panel itself " +
+                "instead of getting windows of their own."
+        ))
+        // Applying the anchored preset is the whole of Mode B: it brings the panel to the
+        // front AND places the map over it. Opening the panel alone left the previous
+        // layout untouched, which read as the button doing nothing.
+        DefaultPresets.ID_MAPS_ANCHORED.let { id ->
+            val anchored = app.layoutRepository.preset(id)
+            if (anchored != null) {
+                c.addView(activity.button("Start Mode B — panel + map over it") {
+                    applyPreset(activity, anchored)
+                })
+            }
+        }
+        c.addView(activity.button("Open panel only (does not move any window)") {
+            activity.startActivity(android.content.Intent(activity, DashboardActivity::class.java))
+        })
+
         c.addView(activity.heading("Automatic restore (opt-in)"))
-        val repo = app.layoutRepository
         c.addView(activity.check("Re-apply when the app resumes", repo.restoreOnResume) {
             repo.restoreOnResume = it
         })
@@ -256,54 +315,56 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
         }
         issues.forEach { box.addView(activity.body("  ! ${it.message}")) }
 
-        // Layout customisation: which side each app sits on, and how wide the split is.
-        if (preset.windows.size == 2 && preset.splitFraction() != null) {
-            val repo = app.layoutRepository
-            val ctl = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
-
-            ctl.addView(Button(activity).apply {
-                text = "⇄ swap sides"; textSize = 12f; isAllCaps = false
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.4f)
-                setOnClickListener {
-                    repo.setSwapped(preset.id, !repo.isSwapped(preset.id))
-                    activity.toast(if (repo.isSwapped(preset.id)) "Sides swapped" else "Original order")
-                    activity.refreshCurrentSection()
-                }
-            })
-            listOf(0.50f, 0.60f, 0.65f, 0.70f).forEach { f ->
-                ctl.addView(Button(activity).apply {
-                    text = "${(f * 100).toInt()}"; textSize = 12f; isAllCaps = false
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                    setOnClickListener {
-                        repo.setSplit(preset.id, f)
-                        activity.toast("Split ${(f * 100).toInt()}/${100 - (f * 100).toInt()}")
-                        activity.refreshCurrentSection()
-                    }
-                })
-            }
-            box.addView(ctl)
-        }
-
-        box.addView(activity.button("Apply \"${preset.title}\"") {
-            val result = app.layoutEngine.apply(
-                preset, app.carStateRepository.state, Trigger.USER
-            )
-            when (result) {
-                is LayoutEngine.Result.Applied -> {
-                    app.layoutRepository.lastAppliedPresetId = preset.id
-                    activity.toast(
-                        "Applied ${result.windows} window(s)" +
-                            if (result.warnings.isEmpty()) "" else "; ${result.warnings.size} warning(s)"
-                    )
-                }
-                is LayoutEngine.Result.Refused -> activity.toast("Refused: ${result.reason}")
-                is LayoutEngine.Result.Invalid -> activity.toast("Invalid: ${result.errors.joinToString()}")
-            }
-        })
+        box.addView(activity.button("Apply \"${preset.title}\"") { applyPreset(activity, preset) })
         return box
     }
 
+    // ------------------------------------------------------------------ geometry
+
+    private fun updateGeometryLabel(split: Float) {
+        if (!::geometryLabel.isInitialized) return
+        val left = (split * 100).toInt()
+        val swapped = app.layoutRepository.swapped
+        geometryLabel.text = if (swapped) {
+            "${100 - left} / $left   (primary app on the right)"
+        } else {
+            "$left / ${100 - left}   (primary app on the left)"
+        }
+        if (::swapButton.isInitialized) {
+            swapButton.text = if (swapped) "⇄ primary on the right" else "⇄ primary on the left"
+        }
+    }
+
+    /** The single apply path, so every entry point gets the same guards and feedback. */
+    private fun applyPreset(activity: MainActivity, preset: LayoutPreset) {
+        when (val result = app.layoutEngine.apply(
+            preset, app.carStateRepository.state, Trigger.USER
+        )) {
+            is LayoutEngine.Result.Applied -> {
+                app.layoutRepository.lastAppliedPresetId = preset.id
+                activity.toast(
+                    "Applied ${result.windows} window(s)" +
+                        if (result.warnings.isEmpty()) "" else "; ${result.warnings.size} warning(s)"
+                )
+            }
+            is LayoutEngine.Result.Refused -> activity.toast("Refused: ${result.reason}")
+            is LayoutEngine.Result.Invalid -> activity.toast("Invalid: ${result.errors.joinToString()}")
+        }
+    }
+
     private fun fmt(v: Float) = String.format("%.2f", v)
+
+    private companion object {
+        /** One step per percent between MIN_SPLIT and MAX_SPLIT. */
+        val SPLIT_STEPS =
+            ((LayoutPreset.MAX_SPLIT - LayoutPreset.MIN_SPLIT) * 100).toInt()
+
+        fun progressToSplit(progress: Int): Float =
+            LayoutPreset.MIN_SPLIT + progress / 100f
+
+        fun splitToProgress(split: Float): Int =
+            ((split - LayoutPreset.MIN_SPLIT) * 100).toInt().coerceIn(0, SPLIT_STEPS)
+    }
 }
 
 // ------------------------------------------------------------------ Car state
@@ -481,11 +542,25 @@ class DebugSection(private val app: WitsCompanionApp) : MainActivity.Section {
         val ctx = text.context
         val full = wc.fullDisplayArea(ctx)
         val usable = wc.usableArea(ctx)
+        // Our own window, which is NOT what layouts are measured from: the companion can
+        // be one of the tiles it places, and a shrinking window is the visible symptom of
+        // measuring a layout from it. Shown so that case is obvious at a glance.
+        val own = runCatching {
+            android.graphics.Rect(
+                ctx.getSystemService(android.view.WindowManager::class.java)
+                    .currentWindowMetrics.bounds
+            )
+        }.getOrNull()
         text.text = buildString {
             appendLine("display full   ${full.width()}x${full.height()}  $full")
             appendLine("display usable ${usable.width()}x${usable.height()}  $usable")
             appendLine("insets         l=${usable.left - full.left} t=${usable.top - full.top} " +
                 "r=${full.right - usable.right} b=${full.bottom - usable.bottom}")
+            if (own != null) {
+                val narrow = own.width() * 2 < full.width()
+                appendLine("our own window ${own.width()}x${own.height()}" +
+                    if (narrow) "  <- we are a tile; layouts still use the display" else "")
+            }
             appendLine()
             appendLine("property strategy : ${app.propertyReader.activeStrategy}")
             appendLine("diagnostics       : ${app.propertyReader.diagnostics}")

@@ -166,6 +166,54 @@ data class LayoutPreset(
         )
     }
 
+    /**
+     * Applies the user's geometry — split ratio and side order — to this preset.
+     *
+     * Geometry is deliberately separate from *which apps* a preset contains: one control
+     * sets the proportion, and any combination of apps can then be applied with it,
+     * instead of needing a preset per ratio.
+     *
+     * Handles both kinds. A tiled pair is re-split and optionally mirrored; an anchored
+     * preset has only the floating window, so the split sets **its** width. A preset that
+     * is neither (a fullscreen single, or a three-window custom) is returned unchanged.
+     */
+    fun withGeometry(split: Float, swapped: Boolean): LayoutPreset {
+        val f = split.coerceIn(MIN_SPLIT, MAX_SPLIT)
+        return when {
+            kind == PresetKind.ANCHORED && windows.size == 1 -> {
+                val bounds = if (swapped) {
+                    NormalizedBounds(1f - f, 0f, 1f, 1f)
+                } else {
+                    NormalizedBounds(0f, 0f, f, 1f)
+                }
+                copy(windows = listOf(windows[0].copy(bounds = bounds)))
+            }
+
+            windows.size == 2 && splitFraction() != null -> {
+                val resplit = withSplit(f)
+                if (swapped) resplit.mirrored() else resplit
+            }
+
+            else -> this
+        }
+    }
+
+    /**
+     * For an ANCHORED preset, the left-hand fraction of the display covered by the
+     * floating window — the strip the anchor panel must leave empty so its content is
+     * not hidden underneath.
+     *
+     * Returns 0 when there is nothing to reserve: a tiled preset, no foreign window, or a
+     * window that is not flush to the left edge. In that last case the panel stays full
+     * width deliberately, rather than guessing a gap and hiding content in the wrong place.
+     */
+    fun anchorReservedLeftFraction(): Float {
+        if (kind != PresetKind.ANCHORED) return 0f
+        val window = windows.firstOrNull { it.packageName != WitsPackages.SELF } ?: return 0f
+        if (window.bounds.left > EDGE_TOLERANCE) return 0f
+        return window.bounds.right.coerceIn(0f, MAX_ANCHOR_RESERVED)
+    }
+
     /** Left-hand fraction of a two-tile preset, or null if it is not a simple split. */
     fun splitFraction(): Float? {
         if (windows.size != 2) return null
@@ -178,8 +226,15 @@ data class LayoutPreset(
     }
 
     companion object {
+        const val DEFAULT_SPLIT = 0.65f
         const val MIN_SPLIT = 0.25f
         const val MAX_SPLIT = 0.80f
+
+        /** How far from the left edge still counts as flush against it. */
+        const val EDGE_TOLERANCE = 0.01f
+
+        /** Never reserve more than this, so the anchor panel stays usable. */
+        const val MAX_ANCHOR_RESERVED = 0.8f
 
         fun fromJson(o: JSONObject): LayoutPreset {
             val arr = o.getJSONArray("windows")
@@ -289,6 +344,25 @@ object LayoutValidator {
 
 /** The presets shipped with the MVP. */
 object DefaultPresets {
+
+    /**
+     * An anchored preset that floats [packageName] over the companion panel.
+     *
+     * Built on demand so the panel can offer a row of "float this app instead" buttons
+     * without a stored preset per app. The geometry is filled in by
+     * [LayoutPreset.withGeometry] from the user's single split setting.
+     */
+    fun anchoredFor(packageName: String, label: String): LayoutPreset = LayoutPreset(
+        id = "anchored_$packageName",
+        title = "$label over panel",
+        kind = PresetKind.ANCHORED,
+        windows = listOf(
+            LayoutWindow(
+                packageName,
+                NormalizedBounds(0f, 0f, LayoutPreset.DEFAULT_SPLIT, 1f),
+            )
+        ),
+    )
 
     const val ID_MAPS_SPOTIFY = "maps65_spotify35"
     const val ID_MAPS_CHROME = "maps65_chrome35"
