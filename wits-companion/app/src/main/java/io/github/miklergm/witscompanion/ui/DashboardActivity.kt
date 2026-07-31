@@ -1,0 +1,352 @@
+package io.github.miklergm.witscompanion.ui
+
+import android.app.Activity
+import android.graphics.Color
+import android.graphics.Typeface
+import android.os.Bundle
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.TextView
+import io.github.miklergm.witscompanion.app.WitsCompanionApp
+import io.github.miklergm.witscompanion.carstate.CarState
+import io.github.miklergm.witscompanion.carstate.CarStateRepository
+import io.github.miklergm.witscompanion.layout.DefaultPresets
+import io.github.miklergm.witscompanion.layout.LayoutEngine
+import io.github.miklergm.witscompanion.layout.PresetKind
+import io.github.miklergm.witscompanion.media.MediaSessionRepository
+import io.github.miklergm.witscompanion.media.MediaSnapshot
+import io.github.miklergm.witscompanion.safety.Trigger
+import io.github.miklergm.witscompanion.wits.WitsPackages
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+/**
+ * The Mode B anchor: a fullscreen panel the companion keeps behind a single floating
+ * foreign window (the map).
+ *
+ * Deliberately **not** a tab in [MainActivity]. That activity is the configuration and
+ * diagnostics tool — tabs, monospace dumps, export buttons. This is the screen looked at
+ * while driving, so it carries only what is useful in motion and leaves the region the
+ * map occupies empty.
+ *
+ * Observation only, with one exception: media transport. Play/pause/next/previous go
+ * through [MediaSessionRepository], i.e. the standard Android MediaSession API aimed at
+ * the player app itself. Nothing here writes a property, a setting or an MCU value, and
+ * nothing switches the source.
+ *
+ * Volume is **displayed, never set** — the vendor AudioService ignores volume changes
+ * from any caller other than `com.wits.pms` (docs/audio-volume.md), so a control here
+ * would be a button that silently does nothing.
+ *
+ * PDC and door state are intentionally absent: they are already on the instrument cluster
+ * and the HUD, and reversing switches the head unit to the OEM source anyway.
+ */
+class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionRepository.Listener {
+
+    private lateinit var app: WitsCompanionApp
+
+    private lateinit var clockView: TextView
+    private lateinit var stateView: TextView
+    private lateinit var trackView: TextView
+    private lateinit var artistView: TextView
+    private lateinit var volumeView: TextView
+    private lateinit var playPauseButton: Button
+    private lateinit var artView: android.widget.ImageView
+
+    private val ui = android.os.Handler(android.os.Looper.getMainLooper())
+    private val clockTick = object : Runnable {
+        override fun run() {
+            clockView.text = CLOCK.format(Date())
+            ui.postDelayed(this, CLOCK_INTERVAL_MS)
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        app = application as WitsCompanionApp
+        setContentView(buildRoot())
+    }
+
+    // ------------------------------------------------------------------ layout
+
+    /**
+     * The panel occupies the part of the display the floating window does not cover.
+     *
+     * The gap is taken from the currently selected ANCHORED preset, so changing the
+     * preset's split moves the panel with it instead of leaving content hidden under the
+     * map. Falls back to the full width when no anchored preset is active.
+     */
+    private fun buildRoot(): View {
+        val reserved = reservedFractionLeft()
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(BACKGROUND)
+        }
+
+        if (reserved > 0f) {
+            // Empty spacer: this is where the map floats. Nothing may be drawn here.
+            row.addView(View(this), LinearLayout.LayoutParams(0, MATCH, reserved))
+        }
+
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad(20), pad(16), pad(20), pad(16))
+        }
+        row.addView(panel, LinearLayout.LayoutParams(0, MATCH, 1f - reserved))
+
+        clockView = TextView(this).apply {
+            textSize = 34f; setTextColor(FOREGROUND); typeface = Typeface.DEFAULT_BOLD
+        }
+        panel.addView(clockView)
+
+        stateView = TextView(this).apply {
+            textSize = 13f; setTextColor(MUTED); setPadding(0, pad(2), 0, pad(14))
+        }
+        panel.addView(stateView)
+
+        // Album art beside the track text, so the media block reads at a glance.
+        val nowPlaying = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        artView = android.widget.ImageView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(pad(72), pad(72))
+                .apply { rightMargin = pad(12) }
+            scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+            visibility = View.GONE
+        }
+        nowPlaying.addView(artView)
+
+        val texts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        trackView = TextView(this).apply {
+            textSize = 22f; setTextColor(FOREGROUND); maxLines = 2
+        }
+        texts.addView(trackView)
+
+        artistView = TextView(this).apply {
+            textSize = 15f; setTextColor(MUTED); maxLines = 1; setPadding(0, pad(2), 0, 0)
+        }
+        texts.addView(artistView)
+        nowPlaying.addView(texts)
+        panel.addView(nowPlaying)
+        panel.addView(View(this), LinearLayout.LayoutParams(MATCH, pad(12)))
+
+        val transport = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        transport.addView(bigButton("<<") { app.mediaRepository.previous() })
+        playPauseButton = bigButton("Play") { app.mediaRepository.playPause() }
+        transport.addView(playPauseButton)
+        transport.addView(bigButton(">>") { app.mediaRepository.next() })
+        panel.addView(transport)
+
+        // Which app floats over the panel. Re-applies the anchored layout with the chosen
+        // package, so switching is one tap instead of a trip to the Layouts tab.
+        panel.addView(TextView(this).apply {
+            text = "Floating app"
+            textSize = 12f; setTextColor(MUTED); setPadding(0, pad(16), 0, pad(4))
+        })
+        val switcher = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        FLOATABLE.forEach { (pkg, label) ->
+            if (!app.windowController.isLaunchable(pkg)) return@forEach
+            switcher.addView(Button(this).apply {
+                text = label
+                isAllCaps = false
+                textSize = 13f
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    .apply { rightMargin = pad(6) }
+                setOnClickListener { floatApp(pkg, label) }
+            })
+        }
+        panel.addView(switcher)
+
+        volumeView = TextView(this).apply {
+            textSize = 12f; setTextColor(MUTED); typeface = Typeface.MONOSPACE
+            setPadding(0, pad(14), 0, 0)
+        }
+        panel.addView(volumeView)
+
+        // Measured 2026-07-31: neither the steering buttons nor the NBT knob changed the
+        // Android stream or wits_mcu:1, while source and reverse markers in the same
+        // session captured events normally. What is shown here is the head-unit stage,
+        // not what the ear hears — say so rather than let the number be misread.
+        panel.addView(TextView(this).apply {
+            text = "Head-unit stage only. Steering and NBT volume are handled by the " +
+                "car's amplifier and are not visible to Android."
+            textSize = 11f
+            setTextColor(MUTED)
+            setPadding(0, pad(6), 0, 0)
+        })
+
+        panel.addView(View(this), LinearLayout.LayoutParams(MATCH, 0, 1f))
+
+        panel.addView(Button(this).apply {
+            text = "Settings"
+            isAllCaps = false
+            setOnClickListener {
+                startActivity(android.content.Intent(this@DashboardActivity, MainActivity::class.java))
+            }
+        })
+
+        return row
+    }
+
+    /**
+     * Left-hand fraction covered by the floating window of the active anchored preset.
+     *
+     * Reserved **only when this activity actually fills the display**. The reservation
+     * describes a window floating *over* the panel; when the companion is itself a tile
+     * the map sits *beside* it, and reserving a strip inside our own tile squeezes the
+     * content into a sliver of a sliver. `[RUNTIME]` 2026-07-31: with a 50/50 tiled
+     * layout the panel collapsed to about a quarter of the screen for exactly this reason.
+     */
+    private fun reservedFractionLeft(): Float {
+        if (!fillsDisplay()) return 0f
+        val preset = app.layoutRepository.lastAppliedPreset()
+            ?.takeIf { it.kind == PresetKind.ANCHORED }
+            ?: app.layoutRepository.preset(DefaultPresets.ID_MAPS_ANCHORED)
+            ?: return 0f
+        return preset.anchorReservedLeftFraction()
+    }
+
+    /** True when our window is (near enough) as wide as the whole display. */
+    private fun fillsDisplay(): Boolean = runCatching {
+        val wm = getSystemService(android.view.WindowManager::class.java)
+        val own = wm.currentWindowMetrics.bounds.width()
+        val display = wm.maximumWindowMetrics.bounds.width()
+        display > 0 && own * 100 >= display * FULL_WIDTH_PERCENT
+    }.getOrDefault(true)
+
+    // --------------------------------------------------------------- lifecycle
+
+    override fun onStart() {
+        super.onStart()
+        app.carStateRepository.addObserver(this)
+        app.mediaRepository.addListener(this)
+        ui.post(clockTick)
+        onCarState(app.carStateRepository.state)
+        refreshVolume()
+    }
+
+    override fun onStop() {
+        app.carStateRepository.removeObserver(this)
+        app.mediaRepository.removeListener(this)
+        ui.removeCallbacks(clockTick)
+        super.onStop()
+    }
+
+    // ----------------------------------------------------------------- updates
+
+    /** Delivered on the main thread by [CarStateRepository]. */
+    override fun onCarState(state: CarState) {
+        stateView.text = buildString {
+            append(state.sourceName)
+            append("   ACC ").append(state.acc.display())
+            if (state.reverseActive == true) append("   REVERSE")
+        }
+        refreshVolume()
+    }
+
+    /** Delivered on the main thread by [MediaSessionRepository]. */
+    override fun onMedia(snapshot: MediaSnapshot) {
+        if (!snapshot.permissionGranted) {
+            trackView.text = "Media access not granted"
+            artistView.text = "Settings -> notification access"
+            playPauseButton.isEnabled = false
+            artView.visibility = View.GONE
+            return
+        }
+        trackView.text = snapshot.title ?: "—"
+        artistView.text = listOfNotNull(snapshot.artist, snapshot.packageName).joinToString(" · ")
+        playPauseButton.text = if (snapshot.isPlaying) "Pause" else "Play"
+        playPauseButton.isEnabled = snapshot.canPlay || snapshot.canPause
+
+        val art = snapshot.albumArt
+        if (art != null) {
+            artView.setImageBitmap(art)
+            artView.visibility = View.VISIBLE
+        } else {
+            artView.setImageDrawable(null)
+            artView.visibility = View.GONE
+        }
+    }
+
+    /**
+     * Floats [packageName] over the panel, replacing whatever was there.
+     *
+     * Goes through [LayoutEngine] rather than moving the window directly, so the reverse
+     * guard, the rate limiter and the two-phase ordering all still apply.
+     */
+    private fun floatApp(packageName: String, label: String) {
+        val preset = DefaultPresets.anchoredFor(packageName, label)
+            .withGeometry(app.layoutRepository.split, app.layoutRepository.swapped)
+        when (val r = app.layoutEngine.apply(preset, app.carStateRepository.state, Trigger.USER)) {
+            is LayoutEngine.Result.Applied -> {
+                app.layoutRepository.lastAppliedPresetId = preset.id
+                toast("$label over panel")
+            }
+            is LayoutEngine.Result.Refused -> toast("Refused: ${r.reason}")
+            is LayoutEngine.Result.Invalid -> toast("Invalid: ${r.errors.firstOrNull()}")
+        }
+    }
+
+    private fun toast(message: String) =
+        android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_SHORT).show()
+
+    /**
+     * Read-only. The percentage is appended so the MCU line can be compared directly with
+     * the vendor launcher's own dial, which renders the same value as `low byte / 40`
+     * (`Id8UgCarModelFragment.updateVolume`, docs/audio-volume.md §3.2).
+     */
+    private fun refreshVolume() {
+        volumeView.text = app.signalExplorer.volumeReadings().joinToString("\n") { r ->
+            val value = r.value
+            val max = r.max
+            val percent =
+                if (value != null && max != null && max > 0) "  (${value * 100 / max}%)" else ""
+            "${r.domain.label.padEnd(24)} ${r.display()}$percent"
+        }
+    }
+
+    // ------------------------------------------------------------------ helpers
+
+    private fun bigButton(label: String, onClick: () -> Unit) = Button(this).apply {
+        text = label
+        isAllCaps = false
+        textSize = 18f
+        setOnClickListener { onClick() }
+        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            .apply { rightMargin = pad(6) }
+    }
+
+    private fun pad(dp: Int) = (dp * resources.displayMetrics.density).toInt()
+
+    private companion object {
+        const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
+        const val BACKGROUND = Color.BLACK
+        const val FOREGROUND = Color.WHITE
+        val MUTED = Color.parseColor("#9E9E9E")
+        const val CLOCK_INTERVAL_MS = 10_000L
+
+        /** How wide our window must be, as a percentage of the display, to count as the anchor. */
+        const val FULL_WIDTH_PERCENT = 90
+
+        /** Apps offered as the floating window, in the order shown. */
+        val FLOATABLE = listOf(
+            WitsPackages.MAPS to "Maps",
+            WitsPackages.CHROME to "Chrome",
+            WitsPackages.SPOTIFY to "Spotify",
+        )
+
+        val CLOCK = SimpleDateFormat("HH:mm", Locale.US)
+    }
+}

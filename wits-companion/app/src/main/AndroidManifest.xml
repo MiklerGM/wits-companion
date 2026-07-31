@@ -65,6 +65,24 @@
         </activity>
 
         <!--
+          The Mode B anchor panel. exported=false: nothing outside the app may start it,
+          and it takes no intent extras. The companion starts it itself, which needs no
+          vendor hook because it is our own package.
+
+          resizeableActivity + configChanges mirror MainActivity: this activity is
+          fullscreen underneath a floating window, and the vendor hook resizes freeform
+          tasks around it.
+        -->
+        <activity
+            android:name=".ui.DashboardActivity"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboardHidden" />
+
+        <!--
           Notification listener: exists ONLY to unlock
           MediaSessionManager.getActiveSessions(). It reads no notifications.
           exported=false; the system binds it via the signature-level permission.
