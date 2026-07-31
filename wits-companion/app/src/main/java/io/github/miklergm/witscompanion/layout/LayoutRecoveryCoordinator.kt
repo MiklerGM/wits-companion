@@ -31,6 +31,17 @@ class LayoutRecoveryCoordinator(
 
     override fun onCarState(state: CarState) {
         reverseGuard.observe(state)
+        // Let the engine re-check safety at fire time and abort in-flight sequences.
+        engine.onCarState(state)
+
+        // Leaving Android invalidates any queued window placement: the user is now
+        // looking at the OEM screen (or the reverse camera) and must not have windows
+        // shuffled underneath.
+        val androidNow = state.androidSourceActive
+        if (lastAndroidSource == true && androidNow == false) {
+            logger?.log("layout", "cancel_pending", result = "left_android_source")
+            engine.cancelPending()
+        }
 
         val acc = state.acc.takeIf { it.isKnown }?.value
         val android = state.androidSourceActive

@@ -107,12 +107,28 @@ mandates otherwise:
 | `BootReceiver` | `false`, `RECEIVE_BOOT_COMPLETED` | protected system broadcast |
 | Everything else | `false` | — |
 
-`WitsBroadcastReceiver` is registered **at runtime** with
-`ContextCompat.RECEIVER_NOT_EXPORTED`, never declared in the manifest. This prevents
-another app from feeding us spoofed car state.
+`WitsBroadcastReceiver` is registered **at runtime** and never declared in the manifest.
 
-> Note: this stops other apps from *invoking* us. It cannot stop them from sending the
-> same vendor broadcasts themselves — that surface belongs to the firmware.
+**Correction (2026-07-31):** it was originally registered `RECEIVER_NOT_EXPORTED`, which
+was a defect. The senders — `com.wits.pms`, `com.wits.misc`, SystemUI — are *other
+processes*, and a `NOT_EXPORTED` receiver is never delivered their broadcasts. The
+car-state feed was silently dead while the Signal Explorer probe (correctly `EXPORTED`)
+did receive events.
+
+It is now `RECEIVER_EXPORTED`, and the isolation is replaced by properties of the
+receiver itself:
+
+- only the exact actions in `WitsActions.CAR_STATE_ACTIONS` are acted on, re-checked in
+  `onReceive` independently of the IntentFilter;
+- it never executes a command, starts a component, or writes state — it is a pure
+  observer;
+- extras are read defensively, bounded to 512 chars, and unparseable values degrade to
+  `INVALID` with the raw text retained rather than being trusted;
+- the worst a spoofed broadcast achieves is a wrong number on the dashboard.
+
+Crucially, **safety decisions do not rest on this receiver alone**: `ReverseGuard` also
+consults the `wits.backcar` property and the source id, so a spoofed "reverse released"
+broadcast cannot by itself unblock an automatic action.
 
 ### 3.3 No remote control surface
 

@@ -67,8 +67,6 @@ class WitsCompanionApp : Application() {
         )
 
         windowController = WitsWindowController(this, eventLogger)
-        sourceController = WitsSourceController(this, sourceGuard, rateLimiter, eventLogger)
-        nightModeController = WitsNightModeController(this, rateLimiter, eventLogger)
 
         layoutEngine = LayoutEngine(
             appContext = this,
@@ -77,6 +75,15 @@ class WitsCompanionApp : Application() {
             rateLimiter = rateLimiter,
             logger = eventLogger,
         )
+
+        sourceController = WitsSourceController(
+            appContext = this,
+            sourceGuard = sourceGuard,
+            rateLimiter = rateLimiter,
+            logger = eventLogger,
+            onBeforeSwitch = { layoutEngine.cancelPending() },
+        )
+        nightModeController = WitsNightModeController(this, rateLimiter, eventLogger)
 
         recoveryCoordinator = LayoutRecoveryCoordinator(
             repository = layoutRepository,

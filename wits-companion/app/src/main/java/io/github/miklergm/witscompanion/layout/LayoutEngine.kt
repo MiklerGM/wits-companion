@@ -10,6 +10,7 @@ import io.github.miklergm.witscompanion.safety.GuardVerdict
 import io.github.miklergm.witscompanion.safety.ReverseGuard
 import io.github.miklergm.witscompanion.safety.Trigger
 import io.github.miklergm.witscompanion.wits.WitsWindowController
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Applies a [LayoutPreset] by sending one CHANGE_WINDOW broadcast per tile.
@@ -37,6 +38,22 @@ class LayoutEngine(
 
     private val handler = Handler(Looper.getMainLooper())
     private var pendingRetries = 0
+
+    /**
+     * Every scheduled broadcast belongs to a generation. A new apply, a cancel, or an
+     * unsafe vehicle state bumps it, and any callback from an older generation becomes a
+     * no-op.
+     *
+     * Without this, a retry queued 1.3 s ago still fires after the driver has engaged
+     * reverse, switched to the OEM screen, or chosen a different preset — moving windows
+     * at exactly the wrong moment. Cancelling the handler queue alone is not enough,
+     * because a callback can already be running when the state changes.
+     */
+    private val generation = AtomicLong(0)
+
+    /** Latest car state, so delayed sends can re-check safety at fire time. */
+    @Volatile
+    private var latestState: CarState = CarState()
 
     /**
      * @param trigger USER for a button press, AUTOMATIC for a restore
@@ -87,6 +104,11 @@ class LayoutEngine(
         val area = windowController.usableArea(appContext)
         val ordered = preset.windows.sortedBy { it.focusOrder }
 
+        // Invalidate anything still queued from an earlier apply.
+        val myGeneration = generation.incrementAndGet()
+        latestState = state
+        handler.removeCallbacksAndMessages(RETRY_TOKEN)
+
         ordered.forEachIndexed { index, window ->
             if (!windowController.isLaunchable(window.packageName)) {
                 warnings += "${window.packageName} is not installed or has no launcher activity"
@@ -103,9 +125,15 @@ class LayoutEngine(
 
             val pixels = window.bounds.toPixels(area)
             handler.postDelayed(
-                { windowController.applyWindow(
-                    WitsWindowController.WindowRequest(window.packageName, pixels, window.windowMode)
-                ) },
+                {
+                    if (stillValid(myGeneration, "initial", window.packageName)) {
+                        windowController.applyWindow(
+                            WitsWindowController.WindowRequest(
+                                window.packageName, pixels, window.windowMode
+                            )
+                        )
+                    }
+                },
                 index * INTER_WINDOW_DELAY_MS,
             )
         }
@@ -122,7 +150,7 @@ class LayoutEngine(
             result = "sent", confidence = "HYP",
         )
 
-        scheduleRetries(preset, area, ordered, retries.coerceIn(0, MAX_RETRIES))
+        scheduleRetries(preset, area, ordered, retries.coerceIn(0, MAX_RETRIES), myGeneration)
 
         return Result.Applied(ordered.size, warnings)
     }
@@ -144,8 +172,8 @@ class LayoutEngine(
         area: android.graphics.Rect,
         ordered: List<LayoutWindow>,
         retries: Int,
+        myGeneration: Long,
     ) {
-        handler.removeCallbacksAndMessages(RETRY_TOKEN)
         pendingRetries = retries
         if (retries <= 0 || ordered.isEmpty()) return
 
@@ -157,7 +185,9 @@ class LayoutEngine(
             ordered.forEachIndexed { index, window ->
                 val at = passStart + index * INTER_WINDOW_DELAY_MS
                 handler.postDelayed({
-                    if (windowController.isLaunchable(window.packageName)) {
+                    if (stillValid(myGeneration, "retry", window.packageName) &&
+                        windowController.isLaunchable(window.packageName)
+                    ) {
                         windowController.applyWindow(
                             WitsWindowController.WindowRequest(
                                 window.packageName, window.bounds.toPixels(area), window.windowMode
@@ -167,11 +197,13 @@ class LayoutEngine(
                 }, RETRY_TOKEN, at)
             }
             handler.postDelayed({
-                logger?.log(
-                    "layout", "retry",
-                    extras = mapOf("preset" to preset.id, "attempt" to (attempt + 1)),
-                    result = "sent",
-                )
+                if (myGeneration == generation.get()) {
+                    logger?.log(
+                        "layout", "retry",
+                        extras = mapOf("preset" to preset.id, "attempt" to (attempt + 1)),
+                        result = "sent",
+                    )
+                }
             }, RETRY_TOKEN, passStart)
         }
     }
@@ -191,11 +223,56 @@ class LayoutEngine(
         return out
     }
 
-    /** Cancels any scheduled retries (e.g. when reverse engages mid-sequence). */
+    /**
+     * Gate every delayed send: the generation must still be current **and** the vehicle
+     * must still be safe *at fire time*, not merely when the layout was requested.
+     */
+    private fun stillValid(myGeneration: Long, phase: String, pkg: String): Boolean {
+        if (myGeneration != generation.get()) {
+            logger?.log(
+                "layout", "send_skipped", pkg,
+                extras = mapOf("phase" to phase, "reason" to "superseded"),
+            )
+            return false
+        }
+        val verdict = reverseGuard.check(latestState, Trigger.AUTOMATIC)
+        if (!verdict.isAllowed) {
+            logger?.log(
+                "layout", "send_skipped", pkg,
+                extras = mapOf("phase" to phase, "reason" to (verdict.reasonOrNull ?: "unsafe")),
+            )
+            cancelPending()
+            return false
+        }
+        return true
+    }
+
+    /**
+     * Feed vehicle state so delayed sends can re-check safety, and abort immediately if
+     * reverse becomes active mid-sequence.
+     */
+    fun onCarState(state: CarState) {
+        latestState = state
+        if (state.reverseActive == true && pendingRetries > 0) {
+            logger?.log("layout", "cancel_pending", result = "reverse_engaged")
+            cancelPending()
+        }
+    }
+
+    /**
+     * Cancels everything still queued and invalidates in-flight callbacks.
+     * Call when reverse engages, the source leaves Android, or the user picks another
+     * preset.
+     */
     fun cancelPending() {
+        generation.incrementAndGet()
         handler.removeCallbacksAndMessages(RETRY_TOKEN)
+        handler.removeCallbacksAndMessages(null)
         pendingRetries = 0
     }
+
+    /** Current generation; for tests and diagnostics. */
+    fun currentGeneration(): Long = generation.get()
 
     companion object {
         const val INTER_WINDOW_DELAY_MS = 350L

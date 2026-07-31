@@ -22,6 +22,12 @@ class WitsSourceController(
     private val sourceGuard: SourceGuard,
     private val rateLimiter: ActionRateLimiter,
     private val logger: EventLogger? = null,
+    /**
+     * Invoked before a source change so queued window placements are invalidated.
+     * Without it, a retry scheduled a second ago would fire while the OEM screen is
+     * coming up.
+     */
+    private val onBeforeSwitch: (() -> Unit)? = null,
 ) {
 
     sealed interface Result {
@@ -74,6 +80,9 @@ class WitsSourceController(
             }
             GuardVerdict.Allowed -> Unit
         }
+
+        // Invalidate any in-flight layout work before the screen changes hands.
+        onBeforeSwitch?.invoke()
 
         val caller = buildCaller()
         return try {

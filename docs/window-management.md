@@ -230,6 +230,25 @@ Companion strategy (`LayoutEngine`):
 4. Send `CHANGE_WINDOW` for each window in that order, with a small inter-window delay.
 5. The window with the **highest** `focusOrder` is applied **last** ⇒ gets focus.
 
+## 6.1 Generation token — stale sends must not fire
+
+Every delayed broadcast belongs to a generation. `apply()` and `cancelPending()` bump it,
+and each callback re-checks two things **at fire time**, not at request time:
+
+1. its generation is still current — otherwise a superseded layout is silently dropped;
+2. `ReverseGuard` still allows the action — otherwise the whole remaining sequence is
+   abandoned.
+
+Without this, a retry queued 1.3 s earlier still fires after the driver has engaged
+reverse, switched to the OEM screen, or chosen a different preset. Cancelling the handler
+queue alone is insufficient, because a callback can already be dispatched when the state
+changes.
+
+Cancellation is wired to: a new `apply()`, reverse becoming active
+(`LayoutEngine.onCarState`), the source ceasing to be Android
+(`LayoutRecoveryCoordinator`), and any source switch
+(`WitsSourceController.onBeforeSwitch`, invoked *before* the broadcast leaves).
+
 ## 7. Restore strategy
 
 Idempotent re-application with bounded retries — never an infinite loop.
