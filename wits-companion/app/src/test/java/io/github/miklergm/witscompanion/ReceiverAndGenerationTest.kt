@@ -182,6 +182,25 @@ class ReceiverAndGenerationTest {
         // reassert() is the route-safe entry point and must compute the live set.
         val reassert = src.substringAfter("fun reassert(").substringBefore("\n    }")
         assertTrue("reassert must feed livePackages into preserveLive", reassert.contains("livePackages()"))
+
+        // The geometry phase must pass the preserve flag through, so a live non-freeform
+        // task is left as-is rather than relaunched by place().
+        assertTrue(
+            "the geometry phase must thread preserveLive into applyWindow",
+            src.contains("preserveLive = preserve"),
+        )
+    }
+
+    /**
+     * The privileged controller must not relaunch a live task it was told to preserve. A
+     * live task in another windowing mode is left in place; only a dead task is launched.
+     */
+    @Test
+    fun `place preserves a live task in another mode instead of relaunching it`() {
+        val src = sourceOf("wits/PrivilegedWindowController.kt")
+        val place = src.substringAfter("fun place(").substringBefore("/** All root tasks")
+        assertTrue("preserve must short-circuit before launchIntoFreeform",
+            place.indexOf("PreservedInPlace") in 0 until place.indexOf("launchIntoFreeform"))
     }
 
     /** Auto-starting our own panel is safe; doing it over the reverse camera is not. */

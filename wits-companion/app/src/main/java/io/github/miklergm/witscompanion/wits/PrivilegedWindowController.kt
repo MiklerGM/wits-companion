@@ -44,6 +44,8 @@ class PrivilegedWindowController(
         data object Resized : PlaceResult
         /** No suitable task existed, so it was launched into freeform at the bounds. */
         data object Launched : PlaceResult
+        /** A live task in another mode was left as-is because [place] was told to preserve it. */
+        data object PreservedInPlace : PlaceResult
         data class Failed(val reason: String) : PlaceResult
     }
 
@@ -64,7 +66,12 @@ class PrivilegedWindowController(
      * platform signature). Only the launch of a not-yet-running app moves anything to the
      * front; repositioning never does.
      */
-    fun place(packageName: String, bounds: Rect, windowMode: Int): PlaceResult {
+    fun place(
+        packageName: String,
+        bounds: Rect,
+        windowMode: Int,
+        preserve: Boolean = false,
+    ): PlaceResult {
         val existing = findTask(packageName)
         if (existing != null && existing.windowingMode == WitsWindowMode.FREEFORM) {
             return if (resizeTask(existing.taskId, bounds)) {
@@ -77,6 +84,18 @@ class PrivilegedWindowController(
             } else {
                 PlaceResult.Failed("resizeTask returned false")
             }
+        }
+        // A live task in another mode (e.g. fullscreen) can only be re-tiled by relaunching
+        // it, which sends a MAIN intent and can reset the app. When asked to preserve it —
+        // an automatic restore of an app the user is still in — leave it exactly as it is.
+        // resizeTask cannot help: a non-freeform task is not resizable.
+        if (existing != null && preserve) {
+            logger?.log(
+                "window", "preserve_in_place", packageName,
+                extras = mapOf("taskId" to existing.taskId, "mode" to WitsWindowMode.name(existing.windowingMode)),
+                result = "left_as_is",
+            )
+            return PlaceResult.PreservedInPlace
         }
         return if (launchIntoFreeform(packageName, bounds, windowMode)) {
             logger?.log(

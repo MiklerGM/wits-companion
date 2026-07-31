@@ -112,6 +112,7 @@ class LayoutRecoveryCoordinator(
         // Route-safe: reassert repositions live apps instead of relaunching them, so an
         // active Maps route survives a deep-sleep wake untouched. A real cold boot has no
         // live tasks, so reassert degenerates to a normal apply.
+        val liveCount = engine.livePackages().size
         val result = engine.reassert(preset, state)
         lastApplyAt = nowMs()
         logger?.log(
@@ -120,7 +121,7 @@ class LayoutRecoveryCoordinator(
                 "reason" to reason,
                 "preset" to preset.id,
                 "memoryBoot" to (memoryBoot()?.toString() ?: "unknown"),
-                "live" to engine.livePackages().size,
+                "live" to liveCount,
             ),
             result = when (result) {
                 is LayoutEngine.Result.Applied -> "applied"

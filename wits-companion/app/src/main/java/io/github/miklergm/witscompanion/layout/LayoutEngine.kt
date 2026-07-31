@@ -178,14 +178,18 @@ class LayoutEngine(
 
             val pixels = window.bounds.toPixels(area)
 
-            // Phase 1 — geometry for every tile, before any of them is launched.
+            // Phase 1 — geometry for every tile, before any of them is launched. A
+            // preserved-live tile is repositioned only if it can be moved in place; a live
+            // task in another mode is left untouched rather than relaunched.
+            val preserve = window.packageName in preserveLive
             handler.postDelayed(
                 {
                     if (stillValid(myGeneration, "geometry", window.packageName)) {
                         windowController.applyWindow(
                             WitsWindowController.WindowRequest(
                                 window.packageName, pixels, window.windowMode
-                            )
+                            ),
+                            preserveLive = preserve,
                         )
                     }
                 },
