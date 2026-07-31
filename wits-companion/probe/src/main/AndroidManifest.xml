@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Signature-level permissions. A normal APK is simply refused these; the point of the
+      probe is to see whether an APK signed with the AOSP platform test key gets them on
+      this firmware.
+
+      MANAGE_ACTIVITY_TASKS is the one that matters: ActivityTaskManagerService.resizeTask
+      guards on it, and resizeTask can move a tile without bringing it to the front — the
+      primitive the vendor CHANGE_WINDOW hook cannot offer.
+    -->
+    <uses-permission android:name="android.permission.MANAGE_ACTIVITY_TASKS" />
+    <uses-permission android:name="android.permission.START_TASKS_FROM_RECENTS" />
+    <uses-permission android:name="android.permission.INTERNAL_SYSTEM_WINDOW" />
+    <uses-permission android:name="android.permission.STATUS_BAR_SERVICE" />
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+    <uses-permission android:name="android.permission.REAL_GET_TASKS" />
+
+    <application
+        android:allowBackup="false"
+        android:label="Priv Probe">
+        <activity
+            android:name=".ProbeActivity"
+            android:exported="true"
+            android:screenOrientation="landscape">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
