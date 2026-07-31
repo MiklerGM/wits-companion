@@ -311,7 +311,30 @@ replaced each other instead of tiling.
 **Contrast:** the same two-window layout applied *from the shell* minutes earlier with
 Maps + Chrome worked perfectly and was idempotent (W3/W4/W8 above).
 
-**Leading hypothesis** `[HYP]` — it is the **cold-start path in the hook**, not the caller:
+**First hypothesis was wrong.** Cold start was ruled out by the user: Apply was pressed
+several times, so by the second press both tasks already existed and the warm branch
+must have been taken — yet the behaviour repeated. `[RUNTIME]`
+
+**Actual cause — a retry storm in `LayoutEngine`** `[CODE]`, now fixed. The initial pass
+staggered its windows by 350 ms, but each *retry* pass fired every window back to back
+with no gap:
+
+```
+app:     t=0 Maps | t=350 Spotify | t=500 Maps,Spotify | t=1300 Maps,Spotify
+script:  t=0 Maps | t=350 Spotify | (nothing)                    <- worked
+```
+
+Every `CHANGE_WINDOW` ends in `startActivityFromRecents`, which **pulls that task to the
+front**. Firing them back to back does not reinforce a layout, it thrashes the stack and
+leaves whichever package went last on top — exactly the reported "Maps opens, Maps
+closes, Spotify opens".
+
+Fix: retry passes now stagger identically to the initial pass and start only after it
+finishes (`0, 350 | 950, 1300`), and the default drops from 2 retries to 1.
+`LayoutEngine.scheduleFor()` exposes the schedule and `LayoutScheduleTest` asserts that
+no two broadcasts ever share an instant.
+
+**Superseded hypothesis** (kept for the record) — the cold-start path:
 
 ```java
 // ActivityTaskManagerService.java:480-494   [CODE]
@@ -336,22 +359,14 @@ Competing explanations not yet excluded:
   re-triggering a cold start;
 - Spotify's own `launchMode` / task affinity.
 
-**How to settle it** (next session, in this order):
+**Verification still owed** (next session):
 
-1. Start Maps and Spotify manually once, so both tasks exist, then press Apply. If it
-   tiles, the cold-start hypothesis is confirmed.
-2. Watch `logcat | grep startActivityByWindowMode` during Apply and record which branch
-   is taken per package.
-3. Compare shell-issued vs app-issued broadcasts with both apps already running, to rule
-   the caller in or out.
-
-**Fix candidates for `LayoutEngine`, once the cause is known:**
-
-- pre-warm each package (plain `startActivity`) and wait for the task to appear before
-  sending `CHANGE_WINDOW` — this is what `launchIntentUri` already does for deep links
-  and would generalise;
-- increase `INTER_WINDOW_DELAY_MS` for a cold package;
-- skip the retry pass for packages that were cold.
+1. Re-install the rebuilt APK and press Apply — expect proper tiling.
+2. Reproduce the old behaviour deliberately to confirm the diagnosis:
+   `tools/test-layout.sh custom --execute --burst --pkg … --bounds …` fires every window
+   with no gap, exactly as the old retry pass did. If that reproduces the symptom from
+   the shell, the cause is settled and the caller is exonerated.
+3. `tools/test-layout.sh … --retries 1` reproduces the *fixed* staggered pattern.
 
 ### Still untested
 

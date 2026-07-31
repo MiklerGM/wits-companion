@@ -21,6 +21,9 @@
 #   --bounds l,t,r,b     with 'custom': normalized 0..1 bounds for the last --pkg
 #   --delay MS           delay between windows (default 350)
 #   --inset-top PX       top inset to reserve (default: auto-detect the status bar)
+#   --retries N          extra staggered passes after the first (default 0)
+#   --burst              DIAGNOSTIC: fire every window back-to-back with no gap,
+#                        reproducing the retry storm that broke tiling on 2026-07-31
 #   --no-check           skip package presence check
 #
 # This script NEVER switches the video source and NEVER sends MCU commands.
@@ -33,6 +36,8 @@ EXECUTE=0
 MODE=5
 DELAY_MS=350
 CHECK=1
+RETRIES=0
+BURST=0
 INSET_TOP=""
 CUSTOM_PKGS=()
 CUSTOM_BOUNDS=()
@@ -47,6 +52,8 @@ while [ $# -gt 0 ]; do
     --mode)     MODE="$2"; shift 2 ;;
     --delay)    DELAY_MS="$2"; shift 2 ;;
     --inset-top) INSET_TOP="$2"; shift 2 ;;
+    --retries)   RETRIES="$2"; shift 2 ;;
+    --burst)     BURST=1; shift ;;
     --no-check) CHECK=0; shift ;;
     --pkg)      CUSTOM_PKGS+=("$2"); shift 2 ;;
     --bounds)   CUSTOM_BOUNDS+=("$2"); shift 2 ;;
@@ -185,10 +192,29 @@ fi
 
 # --- execute -----------------------------------------------------------------
 hdr "EXECUTING"
-for cmd in "${CMDS[@]}"; do
-  echo "  -> $cmd"
-  ash "$cmd" | tr -d '\r' | sed 's/^/     /'
-  sleep "$(awk -v m="$DELAY_MS" 'BEGIN{printf "%.3f", m/1000}')"
+SLEEP_S="$(awk -v m="$DELAY_MS" 'BEGIN{printf "%.3f", m/1000}')"
+
+send_pass() {
+  local label="$1" gap="$2"
+  for cmd in "${CMDS[@]}"; do
+    echo "  [$label] -> ${cmd##*packageName }"
+    ash "$cmd" >/dev/null 2>&1
+    [ "$gap" = "0" ] || sleep "$SLEEP_S"
+  done
+}
+
+if [ "$BURST" = "1" ]; then
+  c_red "  --burst: sending every window with NO gap (diagnostic only)"
+  send_pass "burst" 0
+else
+  send_pass "initial" "$SLEEP_S"
+fi
+
+i=1
+while [ "$i" -le "$RETRIES" ]; do
+  sleep 0.6
+  if [ "$BURST" = "1" ]; then send_pass "retry$i" 0; else send_pass "retry$i" "$SLEEP_S"; fi
+  i=$((i + 1))
 done
 
 hdr "RESULT"

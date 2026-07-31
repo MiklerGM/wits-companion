@@ -128,8 +128,16 @@ class LayoutEngine(
     }
 
     /**
-     * Bounded re-application. Some window operations need a second pass because the
-     * task may still have been starting. Never loops.
+     * Bounded re-application.
+     *
+     * Each retry pass **staggers its windows exactly like the initial pass**. Sending
+     * several `CHANGE_WINDOW` broadcasts back to back does not reinforce a layout: every
+     * one of them ends in `startActivityFromRecents`, which brings that task to the
+     * front, so a burst just thrashes the stack and leaves the last package on top.
+     * [RUNTIME] — observed on the vehicle 2026-07-31.
+     *
+     * Passes are also offset past the end of the initial pass so the two never overlap.
+     * Never loops.
      */
     private fun scheduleRetries(
         preset: LayoutPreset,
@@ -139,9 +147,16 @@ class LayoutEngine(
     ) {
         handler.removeCallbacksAndMessages(RETRY_TOKEN)
         pendingRetries = retries
-        RETRY_DELAYS_MS.take(retries).forEachIndexed { attempt, delay ->
-            handler.postDelayed({
-                ordered.forEach { window ->
+        if (retries <= 0 || ordered.isEmpty()) return
+
+        // The initial pass finishes at (n-1) * INTER_WINDOW_DELAY_MS.
+        val initialPassEnd = (ordered.size - 1) * INTER_WINDOW_DELAY_MS
+
+        RETRY_DELAYS_MS.take(retries).forEachIndexed { attempt, gap ->
+            val passStart = initialPassEnd + gap
+            ordered.forEachIndexed { index, window ->
+                val at = passStart + index * INTER_WINDOW_DELAY_MS
+                handler.postDelayed({
                     if (windowController.isLaunchable(window.packageName)) {
                         windowController.applyWindow(
                             WitsWindowController.WindowRequest(
@@ -149,14 +164,31 @@ class LayoutEngine(
                             )
                         )
                     }
-                }
+                }, RETRY_TOKEN, at)
+            }
+            handler.postDelayed({
                 logger?.log(
                     "layout", "retry",
                     extras = mapOf("preset" to preset.id, "attempt" to (attempt + 1)),
                     result = "sent",
                 )
-            }, RETRY_TOKEN, delay)
+            }, RETRY_TOKEN, passStart)
         }
+    }
+
+    /**
+     * The absolute times, in ms from `apply()`, at which each broadcast is scheduled.
+     * Exposed for tests so the schedule can be asserted without a device.
+     */
+    fun scheduleFor(windowCount: Int, retries: Int): List<Long> {
+        if (windowCount <= 0) return emptyList()
+        val out = mutableListOf<Long>()
+        repeat(windowCount) { i -> out += i * INTER_WINDOW_DELAY_MS }
+        val initialPassEnd = (windowCount - 1) * INTER_WINDOW_DELAY_MS
+        RETRY_DELAYS_MS.take(retries.coerceIn(0, MAX_RETRIES)).forEach { gap ->
+            repeat(windowCount) { i -> out += initialPassEnd + gap + i * INTER_WINDOW_DELAY_MS }
+        }
+        return out
     }
 
     /** Cancels any scheduled retries (e.g. when reverse engages mid-sequence). */
@@ -167,11 +199,14 @@ class LayoutEngine(
 
     companion object {
         const val INTER_WINDOW_DELAY_MS = 350L
-        const val DEFAULT_RETRIES = 2
+        const val DEFAULT_RETRIES = 1
         const val MAX_RETRIES = 2
 
-        /** docs/window-management.md §7: ~500 ms then ~1300 ms. */
-        val RETRY_DELAYS_MS = listOf(500L, 1_300L)
+        /**
+         * Gaps measured from the END of the initial pass, not from apply().
+         * docs/window-management.md §7.
+         */
+        val RETRY_DELAYS_MS = listOf(600L, 1_600L)
 
         private val RETRY_TOKEN = Any()
     }

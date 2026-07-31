@@ -154,3 +154,72 @@ class LayoutGeometryTest {
         }
     }
 }
+
+/**
+ * Broadcast scheduling.
+ *
+ * Regression guard for the retry storm observed on the vehicle on 2026-07-31: retry
+ * passes used to fire every window back to back, which thrashes the task stack because
+ * each CHANGE_WINDOW ends in startActivityFromRecents and pulls that task to the front.
+ */
+@RunWith(RobolectricTestRunner::class)
+class LayoutScheduleTest {
+
+    private fun engine(): io.github.miklergm.witscompanion.layout.LayoutEngine {
+        val ctx = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        return io.github.miklergm.witscompanion.layout.LayoutEngine(
+            appContext = ctx,
+            windowController = io.github.miklergm.witscompanion.wits.WitsWindowController(ctx),
+            reverseGuard = io.github.miklergm.witscompanion.safety.ReverseGuard(),
+            rateLimiter = io.github.miklergm.witscompanion.safety.ActionRateLimiter(),
+        )
+    }
+
+    @Test
+    fun `two windows with no retries are staggered`() {
+        val s = engine().scheduleFor(windowCount = 2, retries = 0)
+        assertEquals(listOf(0L, 350L), s)
+    }
+
+    @Test
+    fun `no two broadcasts are ever scheduled at the same instant`() {
+        val s = engine().scheduleFor(windowCount = 2, retries = 2)
+        assertEquals("every send must have its own slot", s.size, s.distinct().size)
+    }
+
+    @Test
+    fun `windows inside a retry pass are staggered, not fired back to back`() {
+        val s = engine().scheduleFor(windowCount = 2, retries = 1).sorted()
+        // initial: 0, 350 ; retry pass starts at 350+600=950 then 950+350=1300
+        assertEquals(listOf(0L, 350L, 950L, 1300L), s)
+        s.zipWithNext { a, b ->
+            assertTrue("gap between $a and $b is too small", b - a >= 350L)
+        }
+    }
+
+    @Test
+    fun `a retry pass never overlaps the initial pass`() {
+        val engine = engine()
+        listOf(2, 3).forEach { n ->
+            val s = engine.scheduleFor(windowCount = n, retries = 2).sorted()
+            val initialEnd = (n - 1) * 350L
+            val firstRetry = s.first { it > initialEnd }
+            assertTrue("retry must start after the initial pass", firstRetry > initialEnd)
+        }
+    }
+
+    @Test
+    fun `retries are bounded and default to one pass`() {
+        val engine = engine()
+        assertEquals(2, engine.scheduleFor(2, retries = 0).size)
+        assertEquals(4, engine.scheduleFor(2, retries = 1).size)
+        assertEquals(6, engine.scheduleFor(2, retries = 2).size)
+        assertEquals("cannot exceed MAX_RETRIES", 6, engine.scheduleFor(2, retries = 99).size)
+    }
+
+    @Test
+    fun `single window schedule is trivial`() {
+        assertEquals(listOf(0L), engine().scheduleFor(windowCount = 1, retries = 0))
+        assertEquals(listOf(0L, 600L), engine().scheduleFor(windowCount = 1, retries = 1))
+    }
+}
