@@ -24,6 +24,7 @@ import io.github.miklergm.witscompanion.wits.WitsNightModeController
 import io.github.miklergm.witscompanion.wits.WitsPackages
 import io.github.miklergm.witscompanion.wits.WitsSettingsKeys
 import io.github.miklergm.witscompanion.wits.WitsSourceController
+import io.github.miklergm.witscompanion.wits.WitsWindowMode
 
 // ------------------------------------------------------------------ view helpers
 
@@ -562,6 +563,16 @@ class DebugSection(private val app: WitsCompanionApp) : MainActivity.Section {
                     if (narrow) "  <- we are a tile; layouts still use the display" else "")
             }
             appendLine()
+            val wc = app.windowController
+            appendLine("window path    : ${if (wc.isPrivileged) "PRIVILEGED (resizeTask, no flicker)" else "vendor CHANGE_WINDOW hook"}")
+            if (wc.isPrivileged) {
+                val tasks = wc.rootTasks().filter { it.packageName != null }
+                appendLine("root tasks     : ${tasks.size}")
+                tasks.take(6).forEach {
+                    appendLine("  #${it.taskId} ${it.packageName?.substringAfterLast('.')} " +
+                        "mode=${WitsWindowMode.name(it.windowingMode)} vis=${it.visible}")
+                }
+            }
             appendLine("property strategy : ${app.propertyReader.activeStrategy}")
             appendLine("diagnostics       : ${app.propertyReader.diagnostics}")
             appendLine()

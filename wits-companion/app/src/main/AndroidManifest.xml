@@ -8,8 +8,23 @@
         * NO SYSTEM_ALERT_WINDOW   - no overlays, especially not over the reverse camera
         * NO QUERY_ALL_PACKAGES    - explicit <queries> instead
         * NO Accessibility service
-        * NO root, NO platform signature
+        * NO root
     -->
+
+    <!--
+      Signature-level. Granted only when the APK is signed with the platform key; a
+      debug build simply does not receive it and the app runs on the vendor CHANGE_WINDOW
+      hook instead. It buys ActivityTaskManager.resizeTask (reposition a tile in place, no
+      flicker) and getAllRootTaskInfos (read the real window state). Declared here so the
+      platform build can use it; harmless in the debug build, where it stays ungranted.
+
+      Deliberately NOT requested: INTERNAL_SYSTEM_WINDOW, STATUS_BAR_SERVICE,
+      WRITE_SECURE_SETTINGS. The probe proved they would be granted, but the companion
+      needs none of them, and each is a capability worth not holding.
+    -->
+    <uses-permission
+        android:name="android.permission.MANAGE_ACTIVITY_TASKS"
+        tools:ignore="ProtectedPermissions" />
 
     <!-- Optional: only used by the opt-in "restore layout at boot" feature. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />

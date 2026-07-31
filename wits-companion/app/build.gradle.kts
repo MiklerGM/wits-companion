@@ -20,6 +20,33 @@ android {
         resourceConfigurations += listOf("en", "ru")
     }
 
+    // Optional platform signing. The AOSP platform test key is public and matches this
+    // head unit's framework certificate (verified on-device with the privilege probe), so
+    // a build signed with it receives signature-level permissions — MANAGE_ACTIVITY_TASKS
+    // above all — with a plain adb install and no flashing.
+    //
+    // The keystore is not in the repo; point to it with -PplatformKeystore=... or the
+    // WITS_PLATFORM_KEYSTORE env var. Without it, the `platform` build type falls back to
+    // the debug signature and the app simply runs unprivileged.
+    val platformKeystore = (findProperty("platformKeystore") as String?)
+        ?: System.getenv("WITS_PLATFORM_KEYSTORE")
+
+    signingConfigs {
+        if (platformKeystore != null && file(platformKeystore).exists()) {
+            create("platform") {
+                storeFile = file(platformKeystore)
+                storePassword = (findProperty("platformStorePassword") as String?)
+                    ?: System.getenv("WITS_PLATFORM_STORE_PASSWORD") ?: "android"
+                keyAlias = (findProperty("platformKeyAlias") as String?)
+                    ?: System.getenv("WITS_PLATFORM_KEY_ALIAS") ?: "platform"
+                keyPassword = (findProperty("platformKeyPassword") as String?)
+                    ?: System.getenv("WITS_PLATFORM_KEY_PASSWORD") ?: "android"
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
@@ -28,6 +55,14 @@ android {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+        // Same code as release, but signed with the platform key when it is available.
+        // The privileged window path activates at runtime only if the permission is
+        // actually granted, so this build is safe to run even if signing fell back.
+        create("platform") {
+            initWith(getByName("release"))
+            signingConfigs.findByName("platform")?.let { signingConfig = it }
+            matchingFallbacks += listOf("release")
         }
     }
 

@@ -22,6 +22,7 @@ import io.github.miklergm.witscompanion.logging.EventLogger
 class WitsWindowController(
     private val appContext: Context,
     private val logger: EventLogger? = null,
+    private val privileged: PrivilegedWindowController = PrivilegedWindowController(appContext, logger),
 ) {
 
     data class WindowRequest(
@@ -29,6 +30,18 @@ class WitsWindowController(
         val pixelBounds: Rect,
         val windowMode: Int = WitsWindowMode.FREEFORM,
     )
+
+    /**
+     * True when the platform-signed path is active. When it is, geometry goes through
+     * `resizeTask` (no flicker, no front) and the two-phase CHANGE_WINDOW dance in
+     * [io.github.miklergm.witscompanion.layout.LayoutEngine] is unnecessary — see
+     * [applyWindow]. Cached, because it cannot change without a reinstall.
+     */
+    val isPrivileged: Boolean by lazy { privileged.isAvailable() }
+
+    /** Real task state, or empty on the unprivileged path. For feedback and diagnostics. */
+    fun rootTasks(): List<PrivilegedWindowController.TaskSnapshot> =
+        if (isPrivileged) privileged.rootTasks() else emptyList()
 
     /**
      * The usable display area in pixels: full display minus system bar insets.
@@ -79,6 +92,19 @@ class WitsWindowController(
      * @return true if the broadcast was dispatched (NOT that the window moved)
      */
     fun applyWindow(request: WindowRequest): Boolean {
+        // Privileged path: resizeTask moves an existing freeform tile in place, or the app
+        // is launched straight into freeform. Either way there is no CHANGE_WINDOW and no
+        // hiding of the other tiles, so the flicker is gone.
+        if (isPrivileged) {
+            return when (val r = privileged.place(request.packageName, request.pixelBounds, request.windowMode)) {
+                is PrivilegedWindowController.PlaceResult.Failed -> {
+                    Log.w(TAG, "privileged place failed for ${request.packageName}: ${r.reason}")
+                    false
+                }
+                else -> true
+            }
+        }
+
         val intent = Intent(WitsActions.ACTION_CHANGE_WINDOW).apply {
             putExtra(WitsActions.EXTRA_PACKAGE_NAME, request.packageName)
             putExtra(WitsActions.EXTRA_WINDOW_MODE, request.windowMode)
@@ -154,6 +180,19 @@ class WitsWindowController(
         packageName: String,
         bounds: Rect? = null,
         windowMode: Int = WitsWindowMode.FREEFORM,
+    ): Boolean {
+        // On the privileged path applyWindow() has already made the tile visible — either
+        // by resizing a live freeform task (which stays visible) or by launching it into
+        // freeform. A second plain launch here would only bring it to the front and
+        // reintroduce the very reordering the privileged path avoids, so skip it.
+        if (isPrivileged) return true
+        return launchViaPlainStart(packageName, bounds, windowMode)
+    }
+
+    private fun launchViaPlainStart(
+        packageName: String,
+        bounds: Rect?,
+        windowMode: Int,
     ): Boolean = try {
         val intent = appContext.packageManager.getLaunchIntentForPackage(packageName)
             ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
