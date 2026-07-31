@@ -150,9 +150,11 @@ class LayoutEngine(
             }
 
             val pixels = window.bounds.toPixels(area)
+
+            // Phase 1 — geometry for every tile, before any of them is launched.
             handler.postDelayed(
                 {
-                    if (stillValid(myGeneration, "initial", window.packageName)) {
+                    if (stillValid(myGeneration, "geometry", window.packageName)) {
                         windowController.applyWindow(
                             WitsWindowController.WindowRequest(
                                 window.packageName, pixels, window.windowMode
@@ -160,7 +162,17 @@ class LayoutEngine(
                         )
                     }
                 },
-                offset + index * INTER_WINDOW_DELAY_MS,
+                offset + index * GEOMETRY_DELAY_MS,
+            )
+
+            // Phase 2 — make every tile visible, after all geometry has landed.
+            handler.postDelayed(
+                {
+                    if (stillValid(myGeneration, "make_visible", window.packageName)) {
+                        windowController.launchPackage(window.packageName, pixels, window.windowMode)
+                    }
+                },
+                offset + launchPhaseStart(ordered.size) + index * LAUNCH_DELAY_MS,
             )
         }
 
@@ -204,24 +216,26 @@ class LayoutEngine(
         pendingRetries = retries
         if (retries <= 0 || ordered.isEmpty()) return
 
-        // The initial pass finishes at (n-1) * INTER_WINDOW_DELAY_MS.
-        val initialPassEnd = (ordered.size - 1) * INTER_WINDOW_DELAY_MS
+        val n = ordered.size
 
         RETRY_DELAYS_MS.take(retries).forEachIndexed { attempt, gap ->
-            val passStart = initialPassEnd + gap
+            val passStart = passDuration(n) + gap
             ordered.forEachIndexed { index, window ->
-                val at = passStart + index * INTER_WINDOW_DELAY_MS
+                val pixels = window.bounds.toPixels(area)
+                // Launches only — deliberately no geometry phase.
+                //
+                // CHANGE_WINDOW is exclusive: re-sending it would hide every tile the
+                // initial pass has already placed, so each retry would flash the layout.
+                // A launch is inclusive and carries the bounds itself through
+                // ActivityOptions.setLaunchBounds, so it still repairs a tile that never
+                // became visible, without disturbing the ones that did.
                 handler.postDelayed({
-                    if (stillValid(myGeneration, "retry", window.packageName) &&
+                    if (stillValid(myGeneration, "retry_visible", window.packageName) &&
                         windowController.isLaunchable(window.packageName)
                     ) {
-                        windowController.applyWindow(
-                            WitsWindowController.WindowRequest(
-                                window.packageName, window.bounds.toPixels(area), window.windowMode
-                            )
-                        )
+                        windowController.launchPackage(window.packageName, pixels, window.windowMode)
                     }
-                }, RETRY_TOKEN, at)
+                }, RETRY_TOKEN, passStart + index * LAUNCH_DELAY_MS)
             }
             handler.postDelayed({
                 if (myGeneration == generation.get()) {
@@ -242,13 +256,38 @@ class LayoutEngine(
     fun scheduleFor(windowCount: Int, retries: Int): List<Long> {
         if (windowCount <= 0) return emptyList()
         val out = mutableListOf<Long>()
-        repeat(windowCount) { i -> out += i * INTER_WINDOW_DELAY_MS }
-        val initialPassEnd = (windowCount - 1) * INTER_WINDOW_DELAY_MS
+        // Initial pass: geometry for every tile, then a launch for every tile.
+        repeat(windowCount) { i -> out += i * GEOMETRY_DELAY_MS }
+        val launchBase = launchPhaseStart(windowCount)
+        repeat(windowCount) { i -> out += launchBase + i * LAUNCH_DELAY_MS }
+        // Retry passes: launches only, so a retry never hides a placed tile.
         RETRY_DELAYS_MS.take(retries.coerceIn(0, MAX_RETRIES)).forEach { gap ->
-            repeat(windowCount) { i -> out += initialPassEnd + gap + i * INTER_WINDOW_DELAY_MS }
+            val base = passDuration(windowCount) + gap
+            repeat(windowCount) { i -> out += base + i * LAUNCH_DELAY_MS }
         }
         return out
     }
+
+    /**
+     * When the visibility phase starts, relative to the start of a pass: after every
+     * `CHANGE_WINDOW` has been sent, plus a settle gap.
+     *
+     * The two phases must not interleave. `CHANGE_WINDOW` takes the vendor hook's warm
+     * path (`getFreeformTaskId` → `startActivityFromRecents`), which brings its own task
+     * forward and drops every other freeform task to `visibleRequested=false`. A plain
+     * launch is inclusive — it shows a task without hiding its neighbours — but it does
+     * not set the windowing mode for a task that does not exist yet.
+     *
+     * So: all geometry first (exclusive, but only the last one's visibility survives),
+     * then all launches (inclusive, and they inherit the bounds already set).
+     * `[RUNTIME]` 2026-07-31, verified by dumpsys — see research/window-debug/.
+     */
+    private fun launchPhaseStart(windowCount: Int): Long =
+        (windowCount - 1).coerceAtLeast(0) * GEOMETRY_DELAY_MS + PHASE_GAP_MS
+
+    /** Total length of one full pass (geometry phase + visibility phase). */
+    private fun passDuration(windowCount: Int): Long =
+        launchPhaseStart(windowCount) + (windowCount - 1).coerceAtLeast(0) * LAUNCH_DELAY_MS
 
     /**
      * Parks freeform windows that are not part of the incoming layout.
@@ -283,19 +322,22 @@ class LayoutEngine(
     /**
      * Brings the companion's own window to the front as the fullscreen anchor.
      * Uses a plain activity start — no vendor hook needed for our own package.
+     *
+     * Targets `DashboardActivity`, not the launcher activity: the anchor is the screen
+     * behind the floating map while driving, whereas the launcher activity is the tabbed
+     * configuration UI.
      */
     private fun bringAnchorToFront() {
         runCatching {
-            val intent = appContext.packageManager
-                .getLaunchIntentForPackage(appContext.packageName)
-                ?.addFlags(
-                    android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
-                        android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                )
-            if (intent != null) {
-                appContext.startActivity(intent)
-                logger?.log("layout", "anchor_to_front", result = "sent")
-            }
+            val intent = android.content.Intent(
+                appContext,
+                io.github.miklergm.witscompanion.ui.DashboardActivity::class.java,
+            ).addFlags(
+                android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                    android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+            )
+            appContext.startActivity(intent)
+            logger?.log("layout", "anchor_to_front", result = "sent")
         }.onFailure {
             logger?.log("layout", "anchor_to_front", result = "error:${it.javaClass.simpleName}")
         }
@@ -353,7 +395,12 @@ class LayoutEngine(
     fun currentGeneration(): Long = generation.get()
 
     companion object {
-        const val INTER_WINDOW_DELAY_MS = 350L
+        /** Gap between two CHANGE_WINDOW sends inside the geometry phase. */
+        const val GEOMETRY_DELAY_MS = 250L
+        /** Settle time after the last CHANGE_WINDOW, before the first launch. */
+        const val PHASE_GAP_MS = 600L
+        /** Gap between two launches inside the visibility phase. */
+        const val LAUNCH_DELAY_MS = 700L
         const val PARK_DELAY_MS = 250L
         const val ANCHOR_SETTLE_MS = 450L
         const val DEFAULT_RETRIES = 1

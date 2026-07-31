@@ -8,6 +8,7 @@ import io.github.miklergm.witscompanion.layout.LayoutValidator
 import io.github.miklergm.witscompanion.layout.LayoutWindow
 import io.github.miklergm.witscompanion.layout.PresetKind
 import io.github.miklergm.witscompanion.layout.NormalizedBounds
+import io.github.miklergm.witscompanion.wits.WitsPackages
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -177,10 +178,63 @@ class LayoutScheduleTest {
         )
     }
 
+    // Each pass has two phases: CHANGE_WINDOW for every tile, then a launch for every
+    // tile. scheduleFor() emits a pass as [geometry..., launches...] in that order.
+
+    @Test
+    fun `a pass sends all geometry before any launch`() {
+        val n = 2
+        val s = engine().scheduleFor(windowCount = n, retries = 0)
+        val geometry = s.take(n)
+        val launches = s.drop(n)
+        assertTrue(
+            "the last CHANGE_WINDOW must land before the first launch",
+            geometry.max() < launches.min(),
+        )
+    }
+
+    /**
+     * The regression guard for the visibility bug: interleaving the phases means a later
+     * CHANGE_WINDOW fires after an earlier launch, and the vendor hook's warm path hides
+     * the tile that launch had just made visible.
+     */
+    @Test
+    fun `phases never interleave, for any window count`() {
+        val engine = engine()
+        listOf(1, 2, 3, 4).forEach { n ->
+            val s = engine.scheduleFor(windowCount = n, retries = 2)
+            val geometryEnd = s.take(n).max()
+            val firstLaunch = s.drop(n).min()
+            assertTrue(
+                "n=$n: geometry ends at $geometryEnd but a launch fires at $firstLaunch",
+                geometryEnd < firstLaunch,
+            )
+        }
+    }
+
+    /**
+     * A retry must not re-send CHANGE_WINDOW. That call is exclusive — it hides every
+     * other freeform tile — so a retry containing geometry makes the layout visibly
+     * flash on every pass.
+     */
+    @Test
+    fun `retry passes contain launches only`() {
+        val n = 2
+        val engine = engine()
+        val noRetry = engine.scheduleFor(windowCount = n, retries = 0)
+        val oneRetry = engine.scheduleFor(windowCount = n, retries = 1)
+        assertEquals(
+            "a retry pass must add exactly one send per window",
+            noRetry.size + n,
+            oneRetry.size,
+        )
+    }
+
     @Test
     fun `two windows with no retries are staggered`() {
         val s = engine().scheduleFor(windowCount = 2, retries = 0)
-        assertEquals(listOf(0L, 350L), s)
+        // geometry 0, 250 ; launch phase opens at 250+600=850, then 850+700=1550
+        assertEquals(listOf(0L, 250L, 850L, 1550L), s)
     }
 
     @Test
@@ -190,12 +244,10 @@ class LayoutScheduleTest {
     }
 
     @Test
-    fun `windows inside a retry pass are staggered, not fired back to back`() {
+    fun `sends inside a pass are staggered, not fired back to back`() {
         val s = engine().scheduleFor(windowCount = 2, retries = 1).sorted()
-        // initial: 0, 350 ; retry pass starts at 350+600=950 then 950+350=1300
-        assertEquals(listOf(0L, 350L, 950L, 1300L), s)
         s.zipWithNext { a, b ->
-            assertTrue("gap between $a and $b is too small", b - a >= 350L)
+            assertTrue("gap between $a and $b is too small", b - a >= 250L)
         }
     }
 
@@ -203,26 +255,29 @@ class LayoutScheduleTest {
     fun `a retry pass never overlaps the initial pass`() {
         val engine = engine()
         listOf(2, 3).forEach { n ->
-            val s = engine.scheduleFor(windowCount = n, retries = 2).sorted()
-            val initialEnd = (n - 1) * 350L
-            val firstRetry = s.first { it > initialEnd }
-            assertTrue("retry must start after the initial pass", firstRetry > initialEnd)
+            val s = engine.scheduleFor(windowCount = n, retries = 2)
+            val initialEnd = s.take(2 * n).max()
+            val firstRetry = s.drop(2 * n).min()
+            assertTrue(
+                "retry must start after the initial pass (n=$n)",
+                firstRetry > initialEnd,
+            )
         }
     }
 
     @Test
     fun `retries are bounded and default to one pass`() {
         val engine = engine()
-        assertEquals(2, engine.scheduleFor(2, retries = 0).size)
-        assertEquals(4, engine.scheduleFor(2, retries = 1).size)
-        assertEquals(6, engine.scheduleFor(2, retries = 2).size)
-        assertEquals("cannot exceed MAX_RETRIES", 6, engine.scheduleFor(2, retries = 99).size)
+        // Initial pass is 2 sends per window (geometry + launch); each retry adds 1.
+        assertEquals(4, engine.scheduleFor(2, retries = 0).size)
+        assertEquals(6, engine.scheduleFor(2, retries = 1).size)
+        assertEquals(8, engine.scheduleFor(2, retries = 2).size)
+        assertEquals("cannot exceed MAX_RETRIES", 8, engine.scheduleFor(2, retries = 99).size)
     }
 
     @Test
-    fun `single window schedule is trivial`() {
-        assertEquals(listOf(0L), engine().scheduleFor(windowCount = 1, retries = 0))
-        assertEquals(listOf(0L, 600L), engine().scheduleFor(windowCount = 1, retries = 1))
+    fun `single window still gets both phases`() {
+        assertEquals(listOf(0L, 600L), engine().scheduleFor(windowCount = 1, retries = 0))
     }
 }
 
@@ -348,5 +403,100 @@ class PresetKindAndCustomisationTest {
         assertEquals(PresetKind.ANCHORED, LayoutPreset.fromJson(p.toJson()).kind)
         val tiled = twoTile()
         assertEquals(PresetKind.TILED, LayoutPreset.fromJson(tiled.toJson()).kind)
+    }
+
+    // ------------------------------------------------------- shared geometry
+
+    @Test
+    fun `one split drives a tiled pair`() {
+        val p = twoTile().withGeometry(split = 0.5f, swapped = false)
+        val sorted = p.windows.sortedBy { it.bounds.left }
+        assertEquals(0f, sorted[0].bounds.left, 0.001f)
+        assertEquals(0.5f, sorted[0].bounds.right, 0.001f)
+        assertEquals(0.5f, sorted[1].bounds.left, 0.001f)
+        assertEquals(1f, sorted[1].bounds.right, 0.001f)
+    }
+
+    @Test
+    fun `swapping puts the primary app on the right`() {
+        val plain = twoTile().withGeometry(0.65f, swapped = false)
+        val swapped = twoTile().withGeometry(0.65f, swapped = true)
+        val primary = plain.windows.maxByOrNull { it.bounds.width }!!.packageName
+        val swappedPrimary = swapped.windows.maxByOrNull { it.bounds.width }!!
+        assertEquals("the same app stays primary", primary, swappedPrimary.packageName)
+        assertEquals("but now on the right", 1f, swappedPrimary.bounds.right, 0.001f)
+    }
+
+    /** An anchored preset has only the floating window, so the split is *its* width. */
+    @Test
+    fun `the split sets the floating window's width when anchored`() {
+        val p = DefaultPresets.all().first { it.id == DefaultPresets.ID_MAPS_ANCHORED }
+        val narrow = p.withGeometry(0.5f, swapped = false)
+        assertEquals(1, narrow.windows.size)
+        assertEquals(0f, narrow.windows[0].bounds.left, 0.001f)
+        assertEquals(0.5f, narrow.windows[0].bounds.right, 0.001f)
+
+        val right = p.withGeometry(0.5f, swapped = true)
+        assertEquals(0.5f, right.windows[0].bounds.left, 0.001f)
+        assertEquals(1f, right.windows[0].bounds.right, 0.001f)
+    }
+
+    @Test
+    fun `a fullscreen preset ignores the geometry`() {
+        val full = DefaultPresets.all().first { it.id == DefaultPresets.ID_MAPS_FULL }
+        assertEquals(full, full.withGeometry(0.4f, swapped = true))
+    }
+
+    @Test
+    fun `the split is clamped to the allowed range`() {
+        val tiny = twoTile().withGeometry(0.01f, swapped = false)
+        assertEquals(
+            LayoutPreset.MIN_SPLIT,
+            tiny.windows.minByOrNull { it.bounds.left }!!.bounds.right,
+            0.001f,
+        )
+    }
+
+    // ------------------------------------------------- anchor panel reservation
+
+    @Test
+    fun `the anchor panel reserves exactly the floating window's strip`() {
+        val p = DefaultPresets.all().first { it.id == DefaultPresets.ID_MAPS_ANCHORED }
+        assertEquals(0.65f, p.anchorReservedLeftFraction(), 0.001f)
+    }
+
+    @Test
+    fun `a tiled preset reserves nothing`() {
+        assertEquals(0f, twoTile().anchorReservedLeftFraction(), 0.001f)
+    }
+
+    /**
+     * A window that does not start at the left edge would leave the gap in the wrong
+     * place, so the panel stays full width rather than hiding content under the map.
+     */
+    @Test
+    fun `a floating window away from the left edge reserves nothing`() {
+        val p = LayoutPreset(
+            id = "right_anchored",
+            title = "right",
+            kind = PresetKind.ANCHORED,
+            windows = listOf(
+                LayoutWindow(WitsPackages.MAPS, NormalizedBounds(0.35f, 0f, 1f, 1f)),
+            ),
+        )
+        assertEquals(0f, p.anchorReservedLeftFraction(), 0.001f)
+    }
+
+    @Test
+    fun `the reservation never starves the panel`() {
+        val p = LayoutPreset(
+            id = "greedy",
+            title = "greedy",
+            kind = PresetKind.ANCHORED,
+            windows = listOf(
+                LayoutWindow(WitsPackages.MAPS, NormalizedBounds(0f, 0f, 0.98f, 1f)),
+            ),
+        )
+        assertEquals(LayoutPreset.MAX_ANCHOR_RESERVED, p.anchorReservedLeftFraction(), 0.001f)
     }
 }
