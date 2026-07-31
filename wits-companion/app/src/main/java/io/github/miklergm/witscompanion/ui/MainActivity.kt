@@ -59,13 +59,42 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
         app.carStateRepository.addObserver(this)
     }
 
+    /**
+     * Swaps in a section's view.
+     *
+     * The view is built **before** the frame is cleared, so a section that fails to
+     * inflate leaves the previous content on screen instead of a blank frame. If it does
+     * fail, the reason is shown in place — a silent empty tab is the one outcome that
+     * must never happen, because it looks identical to "the app is broken" and carries no
+     * information. `[RUNTIME]` 2026-07-31: all tabs were reported blank once, not
+     * reproducible; most likely the companion's own window had been shrunk to a sliver by
+     * the `usableArea` defect (see docs/window-management.md §6.0.1), but nothing in the
+     * UI would have said so.
+     */
     private fun show(section: Section) {
+        val view = runCatching { section.onCreateView(this) }
+            .getOrElse { t -> errorView(section, t) }
         current?.onPause()
         binding.content.removeAllViews()
-        binding.content.addView(section.onCreateView(this))
+        binding.content.addView(view)
         current = section
-        section.onCarState(app.carStateRepository.state)
-        section.onResume()
+        runCatching { section.onCarState(app.carStateRepository.state) }
+        runCatching { section.onResume() }
+    }
+
+    private fun errorView(section: Section, t: Throwable): android.view.View {
+        val metrics = runCatching {
+            val b = getSystemService(android.view.WindowManager::class.java).currentWindowMetrics.bounds
+            "window ${b.width()}x${b.height()}"
+        }.getOrDefault("window size unknown")
+        android.util.Log.e("MainActivity", "section ${section.title} failed to inflate", t)
+        return android.widget.TextView(this).apply {
+            text = "Section \"${section.title}\" failed to open.\n\n" +
+                "$metrics\n\n${t.javaClass.simpleName}: ${t.message}"
+            textSize = 12f
+            typeface = android.graphics.Typeface.MONOSPACE
+            setPadding(24, 24, 24, 24)
+        }
     }
 
     override fun onResume() {

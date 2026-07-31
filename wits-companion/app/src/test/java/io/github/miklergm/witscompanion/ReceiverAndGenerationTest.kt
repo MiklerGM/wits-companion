@@ -123,20 +123,130 @@ class ReceiverAndGenerationTest {
 
     // ---------------------------------------------------------- generation token
 
-    private fun engineSource(): String {
+    private fun engineSource(): String = sourceOf("layout/LayoutEngine.kt")
+
+    private fun sourceOf(relative: String): String {
         val candidates = listOf(
-            "src/main/java/io/github/miklergm/witscompanion/layout/LayoutEngine.kt",
-            "app/src/main/java/io/github/miklergm/witscompanion/layout/LayoutEngine.kt",
+            "src/main/java/io/github/miklergm/witscompanion/$relative",
+            "app/src/main/java/io/github/miklergm/witscompanion/$relative",
         )
         return File(candidates.first { File(it).exists() }).readText()
+    }
+
+    /**
+     * The anchor panel is the screen used while driving. It may read and it may drive
+     * media transport through MediaSession, but it must not write to the vendor stack.
+     */
+    @Test
+    fun `the anchor panel never writes to the vendor stack`() {
+        val src = sourceOf("ui/DashboardActivity.kt")
+        val code = src.lines()
+            .filterNot { it.trimStart().startsWith("*") || it.trimStart().startsWith("//") }
+            .joinToString("\n")
+        listOf(
+            "sendBroadcast", "Settings.System.put", "Settings.Global.put", "Settings.Secure.put",
+            "setStreamVolume", "adjustStreamVolume", "applyWindow", "switchSource", "setNightMode",
+        ).forEach { forbidden ->
+            assertTrue("the anchor panel must not call $forbidden", !code.contains(forbidden))
+        }
+    }
+
+    /**
+     * PDC and doors are deliberately out of scope: both are already on the cluster and
+     * the HUD, and reversing hands the screen to the OEM source anyway.
+     */
+    @Test
+    fun `the anchor panel shows no PDC or door state`() {
+        val code = sourceOf("ui/DashboardActivity.kt")
+            .lines()
+            .filterNot { it.trimStart().startsWith("*") || it.trimStart().startsWith("//") }
+            .joinToString("\n")
+        listOf("radarRaw", "doorsRaw", "anyDoorOpen").forEach {
+            assertTrue("the anchor panel must not surface $it", !code.contains(it))
+        }
+    }
+
+    @Test
+    fun `the anchor is the dashboard, not the tabbed configuration activity`() {
+        val src = engineSource()
+        val body = src.substringAfter("private fun bringAnchorToFront()").substringBefore("\n    }")
+        assertTrue(
+            "bringAnchorToFront must start DashboardActivity",
+            body.contains("DashboardActivity"),
+        )
+        assertTrue(
+            "it must not fall back to the launcher activity",
+            !body.contains("getLaunchIntentForPackage"),
+        )
+    }
+
+    /**
+     * `SessionRecorder.record()` notifies listeners synchronously, on whichever probe
+     * thread produced the event, and wraps each call in `runCatching`. A listener that
+     * touches a View from there throws `CalledFromWrongThreadException`, which is then
+     * swallowed: recording works, the live timeline silently never updates.
+     */
+    @Test
+    fun `the signal explorer refreshes its views on the UI thread`() {
+        val src = sourceOf("ui/SignalExplorerSection.kt")
+        val listener = src
+            .substringAfter("SessionRecorder.Listener")
+            .substringBefore("override fun onCreateView")
+        assertTrue(
+            "the recorder listener must marshal onto the main looper",
+            listener.contains("ui.post") || listener.contains("getMainLooper"),
+        )
+    }
+
+    /**
+     * The companion can be one of the tiles in the layout it applies, so measuring from
+     * its own window makes each apply compute the next layout inside the previous
+     * result — the area shrank 2400 → 840 → 420 px on the device before this was fixed.
+     */
+    @Test
+    fun `layout area is measured from the display, never from our own window`() {
+        val src = sourceOf("wits/WitsWindowController.kt")
+        val code = src.lines()
+            .filterNot { it.trimStart().startsWith("*") || it.trimStart().startsWith("//") }
+            .joinToString("\n")
+        assertTrue(
+            "must not measure the layout area from the app's own window",
+            !code.contains("currentWindowMetrics"),
+        )
+        assertTrue(
+            "must measure from the display",
+            code.contains("maximumWindowMetrics"),
+        )
     }
 
     @Test
     fun `every delayed send is gated by the generation token`() {
         val src = engineSource()
         assertTrue("engine must keep a generation", src.contains("AtomicLong"))
-        assertTrue("initial pass must be gated", src.contains("stillValid(myGeneration, \"initial\""))
-        assertTrue("retry pass must be gated", src.contains("stillValid(myGeneration, \"retry\""))
+        // Both phases of both the initial and the retry pass must re-check at fire time.
+        listOf("geometry", "make_visible", "retry_visible").forEach { phase ->
+            assertTrue(
+                "phase \"$phase\" must be gated by the generation token",
+                src.contains("stillValid(myGeneration, \"$phase\""),
+            )
+        }
+    }
+
+    /**
+     * Guards the ordering discovered on the device: a launch must never be scheduled
+     * from inside the callback that sends CHANGE_WINDOW, because that interleaves the
+     * phases and the next CHANGE_WINDOW hides the tile just made visible.
+     */
+    @Test
+    fun `the visibility phase is scheduled independently, not nested in the geometry send`() {
+        val src = engineSource()
+        val geometryCallback = src
+            .substringAfter("stillValid(myGeneration, \"geometry\"")
+            .substringBefore("offset + index * GEOMETRY_DELAY_MS")
+        assertTrue(
+            "launchPackage must not be nested inside the geometry callback",
+            !geometryCallback.contains("launchPackage"),
+        )
     }
 
     @Test

@@ -42,10 +42,35 @@ class SignalExplorerSection(private val app: WitsCompanionApp) : MainActivity.Se
     private var replay: ReplayEngine? = null
     private val replayEvents = ArrayDeque<SessionEvent>()
 
-    private val recorderListener = SessionRecorder.Listener { refreshTimeline() }
+    /** Marker buttons, greyed out while no session is recording. */
+    private val markerButtons = mutableListOf<Button>()
+
+    private val ui = android.os.Handler(android.os.Looper.getMainLooper())
+
+    @Volatile
+    private var refreshQueued = false
+
+    /**
+     * Events arrive on the probe threads (`wits-propprobe`, `wits-settingsprobe`), so the
+     * refresh must be marshalled to the UI thread.
+     *
+     * `SessionRecorder.record()` notifies listeners synchronously and wraps each in
+     * `runCatching`, so touching a View from here threw `CalledFromWrongThreadException`
+     * that was then swallowed: recording worked, but the live timeline never updated once
+     * and gave no hint why. `[RUNTIME]` 2026-07-31, reported as "nothing happened".
+     *
+     * Coalesced, because a burst of property changes would otherwise post one relayout each.
+     */
+    private val recorderListener = SessionRecorder.Listener {
+        if (!refreshQueued) {
+            refreshQueued = true
+            ui.postDelayed({ refreshQueued = false; refreshStatus(); refreshTimeline() }, REFRESH_MS)
+        }
+    }
 
     override fun onCreateView(activity: MainActivity): View {
         this.activity = activity
+        markerButtons.clear()
         val c = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(activity, 16), dp(activity, 12), dp(activity, 16), dp(activity, 24))
@@ -132,8 +157,9 @@ class SignalExplorerSection(private val app: WitsCompanionApp) : MainActivity.Se
                     setOnClickListener {
                         val m = app.signalExplorer.mark(type)
                         activity.toast(if (m == null) "Not recording" else "Marked ${type.name}")
-                        refreshTimeline()
+                        refreshStatus(); refreshTimeline()
                     }
+                    markerButtons += this
                 })
             }
             markerGrid.addView(rowView)
@@ -205,8 +231,10 @@ class SignalExplorerSection(private val app: WitsCompanionApp) : MainActivity.Se
         val ex = app.signalExplorer
         val rec = ex.recorder
         val raw = ex.steeringSchemeRaw()
+        // Markers are meaningless outside a session; grey them out so the screen says so.
+        markerButtons.forEach { it.isEnabled = ex.isRecording }
         statusView.text = buildString {
-            appendLine("recording        : ${if (ex.isRecording) "YES" else "no"}")
+            appendLine("recording        : ${if (ex.isRecording) "YES" else "no — press Start recording"}")
             appendLine("session          : ${rec?.metadata?.sessionId ?: "—"}")
             appendLine("events / markers : ${rec?.eventCount ?: 0} / ${rec?.markerCount() ?: 0}")
             appendLine("catalog version  : ${ex.catalog.version} (${ex.catalog.subscribableActions().size} actions)")
@@ -239,8 +267,19 @@ class SignalExplorerSection(private val app: WitsCompanionApp) : MainActivity.Se
             }
         }.take(40)
 
-        timelineView.text = if (shown.isEmpty()) "(no events yet)" else
+        timelineView.text = if (shown.isNotEmpty()) {
             shown.joinToString("\n") { e -> formatEvent(e) }
+        } else if (!app.signalExplorer.isRecording) {
+            "(not recording)\n\nPress \"Start recording\" above, then use a control in the " +
+                "car — a steering button, the iDrive knob, the volume knob. Events appear here " +
+                "as they arrive.\n\nMarker buttons only work while recording."
+        } else if (events.isEmpty()) {
+            "(recording — no events yet)\n\nNothing has changed since the session started. " +
+                "Press a physical control, or switch source, to produce one."
+        } else {
+            "(recording — ${events.size} events, none match the \"$filter\" filter)\n\n" +
+                "Press \"all\" to see everything."
+        }
     }
 
     private fun formatEvent(e: SessionEvent): String {
@@ -426,5 +465,10 @@ class SignalExplorerSection(private val app: WitsCompanionApp) : MainActivity.Se
         layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(a, 6) }
+    }
+
+    private companion object {
+        /** Coalescing window for timeline refreshes driven by probe threads. */
+        const val REFRESH_MS = 250L
     }
 }
