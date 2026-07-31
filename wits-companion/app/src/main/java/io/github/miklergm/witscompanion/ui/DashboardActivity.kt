@@ -178,10 +178,11 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         })
         // Real launcher icons rather than text: recognisable at a glance and a bigger
         // touch target, the one idea from Mini AA's NavRail that costs nothing here.
+        // The apps offered come from the vendor's nav/music choices plus the well-known
+        // ones, so the switcher reflects what the user actually set, not a fixed triple.
         val switcher = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        FLOATABLE.forEach { (pkg, label) ->
-            if (!app.windowController.isLaunchable(pkg)) return@forEach
-            switcher.addView(appIcon(pkg, label))
+        floatableApps().forEach { pkg ->
+            switcher.addView(appIcon(pkg, app.appCatalog.labelFor(pkg)))
         }
         panel.addView(switcher)
 
@@ -401,6 +402,19 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
 
     // ------------------------------------------------------------------ helpers
 
+    /**
+     * Up to four apps to offer as the floating window: the vendor's nav and music choices
+     * first, then the well-known apps, deduplicated and only if installed and launchable.
+     */
+    private fun floatableApps(): List<String> {
+        val d = app.appCatalog.vendorDefaults()
+        val preferred = listOfNotNull(
+            d.navigation, d.music, d.video,
+            WitsPackages.MAPS, WitsPackages.CHROME, WitsPackages.SPOTIFY,
+        )
+        return preferred.filter { app.windowController.isLaunchable(it) }.distinct().take(4)
+    }
+
     /** A launcher icon that floats its app over the panel, with the name underneath. */
     private fun appIcon(packageName: String, label: String): View {
         val box = LinearLayout(this).apply {
@@ -478,12 +492,6 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         /** How wide our window must be, as a percentage of the display, to count as the anchor. */
         const val FULL_WIDTH_PERCENT = 90
 
-        /** Apps offered as the floating window, in the order shown. */
-        val FLOATABLE = listOf(
-            WitsPackages.MAPS to "Maps",
-            WitsPackages.CHROME to "Chrome",
-            WitsPackages.SPOTIFY to "Spotify",
-        )
 
         val CLOCK = SimpleDateFormat("HH:mm", Locale.US)
     }

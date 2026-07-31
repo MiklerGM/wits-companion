@@ -30,6 +30,8 @@ class WitsCompanionApp : Application() {
         private set
     lateinit var layoutRepository: LayoutRepository
         private set
+    lateinit var appCatalog: io.github.miklergm.witscompanion.layout.AppCatalog
+        private set
     lateinit var windowController: WitsWindowController
         private set
     lateinit var sourceController: WitsSourceController
@@ -55,6 +57,7 @@ class WitsCompanionApp : Application() {
         eventLogger = EventLogger(this)
         propertyReader = PropertyReader()
         layoutRepository = LayoutRepository(this)
+        appCatalog = io.github.miklergm.witscompanion.layout.AppCatalog(this)
 
         reverseGuard = ReverseGuard()
         rateLimiter = ActionRateLimiter()

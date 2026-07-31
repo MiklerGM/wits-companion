@@ -364,6 +364,26 @@ object DefaultPresets {
         ),
     )
 
+    /**
+     * A two-tile preset from a user-chosen pair of apps. Geometry is a placeholder split;
+     * [LayoutPreset.withGeometry] applies the user's real ratio and side order at apply
+     * time. [leftLabel] sits first (focusOrder 0) so [rightLabel] ends up focused.
+     */
+    fun tiledFor(
+        leftPackage: String,
+        rightPackage: String,
+        leftLabel: String,
+        rightLabel: String,
+    ): LayoutPreset = LayoutPreset(
+        id = "tiled_${leftPackage}__$rightPackage",
+        title = "$leftLabel + $rightLabel",
+        kind = PresetKind.TILED,
+        windows = listOf(
+            LayoutWindow(leftPackage, NormalizedBounds(0f, 0f, LayoutPreset.DEFAULT_SPLIT, 1f), focusOrder = 0),
+            LayoutWindow(rightPackage, NormalizedBounds(LayoutPreset.DEFAULT_SPLIT, 0f, 1f, 1f), focusOrder = 1),
+        ),
+    )
+
     const val ID_MAPS_SPOTIFY = "maps65_spotify35"
     const val ID_MAPS_CHROME = "maps65_chrome35"
     const val ID_MAPS_COMPANION = "maps65_companion35"

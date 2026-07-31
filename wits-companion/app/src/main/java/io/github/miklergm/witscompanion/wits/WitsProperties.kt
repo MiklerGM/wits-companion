@@ -118,6 +118,16 @@ object WitsSettingsKeys {
     const val REMEMBER_PIP_APP = "REMEMBER_PIP_APP"
     const val DEFAULT_TASKVIEW_APP = "default_taskview_app"
 
+    // The vendor's own choice of third-party apps, set in system settings and stored in
+    // Settings.System. Read-only for us — reading Settings.System needs no permission,
+    // only writing does. Lets the companion pre-fill layout slots with what the user
+    // already picked instead of guessing. `[CODE]` UtilSetting / ID8LauncherConstants.
+    const val THIRD_APP_MUSIC_PKG = "KEY_THIRD_APP_MUSIC_PKG"
+    const val THIRD_APP_VIDEO_PKG = "KEY_THIRD_APP_VIDEO_PKG"
+    const val THIRD_APP_VOICE_PKG = "KEY_THIRD_APP_VOICE_PKG"
+    const val NAVI_APP = "NaviApp"
+    const val MUSIC_APP = "MusicApp"
+
     // Settings.Global
     const val ENABLE_FREEFORM_SUPPORT = "enable_freeform_support"
     const val FORCE_RESIZABLE_ACTIVITIES = "force_resizable_activities"

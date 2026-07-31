@@ -47,6 +47,14 @@
         <intent>
             <action android:name="android.media.browse.MediaBrowserService" />
         </intent>
+
+        <!-- Enumerate launchable apps for the layout-slot picker. This exposes only apps
+             that have a launcher activity, which is the standard privacy-respecting
+             alternative to QUERY_ALL_PACKAGES. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
     </queries>
 
     <application

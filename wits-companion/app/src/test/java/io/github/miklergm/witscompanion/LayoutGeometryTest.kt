@@ -11,6 +11,7 @@ import io.github.miklergm.witscompanion.layout.NormalizedBounds
 import io.github.miklergm.witscompanion.wits.WitsPackages
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -455,6 +456,35 @@ class PresetKindAndCustomisationTest {
             tiny.windows.minByOrNull { it.bounds.left }!!.bounds.right,
             0.001f,
         )
+    }
+
+    // --------------------------------------------------- user-built layouts
+
+    @Test
+    fun `a built pair honours order, focus and the shared geometry`() {
+        val p = DefaultPresets.tiledFor("com.a", "com.b", "A", "B")
+        assertEquals(PresetKind.TILED, p.kind)
+        assertEquals("A + B", p.title)
+        val ordered = p.windows.sortedBy { it.focusOrder }
+        assertEquals("com.a", ordered.first().packageName)
+        assertEquals("the last-applied window takes focus", "com.b", ordered.last().packageName)
+
+        // The proportion is applied on top, exactly like a built-in preset.
+        val split = p.withGeometry(0.5f, swapped = false)
+        assertEquals(0.5f, split.windows.minByOrNull { it.bounds.left }!!.bounds.right, 0.001f)
+    }
+
+    @Test
+    fun `a built pair passes validation`() {
+        val p = DefaultPresets.tiledFor("com.a", "com.b", "A", "B")
+        assertFalse(LayoutValidator.hasErrors(LayoutValidator.validate(p)))
+    }
+
+    @Test
+    fun `built pairs get distinct ids so saving does not collide`() {
+        val ab = DefaultPresets.tiledFor("com.a", "com.b", "A", "B")
+        val ba = DefaultPresets.tiledFor("com.b", "com.a", "B", "A")
+        assertNotEquals(ab.id, ba.id)
     }
 
     // ------------------------------------------------- anchor panel reservation

@@ -238,8 +238,12 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
                 "Changing it does not move any window until you apply a combination."
         ))
 
+        // ------------------------------------------------------- build a layout
+        c.addView(activity.heading("Build a layout"))
+        c.addView(buildLayoutControls(activity))
+
         // --------------------------------------------------------- combinations
-        c.addView(activity.heading("Apps"))
+        c.addView(activity.heading("Saved & built-in"))
         app.layoutRepository.allPresets().forEach { preset ->
             c.addView(presetRow(activity, preset))
         }
@@ -317,6 +321,79 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
         return activity.scroll(c)
     }
 
+    /**
+     * Pick two apps and apply them at the current proportion, or save the pair as a
+     * reusable preset. Seeded from the vendor's own nav/music choices so the obvious apps
+     * are at the top without the user re-picking what they already set in system settings.
+     */
+    private fun buildLayoutControls(activity: MainActivity): View {
+        val box = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+
+        val catalog = app.appCatalog
+        val suggested = catalog.suggestedPackages()
+        if (suggested.size < 2) {
+            box.addView(activity.body("Need at least two launchable apps to build a layout."))
+            return box
+        }
+        val labels = suggested.map { catalog.labelFor(it) }
+        val defaults = catalog.vendorDefaults()
+        if (defaults.any) {
+            box.addView(activity.body(
+                "Seeded from your vendor settings: " +
+                    listOfNotNull(
+                        defaults.navigation?.let { "nav = ${catalog.labelFor(it)}" },
+                        defaults.music?.let { "music = ${catalog.labelFor(it)}" },
+                    ).joinToString(", ").ifEmpty { "—" }
+            ))
+        }
+
+        fun spinner(initial: Int) = android.widget.Spinner(activity).apply {
+            adapter = android.widget.ArrayAdapter(
+                activity, android.R.layout.simple_spinner_dropdown_item, labels
+            )
+            setSelection(initial.coerceIn(0, labels.lastIndex))
+        }
+
+        // Left defaults to the nav app (or the first suggestion); right to the music app.
+        val leftInit = defaults.navigation?.let { suggested.indexOf(it) }?.takeIf { it >= 0 } ?: 0
+        val rightInit = defaults.music?.let { suggested.indexOf(it) }?.takeIf { it >= 0 }
+            ?: (if (suggested.size > 1) 1 else 0)
+
+        box.addView(activity.body("Left / primary"))
+        val left = spinner(leftInit); box.addView(left)
+        box.addView(activity.body("Right / secondary"))
+        val right = spinner(rightInit); box.addView(right)
+
+        val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+        fun chosen(): Pair<String, String> =
+            suggested[left.selectedItemPosition] to suggested[right.selectedItemPosition]
+
+        row.addView(Button(activity).apply {
+            text = "Apply"; isAllCaps = false
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener {
+                val (l, r) = chosen()
+                if (l == r) { activity.toast("Pick two different apps"); return@setOnClickListener }
+                applyPreset(activity, DefaultPresets.tiledFor(l, r, catalog.labelFor(l), catalog.labelFor(r)))
+            }
+        })
+        row.addView(Button(activity).apply {
+            text = "Save"; isAllCaps = false
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener {
+                val (l, r) = chosen()
+                if (l == r) { activity.toast("Pick two different apps"); return@setOnClickListener }
+                app.layoutRepository.saveCustomPreset(
+                    DefaultPresets.tiledFor(l, r, catalog.labelFor(l), catalog.labelFor(r))
+                )
+                activity.toast("Saved"); activity.refreshCurrentSection()
+            }
+        })
+        box.addView(row)
+        box.addView(activity.body("Uses the proportion set above. Save adds it to the list below."))
+        return box
+    }
+
     private fun presetRow(activity: MainActivity, preset: LayoutPreset): View {
         val box = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
@@ -345,7 +422,24 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
         }
         issues.forEach { box.addView(activity.body("  ! ${it.message}")) }
 
-        box.addView(activity.button("Apply \"${preset.title}\"") { applyPreset(activity, preset) })
+        val isCustom = app.layoutRepository.customPresets().any { it.id == preset.id }
+        val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+        row.addView(Button(activity).apply {
+            text = "Apply"; isAllCaps = false
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener { applyPreset(activity, preset) }
+        })
+        if (isCustom) {
+            row.addView(Button(activity).apply {
+                text = "Delete"; isAllCaps = false
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                setOnClickListener {
+                    app.layoutRepository.deleteCustomPreset(preset.id)
+                    activity.toast("Deleted"); activity.refreshCurrentSection()
+                }
+            })
+        }
+        box.addView(row)
         return box
     }
 
