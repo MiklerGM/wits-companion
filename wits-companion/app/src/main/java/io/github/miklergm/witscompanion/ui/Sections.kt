@@ -285,6 +285,35 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
             "All automatic triggers are refused while reverse is active or unknown. " +
                 "None of them ever switches the video source."
         ))
+
+        // ---------------------------------------------------------------- reset
+        c.addView(activity.heading("Reset"))
+        c.addView(activity.body(
+            "The companion never modifies the system: layouts are undone by returning the " +
+                "tiles to the vendor launcher, and a reboot always clears them. Uninstalling " +
+                "removes everything, including any elevated permission."
+        ))
+        c.addView(activity.button("Reset layout — tiles back, show launcher") {
+            app.layoutEngine.resetToVendorState()
+            activity.toast("Returned to the vendor launcher")
+        })
+        c.addView(activity.button("Clear all app settings…") {
+            android.app.AlertDialog.Builder(activity)
+                .setTitle("Clear all app settings?")
+                .setMessage(
+                    "Erases saved presets, the split ratio, side order and every " +
+                        "auto-restore toggle. Windows on screen are not touched. This " +
+                        "cannot be undone."
+                )
+                .setPositiveButton("Clear") { _, _ ->
+                    app.layoutRepository.clearAll()
+                    activity.toast("Settings cleared")
+                    activity.refreshCurrentSection()
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        })
+
         return activity.scroll(c)
     }
 

@@ -205,13 +205,28 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
 
         panel.addView(View(this), LinearLayout.LayoutParams(MATCH, 0, 1f))
 
-        panel.addView(Button(this).apply {
+        // Settings and a one-tap reset side by side. Reset is on the panel deliberately:
+        // if a layout looks wrong while driving, returning to the vendor launcher must be
+        // reachable without hunting through tabs.
+        val footer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        footer.addView(Button(this).apply {
             text = "Settings"
             isAllCaps = false
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
                 startActivity(android.content.Intent(this@DashboardActivity, MainActivity::class.java))
             }
         })
+        footer.addView(Button(this).apply {
+            text = "Reset"
+            isAllCaps = false
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener {
+                app.layoutEngine.resetToVendorState()
+                toast("Returned to the vendor launcher")
+            }
+        })
+        panel.addView(footer)
 
         return row
     }

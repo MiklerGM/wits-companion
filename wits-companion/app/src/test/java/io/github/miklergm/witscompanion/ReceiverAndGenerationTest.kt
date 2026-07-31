@@ -166,6 +166,22 @@ class ReceiverAndGenerationTest {
         }
     }
 
+    /**
+     * The reset must always end by bringing HOME to the front, even when there are no
+     * tiles to park — that final step is what guarantees a clean vendor screen if a tile
+     * refuses to move. It also cancels pending work first, so a queued apply cannot
+     * re-tile behind the reset.
+     */
+    @Test
+    fun `reset cancels pending work and always brings home to the front`() {
+        val src = engineSource()
+        val body = src.substringAfter("fun resetToVendorState()").substringBefore("\n    }\n")
+        assertTrue("reset must cancel pending work first", body.contains("cancelPending()"))
+        assertTrue("reset must bring the launcher forward", body.contains("goHome()"))
+        val goHome = src.substringAfter("private fun goHome()").substringBefore("\n    }")
+        assertTrue("goHome must use a standard HOME intent", goHome.contains("CATEGORY_HOME"))
+    }
+
     @Test
     fun `the anchor is the dashboard, not the tabbed configuration activity`() {
         val src = engineSource()

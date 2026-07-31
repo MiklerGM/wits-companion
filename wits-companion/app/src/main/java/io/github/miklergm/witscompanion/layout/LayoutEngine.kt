@@ -394,6 +394,67 @@ class LayoutEngine(
     /** Current generation; for tests and diagnostics. */
     fun currentGeneration(): Long = generation.get()
 
+    /**
+     * Puts the screen back to a clean vendor state — the one-tap "undo everything", no adb
+     * and no reboot.
+     *
+     * Every freeform tile we placed is sized back to the full display, then the home
+     * launcher is brought to the front so the vendor UI covers whatever is left. Works on
+     * both paths: privileged `resizeTask` fills the tile to the display, the hook re-issues
+     * it as FULLSCREEN. Either way `goHome()` guarantees a clean surface even if a tile
+     * refuses to move.
+     *
+     * Cancels pending work first, so a delayed apply cannot re-tile behind the reset.
+     */
+    fun resetToVendorState() {
+        cancelPending()
+        val myGeneration = generation.get()
+        val full = windowController.fullDisplayArea(appContext)
+
+        // Prefer the real freeform task list when privileged; fall back to what we last
+        // placed. The union covers tiles left over from an earlier session.
+        val liveTiles = windowController.rootTasks()
+            .filter { it.windowingMode == WitsWindowMode.FREEFORM }
+            .mapNotNull { it.packageName }
+        val tiles = (liveTiles + lastAppliedPackages).toSet()
+
+        tiles.filter { windowController.isLaunchable(it) }.forEachIndexed { index, pkg ->
+            handler.postDelayed({
+                if (myGeneration == generation.get()) {
+                    windowController.applyWindow(
+                        WitsWindowController.WindowRequest(pkg, full, WitsWindowMode.FULLSCREEN)
+                    )
+                }
+            }, index * PARK_DELAY_MS)
+        }
+
+        handler.postDelayed({
+            if (myGeneration == generation.get()) goHome()
+        }, tiles.size * PARK_DELAY_MS + ANCHOR_SETTLE_MS)
+
+        lastAppliedPackages = emptySet()
+        logger?.log("layout", "reset_to_vendor", extras = mapOf("tiles" to tiles.size))
+    }
+
+    /**
+     * Brings the home launcher to the front with a standard HOME intent — no need to know
+     * the vendor package. The vendor launcher comes up fullscreen over everything, which
+     * is the clean state the reset aims for.
+     */
+    private fun goHome() {
+        runCatching {
+            appContext.startActivity(
+                android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
+                    addCategory(android.content.Intent.CATEGORY_HOME)
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+            logger?.log("layout", "go_home", result = "sent")
+        }.onFailure {
+            logger?.log("layout", "go_home", result = "error:${it.javaClass.simpleName}")
+        }
+    }
+
     companion object {
         /** Gap between two CHANGE_WINDOW sends inside the geometry phase. */
         const val GEOMETRY_DELAY_MS = 250L

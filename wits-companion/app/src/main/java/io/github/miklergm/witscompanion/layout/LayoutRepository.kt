@@ -112,6 +112,15 @@ class LayoutRepository(context: Context) {
         get() = prefs.getString(KEY_NIGHT_BACKUP, null)
         set(v) = prefs.edit().putString(KEY_NIGHT_BACKUP, v).apply()
 
+    /**
+     * Hard reset: erases every stored preset, tweak and preference, returning the app to
+     * a first-install state. Layouts on screen are unaffected — use
+     * [LayoutEngine.resetToVendorState] for those — this only clears what we persisted.
+     */
+    fun clearAll() {
+        prefs.edit().clear().apply()
+    }
+
     fun exportPreferences(): JSONObject = JSONObject().apply {
         put(KEY_RESTORE_ON_RESUME, restoreOnResume)
         put(KEY_RESTORE_ON_ACC, restoreOnAcc)
