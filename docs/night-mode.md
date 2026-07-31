@@ -118,6 +118,36 @@ Constant declarations: `UtilSetting.java:264` `WITS_NIGHT_MODE = "wits_night_mod
 
 ---
 
+## 3.1 Runtime reality on this unit — the cause is different
+
+Captured before the OTA `[RUNTIME]`:
+
+| Key | Value |
+|---|---|
+| `Settings.System["wits_night_mode"]` | **not set** |
+| `Settings.System["UiSettings"]` | **not set** |
+| `Settings.System["UiName"]` | `BM_EVOID9_701GEN` |
+| `dumpsys uimode` | `mNightMode=2 (yes)`, **`mNightModeLocked=true`**, `mComputedNightMode=true` |
+
+Because `wits_night_mode` is unset, **none of the 0/1/2/3 branches above can be what
+holds this unit in night mode.** The likely cause is CenterService instead:
+
+```java
+// BacklightControl.java:57-61   [CODE]
+String uiSettings = Settings.System.getString(cr, "UiSettings");
+if (!"witstek8".equals(uiSettings)) {
+    ((UiModeManager) ctx.getSystemService(UiModeManager.class)).setNightMode(2);
+}
+```
+
+`UiSettings` is unset, so the guard passes and CenterService calls `setNightMode(2)`
+unconditionally at start — consistent with `mNightModeLocked=true`. `[HYP-strong]`
+
+**Implication for the companion:** writing `wits_night_mode = 3` should still take effect
+(the observer fires on any change regardless of `UiSettings`), but it is now a
+*counter-measure* against an unconditional force-night, not a mode selector. Verify that
+it survives an ACC cycle — CenterService may re-assert night mode on the next start.
+
 ## 4. Four different things — do not conflate
 
 | Concept | Owner | Mechanism | Companion touches it? |

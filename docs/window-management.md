@@ -99,30 +99,48 @@ through to `setLaunchWindowingMode`. `[CODE]`
 > `SplitScreenController` instead. They may behave unexpectedly here. Test before use.
 > `[HYP]`
 
-### Is freeform actually enabled?
+### Is freeform actually enabled? — **NO** (verified on the device)
 
 `config_freeformWindowManagement` is **`false`** in `framework-res.apk` `[CONF]`, and no
-RRO overrides it `[CONF]`. **But** the shipped `WindowManagerService` force-enables it
-at every boot:
+RRO overrides it `[CONF]`. The shipped `WindowManagerService` constructor does try to
+force-enable it at every boot:
 
 ```java
-// WindowManagerService.java:985-986   [CODE]
-Settings.Global.putInt(context.getContentResolver(), "force_resizable_activities", 1);
-Settings.Global.putInt(context.getContentResolver(), "enable_freeform_support", 1);
+// WindowManagerService.java:985-986, inside the ctor that starts at :744   [CODE]
+Settings.Global.putInt(cr, "force_resizable_activities", 1);
+Settings.Global.putInt(cr, "enable_freeform_support", 1);
 ```
 
-and `ActivityTaskManagerService.retrieveSettings` honours it:
+**But the live device says otherwise:**
+
+| Setting | Live value on v2.6.2 | Tag |
+|---|---|---|
+| `Settings.Global enable_freeform_support` | **`0`** | `[RUNTIME]` |
+| `Settings.Global force_resizable_activities` | **`0`** | `[RUNTIME]` |
+| feature `android.software.freeform_window_management` | **absent** | `[RUNTIME]` |
+| feature `android.software.picture_in_picture` | present | `[RUNTIME]` |
+
+The reason is AOSP's own Settings app: when **Developer options are disabled**, its
+controllers reset both globals to `0`.
 
 ```java
-// ActivityTaskManagerService.java:551   [CODE]
-boolean freeform = pm.hasSystemFeature("android.software.freeform_window_management")
-                || Settings.Global.getInt(cr, "enable_freeform_support", 0) != 0;
+// Settings.apk -> development/FreeformWindowsPreferenceController.java   [CODE]
+protected void onDeveloperOptionsSwitchDisabled() {
+    Settings.Global.putInt(cr, "enable_freeform_support", 0);
+}
 ```
 
-So on **v2.6.3** freeform should be active. On the currently installed **v2.6.2** this is
-**unverified** — `tools/capture-device-capabilities.sh` reports the live values. `[HYP]`
+`ResizableActivityPreferenceController` does the same for `force_resizable_activities`
+`[CODE]`. So the WMS write at boot is undone, and freeform stays off.
 
----
+> **The OTA does not change this.** `services.jar` and `framework.jar` are **byte-identical**
+> between v2.6.2 and v2.6.3 (`8dc44544…`, `9aaf0861…`) `[RUNTIME]`/`[CONF]`. Only
+> `SystemUI.apk` and `WitsLauncher.apk` differ. See `research/runtime-findings.md` §1.
+
+**To actually get freeform:** enable Developer options, switch on *Enable freeform
+windows*, reboot. That is a user setting, fully reversible, and not a firmware change.
+Until then, `windowMode=5` requests are expected to be ignored and only `windowMode=1`
+(fullscreen) behaviour is available. `[HYP]` — confirm after enabling.
 
 ## 4. Hard limits (all `[CODE]`)
 

@@ -151,9 +151,25 @@ writes `MCU_VOLUME` (`w19_mcu:040400`) — the **W19** key, not the M701 one. Wh
 M701 message path populates `wits_mcu:1` from the MCU in the same way is **`[HYP]`** and
 is exactly what the Signal Explorer must settle.
 
-**Therefore: is the MCU volume readable in real time on this device?**
-`[HYP]` — probable, but must be confirmed by watching `wits_mcu:1` (and
-`w19_mcu:040400`) with `SettingsProbe` while turning the knob.
+**Confirmed on the device** `[RUNTIME]`:
+
+| Observation | Value |
+|---|---|
+| `Settings.System["wits_mcu:1"]` | `7708` = `0x1E1C` -> low byte **28** of 40 |
+| `Settings.System["wits_mcu_1"]` (underscore variant) | `7702` -> 22 (stale/default) |
+| `Settings.System["wits_mcu:2"]` (call volume) | `35` |
+| `STREAM_MUSIC` | Min 0, **Max 15, Current 15** |
+| `AS.AudioService` log | `setStreamVolume(stream=3, index=15, dev=null, calling=com.wits.pms)` |
+
+So: an **absolute MCU volume is readable by an ordinary app**, and **Android media volume
+is pinned at maximum by CenterService** — the one caller the patched `AudioService`
+accepts. Android's stream is a fixed gain stage; real loudness lives downstream.
+
+Note the **two key spellings**: `wits_mcu:1` (colon, live) and `wits_mcu_1` (underscore,
+stale). Watch both.
+
+Whether the value tracks the NBT knob in real time is still `[HYP]` — needs a marker
+session.
 
 ---
 
