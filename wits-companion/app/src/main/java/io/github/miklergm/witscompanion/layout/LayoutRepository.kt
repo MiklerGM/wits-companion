@@ -103,6 +103,11 @@ class LayoutRepository(context: Context) {
         get() = prefs.getBoolean(KEY_RESTORE_ON_BOOT, false)
         set(v) = prefs.edit().putBoolean(KEY_RESTORE_ON_BOOT, v).apply()
 
+    /** Bring the Mode B panel to the front on boot and ACC-on. The "soft launcher". */
+    var autostartPanel: Boolean
+        get() = prefs.getBoolean(KEY_AUTOSTART_PANEL, false)
+        set(v) = prefs.edit().putBoolean(KEY_AUTOSTART_PANEL, v).apply()
+
     var simulationEnabled: Boolean
         get() = prefs.getBoolean(KEY_SIMULATION, false)
         set(v) = prefs.edit().putBoolean(KEY_SIMULATION, v).apply()
@@ -140,6 +145,7 @@ class LayoutRepository(context: Context) {
         const val KEY_RESTORE_ON_SOURCE = "restore_on_android_source"
         const val KEY_RESTORE_AFTER_REVERSE = "restore_after_reverse"
         const val KEY_RESTORE_ON_BOOT = "restore_on_boot"
+        const val KEY_AUTOSTART_PANEL = "autostart_panel"
         const val KEY_SIMULATION = "simulation_enabled"
         const val KEY_NIGHT_BACKUP = "night_mode_backup"
         const val KEY_SPLIT = "geometry_split"

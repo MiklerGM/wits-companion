@@ -167,6 +167,33 @@ class ReceiverAndGenerationTest {
     }
 
     /**
+     * The route-continuation guarantee: an automatic restore must not relaunch an app
+     * that is still running, because a MAIN intent can reset it (an active Maps route, an
+     * open menu). The initial launch phase and the retry pass must both honour it.
+     */
+    @Test
+    fun `a preserved-live package is repositioned but never relaunched`() {
+        val src = engineSource()
+        // The guarantee lives in the launch phase and the retry pass, keyed on preserveLive.
+        assertTrue(
+            "the launch phase must skip preserved-live packages",
+            src.contains("window.packageName in preserveLive"),
+        )
+        // reassert() is the route-safe entry point and must compute the live set.
+        val reassert = src.substringAfter("fun reassert(").substringBefore("\n    }")
+        assertTrue("reassert must feed livePackages into preserveLive", reassert.contains("livePackages()"))
+    }
+
+    /** Auto-starting our own panel is safe; doing it over the reverse camera is not. */
+    @Test
+    fun `panel autostart is refused while reversing`() {
+        val src = sourceOf("layout/LayoutRecoveryCoordinator.kt")
+        val body = src.substringAfter("fun startPanelIfEnabled(").substringBefore("\n    }")
+        assertTrue("gated on the opt-in toggle", body.contains("autostartPanel"))
+        assertTrue("never over the reverse camera", body.contains("reverseActive"))
+    }
+
+    /**
      * The reset must always end by bringing HOME to the front, even when there are no
      * tiles to park — that final step is what guarantees a clean vendor screen if a tile
      * refuses to move. It also cancels pending work first, so a queued apply cannot

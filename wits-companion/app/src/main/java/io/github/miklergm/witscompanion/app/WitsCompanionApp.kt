@@ -89,9 +89,11 @@ class WitsCompanionApp : Application() {
         nightModeController = WitsNightModeController(this, rateLimiter, eventLogger)
 
         recoveryCoordinator = LayoutRecoveryCoordinator(
+            appContext = this,
             repository = layoutRepository,
             engine = layoutEngine,
             reverseGuard = reverseGuard,
+            propertyReader = propertyReader,
             logger = eventLogger,
         )
 

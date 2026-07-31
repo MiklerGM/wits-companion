@@ -1,10 +1,13 @@
 package io.github.miklergm.witscompanion.layout
 
+import android.content.Context
 import io.github.miklergm.witscompanion.carstate.CarState
 import io.github.miklergm.witscompanion.carstate.CarStateRepository
+import io.github.miklergm.witscompanion.carstate.PropertyReader
 import io.github.miklergm.witscompanion.logging.EventLogger
 import io.github.miklergm.witscompanion.safety.ReverseGuard
 import io.github.miklergm.witscompanion.safety.Trigger
+import io.github.miklergm.witscompanion.wits.WitsProperties
 
 /**
  * Decides *when* to re-apply the last layout.
@@ -17,9 +20,11 @@ import io.github.miklergm.witscompanion.safety.Trigger
  *    produce repeated applications.
  */
 class LayoutRecoveryCoordinator(
+    private val appContext: Context,
     private val repository: LayoutRepository,
     private val engine: LayoutEngine,
     private val reverseGuard: ReverseGuard,
+    private val propertyReader: PropertyReader? = null,
     private val logger: EventLogger? = null,
     private val nowMs: () -> Long = { android.os.SystemClock.elapsedRealtime() },
 ) : CarStateRepository.Observer {
@@ -48,8 +53,9 @@ class LayoutRecoveryCoordinator(
         val reverse = state.reverseActive
 
         // ACC OFF -> ON
-        if (repository.restoreOnAcc && lastAcc == false && acc == true) {
-            attempt("acc_on", state)
+        if (lastAcc == false && acc == true) {
+            if (repository.restoreOnAcc) attempt("acc_on", state)
+            else startPanelIfEnabled("acc_on", state)
         }
 
         // Source became Android
@@ -75,8 +81,8 @@ class LayoutRecoveryCoordinator(
 
     /** Called from the boot receiver, after a deliberate delay. */
     fun onBootCompleted(state: CarState) {
-        if (!repository.restoreOnBoot) return
-        attempt("boot_completed", state)
+        if (repository.restoreOnBoot) attempt("boot_completed", state)
+        else startPanelIfEnabled("boot_completed", state)
     }
 
     /** Explicit user action; bypasses the debounce but not the safety guards. */
@@ -96,20 +102,65 @@ class LayoutRecoveryCoordinator(
             )
             return
         }
-        val preset = repository.lastAppliedPreset() ?: return
+        val preset = repository.lastAppliedPreset()
+        if (preset == null) {
+            // Nothing to restore, but the panel autostart is independent of that.
+            startPanelIfEnabled(reason, state)
+            return
+        }
 
-        val result = engine.apply(preset, state, Trigger.AUTOMATIC)
+        // Route-safe: reassert repositions live apps instead of relaunching them, so an
+        // active Maps route survives a deep-sleep wake untouched. A real cold boot has no
+        // live tasks, so reassert degenerates to a normal apply.
+        val result = engine.reassert(preset, state)
         lastApplyAt = nowMs()
         logger?.log(
             category = "layout", action = "auto_restore",
-            extras = mapOf("reason" to reason, "preset" to preset.id),
+            extras = mapOf(
+                "reason" to reason,
+                "preset" to preset.id,
+                "memoryBoot" to (memoryBoot()?.toString() ?: "unknown"),
+                "live" to engine.livePackages().size,
+            ),
             result = when (result) {
                 is LayoutEngine.Result.Applied -> "applied"
                 is LayoutEngine.Result.Refused -> "refused:${result.reason}"
                 is LayoutEngine.Result.Invalid -> "invalid"
             },
         )
+        startPanelIfEnabled(reason, state)
     }
+
+    /**
+     * Brings the Mode B panel to the front, if the user opted in. Launching our own
+     * activity is always safe — it disturbs no foreign app — so this is gated only by the
+     * toggle and by reverse (never pull the panel up over the reverse camera).
+     */
+    fun startPanelIfEnabled(reason: String, state: CarState) {
+        if (!repository.autostartPanel) return
+        if (state.reverseActive != false) {
+            logger?.log("layout", "autostart_panel", result = "skipped:reverse", extras = mapOf("reason" to reason))
+            return
+        }
+        runCatching {
+            appContext.startActivity(
+                android.content.Intent(
+                    appContext,
+                    Class.forName("io.github.miklergm.witscompanion.ui.DashboardActivity"),
+                ).addFlags(
+                    android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                        android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                )
+            )
+            logger?.log("layout", "autostart_panel", result = "started", extras = mapOf("reason" to reason))
+        }.onFailure {
+            logger?.log("layout", "autostart_panel", result = "error:${it.javaClass.simpleName}")
+        }
+    }
+
+    /** 1 = woke from deep sleep (apps alive), 0 = real boot, null = unknown/raced. */
+    private fun memoryBoot(): Int? =
+        propertyReader?.get(WitsProperties.MEMORY_BOOT)?.trim()?.toIntOrNull()
 
     private companion object {
         const val DEBOUNCE_MS = 3_000L

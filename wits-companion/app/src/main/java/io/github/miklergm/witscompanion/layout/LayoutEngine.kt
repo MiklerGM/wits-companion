@@ -65,11 +65,38 @@ class LayoutEngine(
      * @param trigger USER for a button press, AUTOMATIC for a restore
      * @param retries how many bounded retries to schedule (0..2)
      */
+    /**
+     * Packages that already have a live task, so a restore can tell "reposition" from
+     * "launch". Only meaningful on the privileged path; empty otherwise, which makes the
+     * caller fall back to the normal apply — no worse than before.
+     */
+    fun livePackages(): Set<String> =
+        windowController.rootTasks().mapNotNull { it.packageName }.toSet()
+
+    /**
+     * Route-safe restore: re-assert [preset] **without disturbing apps that are still
+     * running**.
+     *
+     * This is the "continue where you left off" path. A window whose task is already alive
+     * is only repositioned — on the privileged path `resizeTask` moves it with no MAIN
+     * intent, so Google Maps keeps its active route and any open menu exactly as they were.
+     * Only a window with no live task is launched, and then there is no prior route to
+     * preserve anyway.
+     *
+     * Used for automatic restores (a deep-sleep wake, ACC on). An explicit user Apply still
+     * goes through [apply], which may relaunch — the user asked for a fresh layout.
+     */
+    fun reassert(preset: LayoutPreset, state: CarState): Result {
+        val live = livePackages()
+        return apply(preset, state, Trigger.AUTOMATIC, preserveLive = live)
+    }
+
     fun apply(
         preset: LayoutPreset,
         state: CarState,
         trigger: Trigger,
         retries: Int = DEFAULT_RETRIES,
+        preserveLive: Set<String> = emptySet(),
     ): Result {
         // 1. Validate before touching anything.
         val issues = LayoutValidator.validate(preset)
@@ -166,6 +193,13 @@ class LayoutEngine(
             )
 
             // Phase 2 — make every tile visible, after all geometry has landed.
+            // A package that was already live is skipped here: the geometry phase has
+            // repositioned it in place, and launching it would send a MAIN intent that
+            // could reset the app (an active Maps route, an open menu). See reassert().
+            if (window.packageName in preserveLive) {
+                logger?.log("layout", "preserve_live", window.packageName, result = "no_relaunch")
+                return@forEachIndexed
+            }
             handler.postDelayed(
                 {
                     if (stillValid(myGeneration, "make_visible", window.packageName)) {
@@ -189,7 +223,7 @@ class LayoutEngine(
             result = "sent", confidence = "HYP",
         )
 
-        scheduleRetries(preset, area, ordered, retries.coerceIn(0, MAX_RETRIES), myGeneration)
+        scheduleRetries(preset, area, ordered, retries.coerceIn(0, MAX_RETRIES), myGeneration, preserveLive)
 
         return Result.Applied(ordered.size, warnings)
     }
@@ -212,6 +246,7 @@ class LayoutEngine(
         ordered: List<LayoutWindow>,
         retries: Int,
         myGeneration: Long,
+        preserveLive: Set<String>,
     ) {
         pendingRetries = retries
         if (retries <= 0 || ordered.isEmpty()) return
@@ -221,6 +256,10 @@ class LayoutEngine(
         RETRY_DELAYS_MS.take(retries).forEachIndexed { attempt, gap ->
             val passStart = passDuration(n) + gap
             ordered.forEachIndexed { index, window ->
+                // A preserved-live window is never relaunched, not even on a retry: it was
+                // already there, so there is nothing to repair and a launch would only risk
+                // resetting it.
+                if (window.packageName in preserveLive) return@forEachIndexed
                 val pixels = window.bounds.toPixels(area)
                 // Launches only — deliberately no geometry phase.
                 //

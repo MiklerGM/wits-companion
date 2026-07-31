@@ -41,6 +41,14 @@ object WitsProperties {
     const val MCU_VERSION = "wits.mcu.version"
     const val MCU_CAN_VERSION = "wits.mcu.can.version"
 
+    /**
+     * Set by the MCU/CenterService when the unit wakes from deep sleep with apps still
+     * alive, cleared on a real cold boot. `[CODE]` `McuManager` reads
+     * `persist.wits.memory.boot`, acts on it, then resets it to 0 — so read it early and
+     * treat a race as "unknown", falling back to the live-task check.
+     */
+    const val MEMORY_BOOT = "persist.wits.memory.boot"
+
     const val PRODUCT_ID = "ro.wits.product.id"
     const val MODEL_ID = "ro.wits.model"
     const val BUILD_DISPLAY_ID = "ro.build.display.id"
