@@ -20,6 +20,7 @@
 #   --pkg PKG            with 'custom': package name
 #   --bounds l,t,r,b     with 'custom': normalized 0..1 bounds for the last --pkg
 #   --delay MS           delay between windows (default 350)
+#   --inset-top PX       top inset to reserve (default: auto-detect the status bar)
 #   --no-check           skip package presence check
 #
 # This script NEVER switches the video source and NEVER sends MCU commands.
@@ -32,6 +33,7 @@ EXECUTE=0
 MODE=5
 DELAY_MS=350
 CHECK=1
+INSET_TOP=""
 CUSTOM_PKGS=()
 CUSTOM_BOUNDS=()
 
@@ -44,6 +46,7 @@ while [ $# -gt 0 ]; do
     --execute)  EXECUTE=1; shift ;;
     --mode)     MODE="$2"; shift 2 ;;
     --delay)    DELAY_MS="$2"; shift 2 ;;
+    --inset-top) INSET_TOP="$2"; shift 2 ;;
     --no-check) CHECK=0; shift ;;
     --pkg)      CUSTOM_PKGS+=("$2"); shift 2 ;;
     --bounds)   CUSTOM_BOUNDS+=("$2"); shift 2 ;;
@@ -59,9 +62,34 @@ SIZE="$(ash wm size | tr -d '\r' | grep -E 'Override|Physical' | tail -1 | sed '
 W="${SIZE%x*}"; H="${SIZE#*x}"
 [ -n "$W" ] && [ -n "$H" ] || die "could not read display size (wm size)"
 
+# The vendor hook passes bounds straight to setLaunchBounds. The system raises `top`
+# to below the status bar but preserves the requested height, so a rect asked for at
+# y=0..H ends up at y=inset..H+inset and hangs off the bottom of the screen.
+# Reserve the inset up front instead.
+if [ -z "$INSET_TOP" ]; then
+  # An existing freeform task shows the inset the system actually applies: the
+  # winConfig line carries both mAppBounds and mWindowingMode=freeform.
+  INSET_TOP="$(ash dumpsys activity activities 2>/dev/null | tr -d '\r' \
+    | grep 'mWindowingMode=freeform' \
+    | grep -oE 'mAppBounds=Rect\([0-9]+, [0-9]+' | head -1 \
+    | grep -oE '[0-9]+$')"
+  if [ -n "$INSET_TOP" ]; then
+    INSET_SRC="detected from an existing freeform task"
+  else
+    INSET_TOP=0
+    INSET_SRC="NOT DETECTED (no freeform task yet) - pass --inset-top if windows hang off the bottom"
+  fi
+else
+  INSET_SRC="given on the command line"
+fi
+USABLE_TOP="$INSET_TOP"
+USABLE_H=$(( H - INSET_TOP ))
+
 hdr "DISPLAY"
 echo "  wm size    : ${W}x${H}"
 echo "  wm density : $(ash wm density | tr -d '\r' | tail -1 | sed 's/.*: //')"
+echo "  top inset  : ${INSET_TOP}px (${INSET_SRC})"
+echo "  usable     : ${W}x${USABLE_H} at y=${USABLE_TOP}"
 
 hdr "WINDOWING CAPABILITY"
 FF="$(ash settings get global enable_freeform_support | tr -d '\r')"
@@ -140,9 +168,9 @@ CMDS=()
 for w in "${WINDOWS[@]}"; do
   read -r pkg l t r b <<< "$w"
   PL=$(awk -v v="$l" -v s="$W" 'BEGIN{printf "%d", v*s}')
-  PT=$(awk -v v="$t" -v s="$H" 'BEGIN{printf "%d", v*s}')
+  PT=$(awk -v v="$t" -v s="$USABLE_H" -v o="$USABLE_TOP" 'BEGIN{printf "%d", o + v*s}')
   PR=$(awk -v v="$r" -v s="$W" 'BEGIN{printf "%d", v*s}')
-  PB=$(awk -v v="$b" -v s="$H" 'BEGIN{printf "%d", v*s}')
+  PB=$(awk -v v="$b" -v s="$USABLE_H" -v o="$USABLE_TOP" 'BEGIN{printf "%d", o + v*s}')
   cmd="am broadcast -a wits.intent.action.CHANGE_WINDOW --es packageName $pkg --ei windowMode $MODE --ei left $PL --ei top $PT --ei right $PR --ei bottom $PB"
   CMDS+=("$cmd")
   printf '  %-42s %s,%s,%s,%s\n' "$pkg" "$PL" "$PT" "$PR" "$PB"

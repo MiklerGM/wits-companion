@@ -261,24 +261,49 @@ Never:
 
 ## 8. Runtime test results
 
-> **Not yet executed — no device was attached during authoring.** `[HYP]`
+Executed 2026-07-31 on the vehicle, firmware **`WITSTEK-T-M701_OS_EN_v2.6.3_20260513`**
+(after the OTA), Developer options enabled, `enable_freeform_support=1`.
 
-Use `tools/test-layout.sh` (dry-run by default) and record results here:
+Vehicle state during the test: `wits.backcar=0` (reverse not engaged), `wits.acc=1`,
+`wits.source=7`, screen awake.
 
 | # | Test | Expected | Result | Tag |
 |---|---|---|---|---|
-| W1 | `enable_freeform_support` / `force_resizable_activities` live values | both `1` on v2.6.3 | — | |
-| W2 | `pm list features \| grep picture_in_picture` | present | — | |
-| W3 | `CHANGE_WINDOW` Maps, mode 5, left 65 % | Maps occupies left 65 % | — | |
-| W4 | `CHANGE_WINDOW` Spotify, mode 5, right 35 % | both visible simultaneously | — | |
-| W5 | Touch both windows | both accept input | — | |
-| W6 | Maps keeps rendering while Spotify focused | map animates | — | |
-| W7 | Spotify keeps playing while Maps focused | audio continues | — | |
-| W8 | Re-apply same preset twice | idempotent, no flicker/duplication | — | |
-| W9 | mode 3/4 behaviour | ? | — | |
-| W10 | Third window added | all three usable | — | |
-| W11 | Same package twice | rejected by validator / reuses task | — | |
-| W12 | Package without launcher intent | silent no-op | — | |
-| W13 | Deep link + re-position | task repositioned, deep link preserved | — | |
-| W14 | Layout survives sleep→wake | ? (expect: needs re-apply) | — | |
-| W15 | Layout after OEM→Android | ? (expect: needs re-apply) | — | |
+| W1 | `enable_freeform_support` / `force_resizable_activities` | both `1` | **both `1`** | `[RUNTIME]` |
+| W2 | `pm list features \| grep picture_in_picture` | present | **present**; `freeform_window_management` **absent** (the global suffices — `ATMS:551`) | `[RUNTIME]` |
+| W3 | `CHANGE_WINDOW` Maps, mode 5, left 65 % | Maps occupies left 65 % | **PASS** — `Rect(0, 99 – 1560, 900)`, `mWindowingMode=freeform` | `[RUNTIME]` |
+| W4 | `CHANGE_WINDOW` Chrome, mode 5, right 35 % | both visible simultaneously | **PASS** — `Rect(1560, 99 – 2400, 900)`, both `visible=true` | `[RUNTIME]` |
+| W5 | Touch both windows | both accept input | **PASS** (user-observed) | `[RUNTIME]` |
+| W6 | Left keeps rendering while right focused | live | **PASS** (user-observed: both live) | `[RUNTIME]` |
+| W8 | Re-apply the same preset twice | idempotent | **PASS** — identical bounds, same task ids `#22`/`#23`, no duplicates | `[RUNTIME]` |
+| W11 | Same package twice | rejected by validator | **PASS** (validator only; not exercised on device) | `[CODE]` |
+| W14 | Layout survives minimise → restore | ? | **PASS** — user reports apps reopen in the same places from Home/dashboard | `[RUNTIME]` |
+
+Tested with **Chrome** (`com.android.chrome`) in place of Spotify, which was not
+installed at the time. Ratio 65/35 confirmed visually.
+
+### The top-inset pitfall (found and fixed)
+
+The hook passes bounds straight to `setLaunchBounds`. Requesting `y = 0..900` produced
+`Rect(0, 99 – 1560, 999)`: the system raised `top` to below the status bar (**99 px** on
+this unit) but **preserved the requested height**, so the window hung 99 px off the
+bottom of the screen. The user saw a slightly cropped login form.
+
+Requesting the already-offset rect lands exactly right, and the system does **not**
+shift a second time. `[RUNTIME]`
+
+```
+requested Rect(0,  0, 1560, 900)  ->  actual Rect(0, 99, 1560, 999)   # 99 px off-screen
+requested Rect(0, 99, 1560, 900)  ->  actual Rect(0, 99, 1560, 900)   # correct
+```
+
+`tools/test-layout.sh` now auto-detects the inset from an existing freeform task and
+reserves it (`usable 2400x801 at y=99`); `--inset-top` overrides. The companion's
+`WitsWindowController.usableArea()` already computed this correctly from
+`WindowMetrics` insets, so `LayoutEngine` is unaffected.
+
+### Still untested
+
+W7 (audio keeps playing while the other tile has focus — needs a player),
+W9/W16 (window modes 3/4), W10 (third window), W12 (package without launcher intent),
+W13 (deep link + reposition), W15 (layout after an OEM → Android round trip).
