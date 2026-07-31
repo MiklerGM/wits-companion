@@ -15,6 +15,7 @@ import java.util.Locale
 object LogExportHelper {
 
     const val REQUEST_CODE = 4711
+    const val REQUEST_CODE_TEXT = 4712
 
     fun export(activity: MainActivity, app: WitsCompanionApp) {
         val name = "wits-companion-" +
@@ -27,6 +28,27 @@ object LogExportHelper {
         runCatching { activity.startActivityForResult(intent, REQUEST_CODE) }
             .onFailure { activity.toast("No file picker available") }
     }
+
+    private var pendingText: String? = null
+
+    /** Exports arbitrary text (e.g. a Signal Explorer session bundle) via SAF. */
+    fun exportText(activity: MainActivity, text: String, fileName: String) {
+        pendingText = text
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TITLE, fileName)
+        }
+        runCatching { activity.startActivityForResult(intent, REQUEST_CODE_TEXT) }
+            .onFailure { activity.toast("No file picker available") }
+    }
+
+    fun writeText(activity: Activity, uri: Uri): Boolean = runCatching {
+        val body = pendingText ?: return false
+        activity.contentResolver.openOutputStream(uri)?.use { it.write(body.toByteArray()) }
+        pendingText = null
+        true
+    }.getOrDefault(false)
 
     /** Called from MainActivity.onActivityResult. */
     fun write(activity: Activity, app: WitsCompanionApp, uri: Uri): Boolean = runCatching {

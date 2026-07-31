@@ -42,6 +42,7 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
         sections += LayoutsSection(app)
         sections += CarStateSection(app)
         sections += SettingsSection(app)
+        sections += SignalExplorerSection(app)
         sections += DebugSection(app)
 
         sections.forEach { s ->
@@ -99,6 +100,11 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == LogExportHelper.REQUEST_CODE_TEXT && resultCode == RESULT_OK) {
+            val uri = data?.data
+            toast(if (uri != null && LogExportHelper.writeText(this, uri)) "Exported" else "Export failed")
+            return
+        }
         if (requestCode == LogExportHelper.REQUEST_CODE && resultCode == RESULT_OK) {
             val uri = data?.data
             if (uri != null && LogExportHelper.write(this, app, uri)) {
@@ -107,6 +113,12 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
                 toast("Export failed")
             }
         }
+    }
+
+    /** Observation only: never consumes the event. */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        app.signalExplorer.dispatchKeyEvent(event)
+        return super.dispatchKeyEvent(event)
     }
 
     fun toast(message: String) {

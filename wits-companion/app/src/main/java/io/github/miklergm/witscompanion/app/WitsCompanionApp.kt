@@ -11,6 +11,7 @@ import io.github.miklergm.witscompanion.media.MediaSessionRepository
 import io.github.miklergm.witscompanion.safety.ActionRateLimiter
 import io.github.miklergm.witscompanion.safety.ReverseGuard
 import io.github.miklergm.witscompanion.safety.SourceGuard
+import io.github.miklergm.witscompanion.signalexplorer.SignalExplorer
 import io.github.miklergm.witscompanion.wits.WitsNightModeController
 import io.github.miklergm.witscompanion.wits.WitsSourceController
 import io.github.miklergm.witscompanion.wits.WitsWindowController
@@ -44,6 +45,8 @@ class WitsCompanionApp : Application() {
     lateinit var reverseGuard: ReverseGuard
         private set
     lateinit var rateLimiter: ActionRateLimiter
+        private set
+    lateinit var signalExplorer: SignalExplorer
         private set
 
     override fun onCreate() {
@@ -83,6 +86,13 @@ class WitsCompanionApp : Application() {
         )
 
         mediaRepository = MediaSessionRepository(this)
+
+        signalExplorer = SignalExplorer(
+            appContext = this,
+            carStateRepository = carStateRepository,
+            propertyReader = propertyReader,
+            logger = eventLogger,
+        )
 
         carStateRepository.addObserver(recoveryCoordinator)
         carStateRepository.start()
