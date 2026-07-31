@@ -121,6 +121,11 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
         return super.dispatchKeyEvent(event)
     }
 
+    /** Re-inflates the visible section, e.g. after a preset was tweaked. */
+    fun refreshCurrentSection() {
+        current?.let { show(it) }
+    }
+
     fun toast(message: String) {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }

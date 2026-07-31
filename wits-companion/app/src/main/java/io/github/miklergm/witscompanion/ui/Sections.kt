@@ -236,7 +236,13 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
         val issues = LayoutValidator.validate(preset)
         val missing = preset.windows.filterNot { app.windowController.isLaunchable(it.packageName) }
 
-        box.addView(activity.body(preset.title + if (preset.experimental) "  [experimental]" else ""))
+        val kindTag = when (preset.kind) {
+            io.github.miklergm.witscompanion.layout.PresetKind.ANCHORED -> "  [anchor]"
+            else -> ""
+        }
+        box.addView(activity.body(
+            preset.title + kindTag + if (preset.experimental) "  [experimental]" else ""
+        ))
         box.addView(activity.body(
             preset.windows.joinToString("\n") { w ->
                 "  ${w.packageName}  ${fmt(w.bounds.left)},${fmt(w.bounds.top)}–${fmt(w.bounds.right)},${fmt(w.bounds.bottom)}"
@@ -249,6 +255,34 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
             })
         }
         issues.forEach { box.addView(activity.body("  ! ${it.message}")) }
+
+        // Layout customisation: which side each app sits on, and how wide the split is.
+        if (preset.windows.size == 2 && preset.splitFraction() != null) {
+            val repo = app.layoutRepository
+            val ctl = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+
+            ctl.addView(Button(activity).apply {
+                text = "⇄ swap sides"; textSize = 12f; isAllCaps = false
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.4f)
+                setOnClickListener {
+                    repo.setSwapped(preset.id, !repo.isSwapped(preset.id))
+                    activity.toast(if (repo.isSwapped(preset.id)) "Sides swapped" else "Original order")
+                    activity.refreshCurrentSection()
+                }
+            })
+            listOf(0.50f, 0.60f, 0.65f, 0.70f).forEach { f ->
+                ctl.addView(Button(activity).apply {
+                    text = "${(f * 100).toInt()}"; textSize = 12f; isAllCaps = false
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    setOnClickListener {
+                        repo.setSplit(preset.id, f)
+                        activity.toast("Split ${(f * 100).toInt()}/${100 - (f * 100).toInt()}")
+                        activity.refreshCurrentSection()
+                    }
+                })
+            }
+            box.addView(ctl)
+        }
 
         box.addView(activity.button("Apply \"${preset.title}\"") {
             val result = app.layoutEngine.apply(
@@ -314,9 +348,8 @@ class CarStateSection(private val app: WitsCompanionApp) : MainActivity.Section 
             row("steering", state.steeringAngleRaw)
             row("top package", state.topPackage)
             appendLine()
-            appendLine("doors      " + state.doors.joinToString(" ") { it.display() })
-            appendLine("radar      " + state.radar.joinToString(" ") { it.display() })
-            appendLine("turn       " + state.turnLights.joinToString(" ") { it.display() })
+            appendLine("doors raw  " + state.doorsRaw.display() + "   (bitmask, undecoded)")
+            appendLine("radar raw  " + state.radarRaw.display() + "   (packed, undecoded)")
             appendLine()
             appendLine("mcu        ${state.mcuVersion.display()}")
             appendLine("product id ${state.productId.display()}")

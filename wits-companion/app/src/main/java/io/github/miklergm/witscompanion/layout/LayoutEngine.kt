@@ -9,7 +9,9 @@ import io.github.miklergm.witscompanion.safety.ActionRateLimiter
 import io.github.miklergm.witscompanion.safety.GuardVerdict
 import io.github.miklergm.witscompanion.safety.ReverseGuard
 import io.github.miklergm.witscompanion.safety.Trigger
+import io.github.miklergm.witscompanion.wits.WitsPackages
 import io.github.miklergm.witscompanion.wits.WitsWindowController
+import io.github.miklergm.witscompanion.wits.WitsWindowMode
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -54,6 +56,10 @@ class LayoutEngine(
     /** Latest car state, so delayed sends can re-check safety at fire time. */
     @Volatile
     private var latestState: CarState = CarState()
+
+    /** Packages placed by the last successful apply, so the next one can park them. */
+    @Volatile
+    private var lastAppliedPackages: Set<String> = emptySet()
 
     /**
      * @param trigger USER for a button press, AUTOMATIC for a restore
@@ -109,6 +115,26 @@ class LayoutEngine(
         latestState = state
         handler.removeCallbacksAndMessages(RETRY_TOKEN)
 
+        // Windows left over from the previous layout would keep floating above the new
+        // one, because a freeform task always draws over fullscreen tasks and the vendor
+        // hook has no "close window" verb. Park them as plain fullscreen tasks instead:
+        // they drop behind whatever comes next while their process keeps running, so
+        // audio playback is unaffected.
+        val parked = parkStaleWindows(keep = ordered.map { it.packageName }.toSet())
+
+        // An anchored preset needs the companion in front before the tile is placed, so
+        // the tile lands on top of it rather than behind.
+        var offset = 0L
+        if (preset.kind == PresetKind.ANCHORED) {
+            handler.postDelayed(
+                { if (stillValid(myGeneration, "anchor", WitsPackages.SELF)) bringAnchorToFront() },
+                parked * PARK_DELAY_MS,
+            )
+            offset = parked * PARK_DELAY_MS + ANCHOR_SETTLE_MS
+        } else if (parked > 0) {
+            offset = parked * PARK_DELAY_MS
+        }
+
         ordered.forEachIndexed { index, window ->
             if (!windowController.isLaunchable(window.packageName)) {
                 warnings += "${window.packageName} is not installed or has no launcher activity"
@@ -134,10 +160,11 @@ class LayoutEngine(
                         )
                     }
                 },
-                index * INTER_WINDOW_DELAY_MS,
+                offset + index * INTER_WINDOW_DELAY_MS,
             )
         }
 
+        lastAppliedPackages = ordered.map { it.packageName }.toSet()
         rateLimiter.record(ActionRateLimiter.KEY_LAYOUT)
         logger?.log(
             category = "layout", action = "apply",
@@ -224,6 +251,57 @@ class LayoutEngine(
     }
 
     /**
+     * Parks freeform windows that are not part of the incoming layout.
+     *
+     * There is no way to close a window through the vendor hook, and killing the process
+     * would stop playback. Re-issuing `CHANGE_WINDOW` with
+     * [WitsWindowMode.FULLSCREEN] turns the task back into an ordinary fullscreen task,
+     * which is then occluded by whatever is placed on top.
+     *
+     * @return how many packages were parked, so the caller can offset what follows
+     */
+    private fun parkStaleWindows(keep: Set<String>): Int {
+        val stale = lastAppliedPackages - keep
+        if (stale.isEmpty()) return 0
+
+        val full = windowController.fullDisplayArea(appContext)
+        stale.forEachIndexed { index, pkg ->
+            if (!windowController.isLaunchable(pkg)) return@forEachIndexed
+            handler.postDelayed({
+                windowController.applyWindow(
+                    WitsWindowController.WindowRequest(pkg, full, WitsWindowMode.FULLSCREEN)
+                )
+            }, index * PARK_DELAY_MS)
+        }
+        logger?.log(
+            "layout", "park_stale",
+            extras = mapOf("packages" to stale.joinToString(","), "count" to stale.size),
+        )
+        return stale.size
+    }
+
+    /**
+     * Brings the companion's own window to the front as the fullscreen anchor.
+     * Uses a plain activity start — no vendor hook needed for our own package.
+     */
+    private fun bringAnchorToFront() {
+        runCatching {
+            val intent = appContext.packageManager
+                .getLaunchIntentForPackage(appContext.packageName)
+                ?.addFlags(
+                    android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                        android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                )
+            if (intent != null) {
+                appContext.startActivity(intent)
+                logger?.log("layout", "anchor_to_front", result = "sent")
+            }
+        }.onFailure {
+            logger?.log("layout", "anchor_to_front", result = "error:${it.javaClass.simpleName}")
+        }
+    }
+
+    /**
      * Gate every delayed send: the generation must still be current **and** the vehicle
      * must still be safe *at fire time*, not merely when the layout was requested.
      */
@@ -276,6 +354,8 @@ class LayoutEngine(
 
     companion object {
         const val INTER_WINDOW_DELAY_MS = 350L
+        const val PARK_DELAY_MS = 250L
+        const val ANCHOR_SETTLE_MS = 450L
         const val DEFAULT_RETRIES = 1
         const val MAX_RETRIES = 2
 

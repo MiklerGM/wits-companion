@@ -26,10 +26,12 @@ data class CarState(
     val source: SignalValue<Int> = SignalValue.unknown(),
     val topPackage: SignalValue<String> = SignalValue.unknown(),
 
-    // --- arrays -----------------------------------------------------------
-    val radar: List<SignalValue<Int>> = List(8) { SignalValue.unknown() },
-    val doors: List<SignalValue<Boolean>> = List(5) { SignalValue.unknown() },
-    val turnLights: List<SignalValue<Boolean>> = List(3) { SignalValue.unknown() },
+    // --- packed raw strings -----------------------------------------------
+    // This BMW profile publishes PDC as "2:0:0:4:0:0:0:0" in can.radar and doors as a
+    // bitmask in can.door. The decoding is unproven, so the raw text is carried and the
+    // UI shows it as-is rather than inventing per-sensor values [RUNTIME]/[HYP].
+    val radarRaw: SignalValue<String> = SignalValue.unknown(),
+    val doorsRaw: SignalValue<String> = SignalValue.unknown(),
 
     // --- static -----------------------------------------------------------
     val mcuVersion: SignalValue<String> = SignalValue.unknown(),
@@ -72,12 +74,12 @@ data class CarState(
     val sourceName: String
         get() = if (source.isKnown) WitsSource.name(source.value) else "—"
 
-    val anyDoorOpen: Boolean?
-        get() {
-            val known = doors.filter { it.isKnown }
-            if (known.isEmpty()) return null
-            return known.any { it.value == true }
-        }
+    /**
+     * Not derivable yet: `can.door` is a bitmask whose layout is unproven, so claiming
+     * "a door is open" would be a guess. Returns null until the mask is decoded against
+     * physically opening each door.
+     */
+    val anyDoorOpen: Boolean? get() = null
 
     /** Signals that have produced at least one reading. */
     fun observedCount(): Int = allSignals().count { it.availability.isPresentable }
@@ -87,10 +89,9 @@ data class CarState(
             listOf(
                 acc, reverse, brake, illumination,
                 batteryVoltageRaw, speedRaw, rpmRaw, steeringAngleRaw,
-                source, topPackage,
+                source, topPackage, radarRaw, doorsRaw,
                 mcuVersion, mcuCanVersion, productId, buildDisplayId,
             )
         )
-        addAll(radar); addAll(doors); addAll(turnLights)
     }
 }

@@ -14,8 +14,9 @@ import java.util.concurrent.CopyOnWriteArrayList
  *
  *  - properties, polled on a background thread at [pollIntervalMs] (throttled,
  *    never a tight loop),
- *  - vendor broadcasts, delivered by [WitsBroadcastReceiver] (registered
- *    NOT_EXPORTED so other apps cannot spoof vehicle state).
+ *  - vendor broadcasts, delivered by [WitsBroadcastReceiver] (registered EXPORTED,
+ *    because the senders are other processes; see that class for what replaces the
+ *    lost isolation).
  *
  * Observers are notified on the main thread.
  */
@@ -173,9 +174,10 @@ class CarStateRepository(
             steeringAngleRaw = merge(state.steeringAngleRaw, intOf(WitsProperties.CAN_ANGLE)),
             source = merge(state.source, intOf(WitsProperties.SOURCE)),
             topPackage = merge(state.topPackage, strOf(WitsProperties.TOP_PACKAGE)),
-            radar = List(8) { i -> merge(state.radar[i], intOf(WitsProperties.radar(i))) },
-            doors = List(5) { i -> merge(state.doors[i], boolOf(WitsProperties.carDoor(i + 1))) },
-            turnLights = List(3) { i -> merge(state.turnLights[i], boolOf(WitsProperties.light(i))) },
+            // This profile publishes PDC and doors as single packed strings rather than
+            // per-index properties, so keep them raw and unparsed [RUNTIME].
+            radarRaw = merge(state.radarRaw, strOf(WitsProperties.CAN_RADAR)),
+            doorsRaw = merge(state.doorsRaw, strOf(WitsProperties.CAN_DOOR)),
         )
         publish(next)
     }

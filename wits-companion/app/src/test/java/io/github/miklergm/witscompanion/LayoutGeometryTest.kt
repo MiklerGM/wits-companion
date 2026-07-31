@@ -6,9 +6,11 @@ import io.github.miklergm.witscompanion.layout.LayoutIssue
 import io.github.miklergm.witscompanion.layout.LayoutPreset
 import io.github.miklergm.witscompanion.layout.LayoutValidator
 import io.github.miklergm.witscompanion.layout.LayoutWindow
+import io.github.miklergm.witscompanion.layout.PresetKind
 import io.github.miklergm.witscompanion.layout.NormalizedBounds
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -221,5 +223,130 @@ class LayoutScheduleTest {
     fun `single window schedule is trivial`() {
         assertEquals(listOf(0L), engine().scheduleFor(windowCount = 1, retries = 0))
         assertEquals(listOf(0L, 600L), engine().scheduleFor(windowCount = 1, retries = 1))
+    }
+}
+
+/**
+ * Preset kinds, side swapping and split adjustment.
+ *
+ * These cover the layout customisation the user asked for ("Spotify on the left, or make
+ * it configurable") and the ANCHORED arrangement in which the companion is the fullscreen
+ * anchor and exactly one foreign window floats above it.
+ */
+@RunWith(RobolectricTestRunner::class)
+class PresetKindAndCustomisationTest {
+
+    private fun twoTile() = LayoutPreset(
+        id = "p", title = "p",
+        windows = listOf(
+            LayoutWindow("com.maps", NormalizedBounds(0f, 0f, 0.65f, 1f), focusOrder = 0),
+            LayoutWindow("com.music", NormalizedBounds(0.65f, 0f, 1f, 1f), focusOrder = 1),
+        ),
+    )
+
+    @Test
+    fun `mirroring swaps the two sides and keeps them adjacent`() {
+        val m = twoTile().mirrored()
+        val maps = m.windows.first { it.packageName == "com.maps" }
+        val music = m.windows.first { it.packageName == "com.music" }
+
+        assertEquals(0.35f, maps.bounds.left, 0.0001f)
+        assertEquals(1f, maps.bounds.right, 0.0001f)
+        assertEquals(0f, music.bounds.left, 0.0001f)
+        assertEquals(0.35f, music.bounds.right, 0.0001f)
+        assertEquals("still adjacent", music.bounds.right, maps.bounds.left, 0.0001f)
+    }
+
+    @Test
+    fun `mirroring twice returns the original geometry`() {
+        val original = twoTile()
+        val twice = original.mirrored().mirrored()
+        original.windows.zip(twice.windows.sortedBy { it.bounds.left }).forEach { (a, b) ->
+            assertEquals(a.bounds.left, b.bounds.left, 0.0001f)
+            assertEquals(a.bounds.right, b.bounds.right, 0.0001f)
+        }
+    }
+
+    @Test
+    fun `mirrored preset still validates`() {
+        assertFalse(LayoutValidator.hasErrors(LayoutValidator.validate(twoTile().mirrored())))
+    }
+
+    @Test
+    fun `split fraction is read back correctly`() {
+        assertEquals(0.65f, twoTile().splitFraction()!!, 0.0001f)
+    }
+
+    @Test
+    fun `split can be adjusted and stays gapless`() {
+        val p = twoTile().withSplit(0.5f)
+        val sorted = p.windows.sortedBy { it.bounds.left }
+        assertEquals(0.5f, sorted[0].bounds.right, 0.0001f)
+        assertEquals(0.5f, sorted[1].bounds.left, 0.0001f)
+        assertEquals(0f, sorted[0].bounds.left, 0.0001f)
+        assertEquals(1f, sorted[1].bounds.right, 0.0001f)
+        assertFalse(LayoutValidator.hasErrors(LayoutValidator.validate(p)))
+    }
+
+    @Test
+    fun `split is clamped to a usable range`() {
+        assertEquals(LayoutPreset.MIN_SPLIT, twoTile().withSplit(0.01f).splitFraction()!!, 0.0001f)
+        assertEquals(LayoutPreset.MAX_SPLIT, twoTile().withSplit(0.99f).splitFraction()!!, 0.0001f)
+    }
+
+    @Test
+    fun `split adjustment is a no-op for presets that are not a simple two-way split`() {
+        val single = LayoutPreset(
+            "s", "s", listOf(LayoutWindow("com.a", NormalizedBounds.FULL))
+        )
+        assertEquals(single.windows, single.withSplit(0.5f).windows)
+        assertNull(single.splitFraction())
+    }
+
+    @Test
+    fun `anchored preset must carry exactly one foreign window`() {
+        val bad = LayoutPreset(
+            "a", "a", kind = PresetKind.TILED,
+            windows = listOf(
+                LayoutWindow("com.maps", NormalizedBounds(0f, 0f, 0.65f, 1f)),
+                LayoutWindow("com.music", NormalizedBounds(0.65f, 0f, 1f, 1f)),
+            ),
+        ).copy(kind = PresetKind.ANCHORED)
+
+        val issues = LayoutValidator.validate(bad)
+        assertTrue(LayoutValidator.hasErrors(issues))
+        assertTrue(issues.any { it.message.contains("exactly one foreign window") })
+    }
+
+    @Test
+    fun `the companion must not be a tile in an anchored preset`() {
+        val bad = LayoutPreset(
+            "a", "a", kind = PresetKind.ANCHORED,
+            windows = listOf(
+                LayoutWindow(
+                    io.github.miklergm.witscompanion.wits.WitsPackages.SELF,
+                    NormalizedBounds(0.65f, 0f, 1f, 1f),
+                )
+            ),
+        )
+        val issues = LayoutValidator.validate(bad)
+        assertTrue(LayoutValidator.hasErrors(issues))
+        assertTrue(issues.any { it.message.contains("anchor") })
+    }
+
+    @Test
+    fun `the shipped anchored preset is valid and has one window`() {
+        val p = DefaultPresets.all().first { it.id == DefaultPresets.ID_MAPS_ANCHORED }
+        assertEquals(PresetKind.ANCHORED, p.kind)
+        assertEquals(1, p.windows.size)
+        assertFalse(LayoutValidator.hasErrors(LayoutValidator.validate(p)))
+    }
+
+    @Test
+    fun `kind survives a json round trip`() {
+        val p = DefaultPresets.all().first { it.id == DefaultPresets.ID_MAPS_ANCHORED }
+        assertEquals(PresetKind.ANCHORED, LayoutPreset.fromJson(p.toJson()).kind)
+        val tiled = twoTile()
+        assertEquals(PresetKind.TILED, LayoutPreset.fromJson(tiled.toJson()).kind)
     }
 }

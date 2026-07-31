@@ -249,6 +249,48 @@ Cancellation is wired to: a new `apply()`, reverse becoming active
 (`LayoutRecoveryCoordinator`), and any source switch
 (`WitsSourceController.onBeforeSwitch`, invoked *before* the broadcast leaves).
 
+## 6.2 Preset kinds and window parking
+
+`LayoutPreset.kind` selects the arrangement:
+
+| Kind | Meaning |
+|---|---|
+| `TILED` | foreign apps tile the screen; the companion is only an orchestrator |
+| `ANCHORED` | the companion sits fullscreen as an anchor and **exactly one** foreign window floats above it; everything else is surfaced through APIs (MediaSession, properties) instead of extra windows |
+
+**Parking.** The hook has no "close window" verb, and a freeform task always draws above
+fullscreen tasks. A tile left over from the previous layout would therefore keep floating
+over the new one. `parkStaleWindows()` re-issues `CHANGE_WINDOW` for those packages with
+`windowMode = FULLSCREEN`, turning them back into ordinary fullscreen tasks that drop
+behind whatever comes next — **without killing the process**, so audio keeps playing.
+
+Transition order for an `ANCHORED` preset:
+
+```
+park stale packages   -> fullscreen, 250 ms apart
+bring the anchor up   -> plain startActivity (our own package, no hook needed)
+settle                -> 450 ms
+place the tile        -> freeform, on top of the anchor
+```
+
+All of it is gated by the generation token of §6.1.
+
+**Unverified** `[HYP]`: that parking to fullscreen actually hides the window; that the
+anchor stays visible and live beneath a freeform tile; that CenterService's top-app
+tracking does not interfere. Three checks for the next visit to the car.
+
+## 6.3 Customising a layout
+
+Presets store normalized bounds, so side order and split ratio are pure geometry:
+
+- `LayoutPreset.mirrored()` — swaps left/right (`[0,0.65]`+`[0.65,1]` → `[0.35,1]`+`[0,0.35]`)
+- `LayoutPreset.withSplit(f)` — re-splits a two-tile preset, clamped to 0.25–0.80
+- `LayoutPreset.splitFraction()` — reads the current ratio back
+
+Both are persisted per preset id in `LayoutRepository` and applied on read, so the
+built-in presets stay untouched and the tweaks survive a reinstall of the preset list.
+The Layouts tab exposes a **⇄ swap sides** button and 50/60/65/70 split buttons.
+
 ## 7. Restore strategy
 
 Idempotent re-application with bounded retries — never an infinite loop.

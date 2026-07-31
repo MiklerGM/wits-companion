@@ -18,7 +18,38 @@ class LayoutRepository(context: Context) {
 
     // ------------------------------------------------------------------ presets
 
-    fun allPresets(): List<LayoutPreset> = DefaultPresets.all() + customPresets()
+    /**
+     * Built-in presets with the user's per-preset tweaks applied (swapped sides and
+     * adjusted split), followed by any fully custom presets.
+     */
+    fun allPresets(): List<LayoutPreset> =
+        DefaultPresets.all().map { applyTweaks(it) } + customPresets()
+
+    /** Mirrors and re-splits a built-in preset according to stored preferences. */
+    private fun applyTweaks(preset: LayoutPreset): LayoutPreset {
+        var p = preset
+        splitFor(preset.id)?.let { p = p.withSplit(it, newId = preset.id, newTitle = preset.title) }
+        if (isSwapped(preset.id)) {
+            p = p.mirrored(newId = preset.id, newTitle = preset.title)
+        }
+        return p
+    }
+
+    fun isSwapped(presetId: String): Boolean = prefs.getBoolean("swap_$presetId", false)
+
+    fun setSwapped(presetId: String, swapped: Boolean) {
+        prefs.edit().putBoolean("swap_$presetId", swapped).apply()
+    }
+
+    /** Stored left-hand fraction for a two-tile preset, or null to use the default. */
+    fun splitFor(presetId: String): Float? =
+        prefs.getFloat("split_$presetId", -1f).takeIf { it > 0f }
+
+    fun setSplit(presetId: String, fraction: Float?) {
+        prefs.edit().apply {
+            if (fraction == null) remove("split_$presetId") else putFloat("split_$presetId", fraction)
+        }.apply()
+    }
 
     fun preset(id: String): LayoutPreset? = allPresets().firstOrNull { it.id == id }
 

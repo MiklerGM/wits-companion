@@ -96,26 +96,99 @@ data class LayoutWindow(
     }
 }
 
+/**
+ * How a preset occupies the screen.
+ *
+ * The vendor hook has no "close window" primitive and a freeform window always floats
+ * above fullscreen tasks, so the two arrangements need different transitions — see
+ * [LayoutEngine] and docs/window-management.md.
+ */
+enum class PresetKind {
+    /** Foreign apps tile the screen; the companion is only an orchestrator. */
+    TILED,
+
+    /**
+     * The companion sits fullscreen as an anchor and exactly one foreign window floats
+     * above it, leaving the rest of the companion visible. Everything else is surfaced
+     * through APIs (MediaSession, properties) rather than as extra windows.
+     */
+    ANCHORED,
+}
+
 data class LayoutPreset(
     val id: String,
     val title: String,
     val windows: List<LayoutWindow>,
     val experimental: Boolean = false,
+    val kind: PresetKind = PresetKind.TILED,
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
         put("title", title)
         put("experimental", experimental)
+        put("kind", kind.name)
         put("windows", JSONArray().also { arr -> windows.forEach { arr.put(it.toJson()) } })
     }
 
+    /**
+     * Mirrors every tile horizontally, so a left/right pair swaps sides.
+     * `[0.00,0.65]` and `[0.65,1.00]` become `[0.35,1.00]` and `[0.00,0.35]`.
+     */
+    fun mirrored(newId: String = id + "_mirrored", newTitle: String = "$title (swapped)"): LayoutPreset =
+        copy(
+            id = newId,
+            title = newTitle,
+            windows = windows.map { w ->
+                w.copy(
+                    bounds = w.bounds.copy(
+                        left = 1f - w.bounds.right,
+                        right = 1f - w.bounds.left,
+                    )
+                )
+            },
+        )
+
+    /**
+     * Re-splits a two-tile preset at [leftFraction], keeping order and focus.
+     * Returns the preset unchanged when it does not have exactly two tiles.
+     */
+    fun withSplit(leftFraction: Float, newId: String = id, newTitle: String = title): LayoutPreset {
+        if (windows.size != 2) return this
+        val f = leftFraction.coerceIn(MIN_SPLIT, MAX_SPLIT)
+        val sorted = windows.sortedBy { it.bounds.left }
+        return copy(
+            id = newId,
+            title = newTitle,
+            windows = listOf(
+                sorted[0].copy(bounds = sorted[0].bounds.copy(left = 0f, right = f)),
+                sorted[1].copy(bounds = sorted[1].bounds.copy(left = f, right = 1f)),
+            ),
+        )
+    }
+
+    /** Left-hand fraction of a two-tile preset, or null if it is not a simple split. */
+    fun splitFraction(): Float? {
+        if (windows.size != 2) return null
+        val sorted = windows.sortedBy { it.bounds.left }
+        val a = sorted[0].bounds
+        val b = sorted[1].bounds
+        if (a.left != 0f || b.right != 1f) return null
+        if (kotlin.math.abs(a.right - b.left) > 0.001f) return null
+        return a.right
+    }
+
     companion object {
+        const val MIN_SPLIT = 0.25f
+        const val MAX_SPLIT = 0.80f
+
         fun fromJson(o: JSONObject): LayoutPreset {
             val arr = o.getJSONArray("windows")
             return LayoutPreset(
                 id = o.getString("id"),
                 title = o.getString("title"),
                 experimental = o.optBoolean("experimental", false),
+                kind = runCatching { PresetKind.valueOf(o.optString("kind")) }
+                    .getOrDefault(PresetKind.TILED),
                 windows = (0 until arr.length()).map { LayoutWindow.fromJson(arr.getJSONObject(it)) },
             )
         }
@@ -183,6 +256,21 @@ object LayoutValidator {
             }
         }
 
+        if (preset.kind == PresetKind.ANCHORED) {
+            if (preset.windows.size != 1) {
+                issues += LayoutIssue(
+                    LayoutIssue.Severity.ERROR,
+                    "an anchored preset must have exactly one foreign window, has ${preset.windows.size}",
+                )
+            }
+            if (preset.windows.any { it.packageName == WitsPackages.SELF }) {
+                issues += LayoutIssue(
+                    LayoutIssue.Severity.ERROR,
+                    "the companion is the anchor and must not also be listed as a tile",
+                )
+            }
+        }
+
         if (preset.experimental) {
             issues += LayoutIssue(
                 LayoutIssue.Severity.WARNING,
@@ -205,6 +293,7 @@ object DefaultPresets {
     const val ID_MAPS_SPOTIFY = "maps65_spotify35"
     const val ID_MAPS_CHROME = "maps65_chrome35"
     const val ID_MAPS_COMPANION = "maps65_companion35"
+    const val ID_MAPS_ANCHORED = "maps65_anchored"
     const val ID_MAPS_FULL = "maps_full"
     const val ID_SPOTIFY_FULL = "spotify_full"
     const val ID_THREE_PANEL = "three_panel"
@@ -232,6 +321,17 @@ object DefaultPresets {
             windows = listOf(
                 LayoutWindow(WitsPackages.MAPS, NormalizedBounds(0f, 0f, 0.65f, 1f), focusOrder = 0),
                 LayoutWindow(WitsPackages.SELF, NormalizedBounds(0.65f, 0f, 1f, 1f), focusOrder = 1),
+            ),
+        ),
+        LayoutPreset(
+            id = ID_MAPS_ANCHORED,
+            title = "Maps + companion panel",
+            kind = PresetKind.ANCHORED,
+            windows = listOf(
+                // Only one foreign window. The companion stays fullscreen underneath and
+                // shows through on the right; Spotify is driven via MediaSession instead
+                // of getting a window of its own.
+                LayoutWindow(WitsPackages.MAPS, NormalizedBounds(0f, 0f, 0.65f, 1f), focusOrder = 0),
             ),
         ),
         LayoutPreset(

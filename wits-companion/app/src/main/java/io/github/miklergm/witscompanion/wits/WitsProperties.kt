@@ -59,21 +59,37 @@ object WitsProperties {
     val LIGHT_ALL: List<String> = (0..2).map { light(it) }
 
     /**
-     * Everything the repository polls. Kept deliberately small; polling is
-     * throttled and must never become a tight loop (docs/known-unknowns.md §5).
+     * Everything the repository polls.
+     *
+     * Trimmed on 2026-07-31 against a live capture: this BMW profile leaves
+     * `vendor.can.radar0..7`, `vendor.can.cardoor1..5`, `vendor.can.light0..2`,
+     * `car.speed`, `car.rate`, `car.lane`, `car.turn.lr` and `wits.battery.vol`
+     * **permanently empty** `[RUNTIME]`. Polling them was pure overhead and made the
+     * dashboard show dashes for data that does arrive — in a different shape:
+     *
+     *  - parking sensors come as one string in `can.radar` (`"2:0:0:4:0:0:0:0"`),
+     *  - doors come as a bitmask in `can.door` (`"ffffff80"`).
+     *
+     * Both formats are `[HYP]` and are left raw rather than guessed at. The vehicle's
+     * own cluster and HUD already show speed, doors and PDC, so the companion does not
+     * try to reproduce them; the Signal Explorer records the raw values when a capture
+     * session is actually wanted.
      */
-    val POLLED: List<String> = buildList {
-        addAll(
-            listOf(
-                ACC, BACKCAR, BRAKE, ILL, BATTERY_VOL,
-                SOURCE, TOP_PACKAGE,
-                CAR_SPEED, CAN_SPEED, CAR_RATE, CAR_TURN_LR,
-                CAN_ANGLE, CAN_DOOR, CAN_RADAR,
-            )
-        )
-        addAll(RADAR_ALL)
-        addAll(DOOR_ALL)
-        addAll(LIGHT_ALL)
+    val POLLED: List<String> = listOf(
+        ACC, BACKCAR, BRAKE, ILL,
+        SOURCE, TOP_PACKAGE,
+        CAN_SPEED,          // populated; car.speed is not
+        CAN_ANGLE,
+        CAN_DOOR, CAN_RADAR, // raw, unparsed
+    )
+
+    /**
+     * Declared in the firmware but never populated on this profile `[RUNTIME]`.
+     * Kept for the Signal Explorer's snapshots, excluded from steady-state polling.
+     */
+    val EMPTY_ON_THIS_PROFILE: List<String> = buildList {
+        addAll(listOf(CAR_SPEED, CAR_RATE, CAR_LANE, CAR_TURN_LR, BATTERY_VOL))
+        addAll(RADAR_ALL); addAll(DOOR_ALL); addAll(LIGHT_ALL)
     }
 
     /** Read once at startup; these never change while running. */

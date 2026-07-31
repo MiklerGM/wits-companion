@@ -17,9 +17,44 @@ Source of truth for names: `analysis/jadx/CenterService/sources/com/middle/UtilE
 | `VERIFIED` | Seen, and mapping/units confirmed against a known physical state |
 | `UNSUPPORTED` | Confirmed absent/never populated on this BMW profile + MCU |
 
-> **All signals below are `UNKNOWN` in this iteration** — no device was attached.
-> Populate with `tools/capture-car-state.sh`, then update this table and
-> `docs/runtime-car-state-results.md`.
+> **Updated 2026-07-31 from a live capture.** Several signals declared in the firmware
+> are **permanently empty on this BMW profile**, and two arrive in a packed form that the
+> catalogue did not anticipate.
+
+### What this profile actually publishes `[RUNTIME]`
+
+| Property | Observed | Note |
+|---|---|---|
+| `wits.acc` | `1` | works |
+| `wits.backcar` | `0` | works |
+| `wits.brake` | `0` | works |
+| `wits.ill` | `0` | works |
+| `wits.source` | `7` | works |
+| `can.speed` | `0` (stationary) | works; **`car.speed` is empty** |
+| `vendor.can.angle` | `0` | works |
+| `can.radar` | `"2:0:0:4:0:0:0:0"` | **packed string**, decoding `[HYP]` |
+| `can.door` | `"ffffff80"` | **bitmask**, decoding `[HYP]` |
+| `car.signal`, `car.type` | `1`, `0` | meaning unknown |
+| `wits.mcu.version` | `LFE.ZHTD.BM.…` | works |
+
+### Permanently empty on this profile `[RUNTIME]`
+
+`car.speed` · `car.rate` (**no RPM**) · `car.lane` · `car.turn.lr` ·
+`wits.battery.vol` (**no voltage**) · all `vendor.can.radar0..7` ·
+all `vendor.can.cardoor1..5` · all `vendor.can.light0..2` (**no indicators**) ·
+`wits.mcu.can.version`
+
+**Consequence for the app.** Polling was trimmed to the signals that exist
+(`WitsProperties.POLLED`); the empty ones moved to `EMPTY_ON_THIS_PROFILE` and are only
+touched by Signal Explorer snapshots. `CarState` now carries `radarRaw` / `doorsRaw`
+as **raw strings** instead of decoded per-sensor values, and `anyDoorOpen` deliberately
+returns `null` rather than guessing at the mask.
+
+**Design decision (2026-07-31).** The vehicle's own cluster and HUD already display
+speed, doors and PDC, and reverse switches the screen to the OEM view which shows PDC
+anyway — the trigger is the gearbox, not the sensors. The companion therefore does not
+try to reproduce that data. Decoding `can.radar` / `can.door` is deferred; if it is ever
+wanted, capture with the Signal Explorer while opening each door in turn.
 
 **Presence of a property or broadcast in firmware code does not prove that this BMW
 profile and MCU populate it.** `[HYP]`

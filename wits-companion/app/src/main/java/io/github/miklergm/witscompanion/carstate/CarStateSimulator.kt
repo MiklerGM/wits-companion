@@ -117,16 +117,12 @@ class CarStateSimulator(
                 if (reversing) "11" else "241"
             ),
             topPackage = sim("com.google.android.apps.maps", "sim"),
-            radar = List(8) { i ->
-                if (reversing) sim((20 + (i * 7 + tick * 3) % 120), "sim")
-                else SignalValue.unknown(SignalSource.SIMULATION)
-            },
-            doors = List(5) { i -> sim(phase < 5 && i == 0, "0") },
-            turnLights = listOf(
-                sim(leftBlink, if (leftBlink) "1" else "0"),
-                sim(rightBlink, if (rightBlink) "1" else "0"),
-                sim(false, "0"),
+            // Mirrors the real device formats: PDC packed into one string, doors as a mask.
+            radarRaw = sim(
+                (0..7).joinToString(":") { i -> if (reversing) ((i * 7 + tick * 3) % 9).toString() else "0" },
+                "sim",
             ),
+            doorsRaw = sim(if (phase < 5) "ffffff81" else "ffffff80", "sim"),
             mcuVersion = sim("SIMULATED-MCU", "sim"),
             productId = sim("M701(sim)", "sim"),
             buildDisplayId = sim("SIMULATION", "sim"),

@@ -277,17 +277,22 @@ class SafetyAndSignalTest {
     }
 
     @Test
-    fun `anyDoorOpen ignores unknown doors`() {
-        val noneKnown = CarState()
-        assertNull(noneKnown.anyDoorOpen)
+    fun `door state is not guessed from an undecoded bitmask`() {
+        // This BMW profile publishes doors as a packed mask in can.door ("ffffff80"),
+        // not as per-door properties. Until that mask is decoded against physically
+        // opening each door, claiming "a door is open" would be a guess [RUNTIME]/[HYP].
+        val withMask = CarState(doorsRaw = valid("ffffff81"))
 
-        val oneOpen = CarState(
-            doors = listOf(valid(true)) + List(4) { SignalValue.unknown<Boolean>() }
-        )
-        assertEquals(true, oneOpen.anyDoorOpen)
+        assertNull("must not infer an answer from an undecoded mask", withMask.anyDoorOpen)
+        assertTrue("but the raw value is carried for the explorer", withMask.doorsRaw.isKnown)
+        assertEquals("ffffff81", withMask.doorsRaw.value)
+    }
 
-        val allClosedKnown = CarState(doors = List(5) { valid(false) })
-        assertEquals(false, allClosedKnown.anyDoorOpen)
+    @Test
+    fun `packed pdc string is carried raw`() {
+        val s = CarState(radarRaw = valid("2:0:0:4:0:0:0:0"))
+        assertTrue(s.radarRaw.isKnown)
+        assertEquals("2:0:0:4:0:0:0:0", s.radarRaw.value)
     }
 
     @Test
