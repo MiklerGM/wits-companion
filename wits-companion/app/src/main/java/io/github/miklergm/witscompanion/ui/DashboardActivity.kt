@@ -91,7 +91,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
 
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(BACKGROUND)
+            setBackgroundColor(palette.background)
         }
 
         if (reserved > 0f) {
@@ -106,12 +106,12 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         row.addView(panel, LinearLayout.LayoutParams(0, MATCH, 1f - reserved))
 
         clockView = TextView(this).apply {
-            textSize = 34f; setTextColor(FOREGROUND); typeface = Typeface.DEFAULT_BOLD
+            textSize = 34f; setTextColor(palette.foreground); typeface = Typeface.DEFAULT_BOLD
         }
         panel.addView(clockView)
 
         stateView = TextView(this).apply {
-            textSize = 13f; setTextColor(MUTED); setPadding(0, pad(2), 0, pad(14))
+            textSize = 13f; setTextColor(palette.muted); setPadding(0, pad(2), 0, pad(14))
         }
         panel.addView(stateView)
 
@@ -133,12 +133,12 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         trackView = TextView(this).apply {
-            textSize = 22f; setTextColor(FOREGROUND); maxLines = 2
+            textSize = 22f; setTextColor(palette.foreground); maxLines = 2
         }
         texts.addView(trackView)
 
         artistView = TextView(this).apply {
-            textSize = 15f; setTextColor(MUTED); maxLines = 1; setPadding(0, pad(2), 0, 0)
+            textSize = 15f; setTextColor(palette.muted); maxLines = 1; setPadding(0, pad(2), 0, 0)
         }
         texts.addView(artistView)
         nowPlaying.addView(texts)
@@ -155,7 +155,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         panel.addView(progressBar)
 
         progressLabel = TextView(this).apply {
-            textSize = 11f; setTextColor(MUTED); typeface = Typeface.MONOSPACE
+            textSize = 11f; setTextColor(palette.muted); typeface = Typeface.MONOSPACE
             setPadding(0, pad(3), 0, pad(8))
         }
         panel.addView(progressLabel)
@@ -174,7 +174,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         // package, so switching is one tap instead of a trip to the Layouts tab.
         panel.addView(TextView(this).apply {
             text = "Floating app"
-            textSize = 12f; setTextColor(MUTED); setPadding(0, pad(16), 0, pad(4))
+            textSize = 12f; setTextColor(palette.muted); setPadding(0, pad(16), 0, pad(4))
         })
         // Real launcher icons rather than text: recognisable at a glance and a bigger
         // touch target, the one idea from Mini AA's NavRail that costs nothing here.
@@ -186,7 +186,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         panel.addView(switcher)
 
         volumeView = TextView(this).apply {
-            textSize = 12f; setTextColor(MUTED); typeface = Typeface.MONOSPACE
+            textSize = 12f; setTextColor(palette.muted); typeface = Typeface.MONOSPACE
             setPadding(0, pad(14), 0, 0)
         }
         panel.addView(volumeView)
@@ -199,7 +199,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             text = "Head-unit stage only. Steering and NBT volume are handled by the " +
                 "car's amplifier and are not visible to Android."
             textSize = 11f
-            setTextColor(MUTED)
+            setTextColor(palette.muted)
             setPadding(0, pad(6), 0, 0)
         })
 
@@ -295,9 +295,15 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             artView.visibility = View.GONE
         }
 
-        // The panel takes on the colour of what is playing; falls back to plain white
-        // when the art has no usable hue, rather than tinting everything grey.
-        val accent = AlbumAccent.from(art) ?: FOREGROUND
+        // The panel takes on the colour of what is playing; falls back to the plain
+        // foreground when the art has no usable hue, rather than tinting everything grey.
+        // In day mode the accent is darkened so it stays readable on the light background.
+        val raw = AlbumAccent.from(art)
+        val accent = when {
+            raw == null -> palette.foreground
+            palette.night -> raw
+            else -> darken(raw, 0.55f)
+        }
         trackView.setTextColor(accent)
         progressBar.progressTintList = android.content.res.ColorStateList.valueOf(accent)
 
@@ -331,6 +337,14 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     private fun clock(ms: Long): String {
         val total = ms / 1000
         return "%d:%02d".format(total / 60, total % 60)
+    }
+
+    /** Scales a colour's brightness toward black by [factor] (0..1), keeping its hue. */
+    private fun darken(color: Int, factor: Float): Int {
+        val hsv = FloatArray(3)
+        Color.colorToHSV(color, hsv)
+        hsv[2] *= factor.coerceIn(0f, 1f)
+        return Color.HSVToColor(hsv)
     }
 
     /**
@@ -391,7 +405,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         box.addView(TextView(this).apply {
             text = label
             textSize = 11f
-            setTextColor(MUTED)
+            setTextColor(palette.muted)
             setPadding(0, pad(4), 0, 0)
         })
         return box
@@ -408,11 +422,40 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
 
     private fun pad(dp: Int) = (dp * resources.displayMetrics.density).toInt()
 
+    /**
+     * The panel's colours for the current day/night state.
+     *
+     * Read from the system `uiMode` night bit — the **same** signal Google Maps and every
+     * other app read — so the floating map and the panel are dark or light together. The
+     * panel used to be hard-coded dark, which is why a daytime (headlights-off) drive
+     * showed a light map beside a dark panel: `[RUNTIME]` 2026-07-31. On this head unit
+     * day/night tracks the headlights (illumination), so the state flips with the lights,
+     * not the clock.
+     *
+     * uiMode is not in the activity's configChanges, so a day/night flip recreates the
+     * activity and this is recomputed in onCreate — no manual listener needed.
+     */
+    private data class Palette(
+        val background: Int,
+        val foreground: Int,
+        val muted: Int,
+        val night: Boolean,
+    )
+
+    private val palette: Palette by lazy {
+        val night = (resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+        if (night) {
+            Palette(Color.BLACK, Color.WHITE, Color.parseColor("#9E9E9E"), night = true)
+        } else {
+            Palette(Color.parseColor("#FAFAFA"), Color.parseColor("#212121"),
+                Color.parseColor("#616161"), night = false)
+        }
+    }
+
     private companion object {
         const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
-        const val BACKGROUND = Color.BLACK
-        const val FOREGROUND = Color.WHITE
-        val MUTED = Color.parseColor("#9E9E9E")
         /** Clock and track position share one tick. */
         const val TICK_MS = 1_000L
         const val PROGRESS_MAX = 1_000
