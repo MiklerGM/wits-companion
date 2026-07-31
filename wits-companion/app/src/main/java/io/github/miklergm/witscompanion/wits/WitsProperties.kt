@@ -111,6 +111,7 @@ object WitsSettingsKeys {
 object WitsPackages {
     const val MAPS = "com.google.android.apps.maps"
     const val SPOTIFY = "com.spotify.music"
+    const val CHROME = "com.android.chrome"
     const val WITS_LAUNCHER = "com.wits.launcher"
     const val CENTER_SERVICE = "com.wits.pms"
     const val SELF = "io.github.miklergm.witscompanion"

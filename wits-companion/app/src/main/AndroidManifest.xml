@@ -24,6 +24,7 @@
     <queries>
         <package android:name="com.google.android.apps.maps" />
         <package android:name="com.spotify.music" />
+        <package android:name="com.android.chrome" />
         <package android:name="com.wits.launcher" />
         <package android:name="com.wits.pms" />
 

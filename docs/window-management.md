@@ -302,6 +302,57 @@ reserves it (`usable 2400x801 at y=99`); `--inset-top` overrides. The companion'
 `WitsWindowController.usableArea()` already computed this correctly from
 `WindowMetrics` insets, so `LayoutEngine` is unaffected.
 
+### Open defect: cold start does not land in freeform
+
+**Symptom** `[RUNTIME]` (2026-07-31, from the companion app): applying
+*Maps 65 / Spotify 35* opened Maps, then Maps closed and Spotify opened. The two tiles
+replaced each other instead of tiling.
+
+**Contrast:** the same two-window layout applied *from the shell* minutes earlier with
+Maps + Chrome worked perfectly and was idempotent (W3/W4/W8 above).
+
+**Leading hypothesis** `[HYP]` — it is the **cold-start path in the hook**, not the caller:
+
+```java
+// ActivityTaskManagerService.java:480-494   [CODE]
+int freeformTaskId = getFreeformTaskId(pkg);
+if (freeformTaskId != 0) {
+    startActivityFromRecents(freeformTaskId, bundle);   // WARM: reposition an existing task
+    return;
+}
+mContext.startActivity(pm.getLaunchIntentForPackage(pkg), bundle);   // COLD: fresh launch
+```
+
+In the successful shell test **both** Maps and Chrome were already running, so both took
+the warm `startActivityFromRecents` branch. Spotify had just been installed and had never
+been started, so it took the cold `startActivity` branch — where the launch bounds appear
+not to be honoured, and the activity comes up fullscreen over the previous tile.
+
+Competing explanations not yet excluded:
+
+- the companion is itself a fullscreen task on top when it issues the broadcasts, whereas
+  the shell test ran with the launcher in front;
+- `LayoutEngine`'s bounded retries (500 ms, 1300 ms) re-issue every window and could be
+  re-triggering a cold start;
+- Spotify's own `launchMode` / task affinity.
+
+**How to settle it** (next session, in this order):
+
+1. Start Maps and Spotify manually once, so both tasks exist, then press Apply. If it
+   tiles, the cold-start hypothesis is confirmed.
+2. Watch `logcat | grep startActivityByWindowMode` during Apply and record which branch
+   is taken per package.
+3. Compare shell-issued vs app-issued broadcasts with both apps already running, to rule
+   the caller in or out.
+
+**Fix candidates for `LayoutEngine`, once the cause is known:**
+
+- pre-warm each package (plain `startActivity`) and wait for the task to appear before
+  sending `CHANGE_WINDOW` — this is what `launchIntentUri` already does for deep links
+  and would generalise;
+- increase `INTER_WINDOW_DELAY_MS` for a cold package;
+- skip the retry pass for packages that were cold.
+
 ### Still untested
 
 W7 (audio keeps playing while the other tile has focus — needs a player),

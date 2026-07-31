@@ -203,6 +203,7 @@ object LayoutValidator {
 object DefaultPresets {
 
     const val ID_MAPS_SPOTIFY = "maps65_spotify35"
+    const val ID_MAPS_CHROME = "maps65_chrome35"
     const val ID_MAPS_COMPANION = "maps65_companion35"
     const val ID_MAPS_FULL = "maps_full"
     const val ID_SPOTIFY_FULL = "spotify_full"
@@ -215,6 +216,14 @@ object DefaultPresets {
             windows = listOf(
                 LayoutWindow(WitsPackages.MAPS, NormalizedBounds(0f, 0f, 0.65f, 1f), focusOrder = 0),
                 LayoutWindow(WitsPackages.SPOTIFY, NormalizedBounds(0.65f, 0f, 1f, 1f), focusOrder = 1),
+            ),
+        ),
+        LayoutPreset(
+            id = ID_MAPS_CHROME,
+            title = "Maps 65 / Chrome 35",
+            windows = listOf(
+                LayoutWindow(WitsPackages.MAPS, NormalizedBounds(0f, 0f, 0.65f, 1f), focusOrder = 0),
+                LayoutWindow(WitsPackages.CHROME, NormalizedBounds(0.65f, 0f, 1f, 1f), focusOrder = 1),
             ),
         ),
         LayoutPreset(
