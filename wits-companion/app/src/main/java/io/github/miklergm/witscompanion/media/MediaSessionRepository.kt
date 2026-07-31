@@ -35,6 +35,9 @@ data class MediaSnapshot(
     val albumArt: Bitmap? = null,
     val isPlaying: Boolean = false,
     val durationMs: Long = 0L,
+    /** Playback position at [positionUpdatedElapsedMs]; extrapolate while playing. */
+    val positionMs: Long = 0L,
+    val positionUpdatedElapsedMs: Long = 0L,
     val canPlay: Boolean = false,
     val canPause: Boolean = false,
     val canSkipNext: Boolean = false,
@@ -181,6 +184,8 @@ class MediaSessionRepository(
                     ?: md?.getBitmap(MediaMetadata.METADATA_KEY_ART),
                 isPlaying = ps?.state == PlaybackState.STATE_PLAYING,
                 durationMs = md?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
+                positionMs = ps?.position ?: 0L,
+                positionUpdatedElapsedMs = android.os.SystemClock.elapsedRealtime(),
                 canPlay = actions and PlaybackState.ACTION_PLAY != 0L,
                 canPause = actions and PlaybackState.ACTION_PAUSE != 0L,
                 canSkipNext = actions and PlaybackState.ACTION_SKIP_TO_NEXT != 0L,

@@ -56,12 +56,18 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     private lateinit var volumeView: TextView
     private lateinit var playPauseButton: Button
     private lateinit var artView: android.widget.ImageView
+    private lateinit var progressBar: android.widget.ProgressBar
+    private lateinit var progressLabel: TextView
+
+    @Volatile
+    private var latestMedia: MediaSnapshot? = null
 
     private val ui = android.os.Handler(android.os.Looper.getMainLooper())
     private val clockTick = object : Runnable {
         override fun run() {
             clockView.text = CLOCK.format(Date())
-            ui.postDelayed(this, CLOCK_INTERVAL_MS)
+            refreshProgress()
+            ui.postDelayed(this, TICK_MS)
         }
     }
 
@@ -139,6 +145,21 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         panel.addView(nowPlaying)
         panel.addView(View(this), LinearLayout.LayoutParams(MATCH, pad(12)))
 
+        progressBar = android.widget.ProgressBar(
+            this, null, android.R.attr.progressBarStyleHorizontal
+        ).apply {
+            max = PROGRESS_MAX
+            layoutParams = LinearLayout.LayoutParams(MATCH, pad(3))
+            visibility = View.INVISIBLE
+        }
+        panel.addView(progressBar)
+
+        progressLabel = TextView(this).apply {
+            textSize = 11f; setTextColor(MUTED); typeface = Typeface.MONOSPACE
+            setPadding(0, pad(3), 0, pad(8))
+        }
+        panel.addView(progressLabel)
+
         val transport = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -155,17 +176,12 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             text = "Floating app"
             textSize = 12f; setTextColor(MUTED); setPadding(0, pad(16), 0, pad(4))
         })
+        // Real launcher icons rather than text: recognisable at a glance and a bigger
+        // touch target, the one idea from Mini AA's NavRail that costs nothing here.
         val switcher = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         FLOATABLE.forEach { (pkg, label) ->
             if (!app.windowController.isLaunchable(pkg)) return@forEach
-            switcher.addView(Button(this).apply {
-                text = label
-                isAllCaps = false
-                textSize = 13f
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                    .apply { rightMargin = pad(6) }
-                setOnClickListener { floatApp(pkg, label) }
-            })
+            switcher.addView(appIcon(pkg, label))
         }
         panel.addView(switcher)
 
@@ -278,6 +294,43 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             artView.setImageDrawable(null)
             artView.visibility = View.GONE
         }
+
+        // The panel takes on the colour of what is playing; falls back to plain white
+        // when the art has no usable hue, rather than tinting everything grey.
+        val accent = AlbumAccent.from(art) ?: FOREGROUND
+        trackView.setTextColor(accent)
+        progressBar.progressTintList = android.content.res.ColorStateList.valueOf(accent)
+
+        latestMedia = snapshot
+        refreshProgress()
+    }
+
+    /**
+     * Extrapolates the position between MediaSession updates: players report a position
+     * and the moment it was taken, not a ticking value.
+     */
+    private fun refreshProgress() {
+        val s = latestMedia
+        val duration = s?.durationMs ?: 0L
+        if (s == null || duration <= 0L) {
+            progressBar.visibility = View.INVISIBLE
+            progressLabel.text = ""
+            return
+        }
+        val elapsed = if (s.isPlaying) {
+            android.os.SystemClock.elapsedRealtime() - s.positionUpdatedElapsedMs
+        } else {
+            0L
+        }
+        val position = (s.positionMs + elapsed).coerceIn(0L, duration)
+        progressBar.visibility = View.VISIBLE
+        progressBar.progress = ((position * PROGRESS_MAX) / duration).toInt()
+        progressLabel.text = "${clock(position)} / ${clock(duration)}"
+    }
+
+    private fun clock(ms: Long): String {
+        val total = ms / 1000
+        return "%d:%02d".format(total / 60, total % 60)
     }
 
     /**
@@ -319,6 +372,31 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
 
     // ------------------------------------------------------------------ helpers
 
+    /** A launcher icon that floats its app over the panel, with the name underneath. */
+    private fun appIcon(packageName: String, label: String): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            isClickable = true
+            setPadding(0, pad(6), 0, pad(6))
+            setOnClickListener { floatApp(packageName, label) }
+        }
+        box.addView(android.widget.ImageView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(pad(44), pad(44))
+            setImageDrawable(
+                runCatching { packageManager.getApplicationIcon(packageName) }.getOrNull()
+            )
+        })
+        box.addView(TextView(this).apply {
+            text = label
+            textSize = 11f
+            setTextColor(MUTED)
+            setPadding(0, pad(4), 0, 0)
+        })
+        return box
+    }
+
     private fun bigButton(label: String, onClick: () -> Unit) = Button(this).apply {
         text = label
         isAllCaps = false
@@ -335,7 +413,9 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         const val BACKGROUND = Color.BLACK
         const val FOREGROUND = Color.WHITE
         val MUTED = Color.parseColor("#9E9E9E")
-        const val CLOCK_INTERVAL_MS = 10_000L
+        /** Clock and track position share one tick. */
+        const val TICK_MS = 1_000L
+        const val PROGRESS_MAX = 1_000
 
         /** How wide our window must be, as a percentage of the display, to count as the anchor. */
         const val FULL_WIDTH_PERCENT = 90
