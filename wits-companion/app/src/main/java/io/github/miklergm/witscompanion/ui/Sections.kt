@@ -534,7 +534,28 @@ class CarStateSection(private val app: WitsCompanionApp) : MainActivity.Section 
             row("top package", state.topPackage)
             appendLine()
             appendLine("doors raw  " + state.doorsRaw.display() + "   (bitmask, undecoded)")
-            appendLine("radar raw  " + state.radarRaw.display() + "   (packed, undecoded)")
+            appendLine()
+
+            // PDC decode. The point of showing front and rear separately is to answer,
+            // by watching it while parking forward, whether can.radar carries front data
+            // at all outside reverse — the prerequisite for any forward-parking display.
+            val radar = io.github.miklergm.witscompanion.carstate.RadarReading.parse(
+                state.radarRaw.takeIf { it.isKnown }?.value
+            )
+            appendLine("PDC (can.radar = ${state.radarRaw.display()})")
+            if (radar == null) {
+                appendLine("  no reading")
+            } else {
+                val fl = io.github.miklergm.witscompanion.carstate.RadarReading.FRONT_LABELS
+                val rl = io.github.miklergm.witscompanion.carstate.RadarReading.REAR_LABELS
+                appendLine("  front " + fl.zip(radar.front).joinToString(" ") {
+                    "${it.first}=${it.second ?: "-"}"
+                } + (if (radar.anyFrontActive) "   <- ACTIVE" else ""))
+                appendLine("  rear  " + rl.zip(radar.rear).joinToString(" ") {
+                    "${it.first}=${it.second ?: "-"}"
+                } + (if (radar.anyRearActive) "   <- ACTIVE" else ""))
+                appendLine("  (0 = clear; larger = closer. Watch 'front' while parking forward.)")
+            }
             appendLine()
             appendLine("mcu        ${state.mcuVersion.display()}")
             appendLine("product id ${state.productId.display()}")
