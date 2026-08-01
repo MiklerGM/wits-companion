@@ -69,50 +69,64 @@ private fun Context.check(text: String, initial: Boolean, onChange: (Boolean) ->
 private fun Context.scroll(content: View) = ScrollView(this).apply { addView(content) }
 
 /**
- * A large launch tile: a title over a row of app icons, tappable. Used on Home so each
- * layout is one obvious thing to press rather than a wall of buttons.
+ * A compact launch card: app icons on the left, a short title on the right, tappable.
+ * Horizontal and rounded so a list of them reads as distinct cards without much height.
+ * [primary] gives the Cockpit card a stronger accent.
  */
 private fun Context.launchTile(
     title: String,
     packages: List<String>,
     subtitle: String? = null,
+    primary: Boolean = false,
     onClick: () -> Unit,
 ): View {
-    val tile = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(dp(16), dp(14), dp(16), dp(14))
+    val card = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(14), dp(12), dp(14), dp(12))
         isClickable = true
-        setBackgroundResource(android.R.drawable.list_selector_background)
-        // A hairline separator via a bottom-padded background is enough on a touch screen.
+        background = android.graphics.drawable.GradientDrawable().apply {
+            cornerRadius = dp(14).toFloat()
+            setColor(if (primary) Color.parseColor("#1E88E5") else Color.parseColor("#EDEDF2"))
+        }
         layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(8) }
         setOnClickListener { onClick() }
     }
-    tile.addView(TextView(this).apply {
-        text = title
-        textSize = 17f
-        setTypeface(typeface, Typeface.BOLD)
-    })
-    if (subtitle != null) {
-        tile.addView(TextView(this).apply {
-            text = subtitle; textSize = 12f
-            setPadding(0, dp(1), 0, 0)
-        })
-    }
+
     val icons = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
-        setPadding(0, dp(8), 0, 0)
+        gravity = Gravity.CENTER_VERTICAL
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { rightMargin = dp(12) }
     }
     packages.forEach { pkg ->
         val icon = runCatching { packageManager.getApplicationIcon(pkg) }.getOrNull() ?: return@forEach
         icons.addView(android.widget.ImageView(this).apply {
             setImageDrawable(icon)
-            layoutParams = LinearLayout.LayoutParams(dp(36), dp(36)).apply { rightMargin = dp(10) }
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply { rightMargin = dp(8) }
         })
     }
-    if (icons.childCount > 0) tile.addView(icons)
-    return tile
+    if (icons.childCount > 0) card.addView(icons)
+
+    val text = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+    }
+    text.addView(TextView(this).apply {
+        this.text = title
+        textSize = 16f
+        setTypeface(typeface, Typeface.BOLD)
+        setTextColor(if (primary) Color.WHITE else Color.parseColor("#1A1A1A"))
+    })
+    if (subtitle != null) text.addView(TextView(this).apply {
+        this.text = subtitle; textSize = 12f
+        setTextColor(if (primary) Color.parseColor("#DCEBFB") else Color.parseColor("#6E6E73"))
+    })
+    card.addView(text)
+    return card
 }
 
 // ------------------------------------------------------------------ Dashboard
@@ -126,36 +140,25 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
         val c = activity.column()
         val repo = app.layoutRepository
 
-        // --- Cockpit: the full driving surface (panel + one app floating over it). ---
-        c.addView(activity.heading("Cockpit"))
+        // Cockpit — the primary, accented card.
         c.addView(activity.launchTile(
-            title = "Open the Cockpit",
-            subtitle = "Your panel with the map floating over it — the driving screen",
+            title = "Cockpit",
+            subtitle = "map + panel",
             packages = listOfNotNull(cockpitFloatPackage()),
+            primary = true,
         ) { openCockpit(activity) })
 
-        // --- Layouts: one tile each, tap to apply. ---
-        c.addView(activity.heading("Side by side"))
+        // Side-by-side layouts, one card each, tap to apply.
         val tiled = repo.allPresets().filter { it.windows.size >= 2 && it.kind == PresetKind.TILED }
-        if (tiled.isEmpty()) {
-            c.addView(activity.body("No side-by-side layouts yet. Add one in the Layouts tab."))
-        }
         tiled.forEach { preset ->
             val installed = preset.windows.all { app.windowController.isLaunchable(it.packageName) }
-            val ratio = preset.splitFraction()?.let { "${(it * 100).toInt()} / ${100 - (it * 100).toInt()}" }
+            val ratio = preset.splitFraction()?.let { "${(it * 100).toInt()}/${100 - (it * 100).toInt()}" }
             c.addView(activity.launchTile(
                 title = tileTitle(preset),
-                subtitle = listOfNotNull(
-                    ratio,
-                    if (installed) null else "an app is not installed",
-                ).joinToString(" · ").ifEmpty { null },
+                subtitle = if (!installed) "not installed" else ratio,
                 packages = preset.windows.map { it.packageName },
             ) { applyFromHome(activity, preset) })
         }
-
-        c.addView(activity.body(
-            "\nManage this list — proportions, add or remove combinations — in the Layouts tab.",
-        ))
         return activity.scroll(c)
     }
 
