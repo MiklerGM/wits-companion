@@ -55,7 +55,8 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     private lateinit var trackView: TextView
     private lateinit var artistView: TextView
     private lateinit var playPauseButton: Button
-    private var hotspotButton: Button? = null
+    private var hotspotTile: LinearLayout? = null
+    private var hotspotText: TextView? = null
     private lateinit var artView: android.widget.ImageView
     private lateinit var progressBar: android.widget.ProgressBar
     private lateinit var progressLabel: TextView
@@ -88,23 +89,27 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
      * map. Falls back to the full width when no anchored preset is active.
      */
     private fun buildRoot(): View {
-        val reserved = reservedFractionLeft()
+        val reservation = reservation()
+        val reserved = reservation?.fraction ?: 0f
 
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(palette.background)
         }
 
-        if (reserved > 0f) {
-            // Empty spacer: this is where the map floats. Nothing may be drawn here.
-            row.addView(View(this), LinearLayout.LayoutParams(0, MATCH, reserved))
+        // Empty spacer where the map floats — on the same side as the map. Nothing may be
+        // drawn there. When the map is on the right the spacer follows the panel.
+        fun addSpacer() {
+            if (reserved > 0f) row.addView(View(this), LinearLayout.LayoutParams(0, MATCH, reserved))
         }
+        if (reservation?.side == MapSide.LEFT) addSpacer()
 
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(pad(20), pad(16), pad(20), pad(16))
         }
         row.addView(panel, LinearLayout.LayoutParams(0, MATCH, 1f - reserved))
+        if (reservation?.side == MapSide.RIGHT) addSpacer()
 
         clockView = TextView(this).apply {
             textSize = 34f; setTextColor(palette.foreground); typeface = Typeface.DEFAULT_BOLD
@@ -192,15 +197,22 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         // run through the car's amplifier), so a block of numbers on the driving surface
         // was clutter that could be misread. Keeping the panel to what is useful in motion.
 
-        // Hotspot status + one-tap toggle, so it need not be reached through the
-        // quick-settings shade (which takes two pulls). Hidden entirely if the platform
-        // cannot even report hotspot state.
+        // Hotspot as a coloured tile — green when on — so its state reads at a glance and
+        // it need not be reached through the quick-settings shade (two pulls). Hidden
+        // entirely if the platform cannot even report hotspot state.
         if (app.hotspotController.isSupported()) {
-            hotspotButton = Button(this).apply {
-                isAllCaps = false
+            hotspotText = TextView(this).apply { textSize = 15f; setTypeface(typeface, Typeface.BOLD) }
+            hotspotTile = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(pad(16), pad(12), pad(16), pad(12))
+                isClickable = true
                 setOnClickListener { toggleHotspot() }
+                layoutParams = LinearLayout.LayoutParams(MATCH, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    .apply { topMargin = pad(4) }
+                addView(hotspotText)
             }
-            panel.addView(hotspotButton)
+            panel.addView(hotspotTile)
             renderHotspot(app.hotspotController.state())
         }
 
@@ -241,13 +253,29 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
      * content into a sliver of a sliver. `[RUNTIME]` 2026-07-31: with a 50/50 tiled
      * layout the panel collapsed to about a quarter of the screen for exactly this reason.
      */
-    private fun reservedFractionLeft(): Float {
-        if (!fillsDisplay()) return 0f
+    private enum class MapSide { LEFT, RIGHT }
+    private data class Reservation(val side: MapSide, val fraction: Float)
+
+    /**
+     * Where the floating map sits and how much width it covers, so the panel leaves that
+     * strip empty on the correct side. The map can be anchored left or right (the split's
+     * swap); a window that is neither edge-flush reserves nothing (full-width panel).
+     * Only reserved when this activity actually fills the display (§ fillsDisplay).
+     */
+    private fun reservation(): Reservation? {
+        if (!fillsDisplay()) return null
         val preset = app.layoutRepository.lastAppliedPreset()
             ?.takeIf { it.kind == PresetKind.ANCHORED }
             ?: app.layoutRepository.preset(DefaultPresets.ID_MAPS_ANCHORED)
-            ?: return 0f
-        return preset.anchorReservedLeftFraction()
+            ?: return null
+        val window = preset.windows.firstOrNull { it.packageName != WitsPackages.SELF } ?: return null
+        val b = window.bounds
+        val cap = 0.8f
+        return when {
+            b.left <= 0.01f && b.right < 0.99f -> Reservation(MapSide.LEFT, b.right.coerceAtMost(cap))
+            b.right >= 0.99f && b.left > 0.01f -> Reservation(MapSide.RIGHT, (1f - b.left).coerceAtMost(cap))
+            else -> null
+        }
     }
 
     /** True when our window is (near enough) as wide as the whole display. */
@@ -264,7 +292,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         super.onStart()
         app.carStateRepository.addObserver(this)
         app.mediaRepository.addListener(this)
-        if (hotspotButton != null) {
+        if (hotspotTile != null) {
             app.hotspotController.observe(hotspotListener)
             renderHotspot(app.hotspotController.state())
         }
@@ -275,7 +303,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     override fun onStop() {
         app.carStateRepository.removeObserver(this)
         app.mediaRepository.removeListener(this)
-        if (hotspotButton != null) app.hotspotController.stopObserving()
+        if (hotspotTile != null) app.hotspotController.stopObserving()
         ui.removeCallbacks(clockTick)
         super.onStop()
     }
@@ -283,19 +311,32 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     private val hotspotListener = HotspotController.Listener { state -> ui.post { renderHotspot(state) } }
 
     private fun renderHotspot(state: HotspotController.State) {
-        val b = hotspotButton ?: return
-        val canToggle = app.hotspotController.canToggle()
-        b.text = when (state) {
-            HotspotController.State.ON -> "Hotspot: ON" + if (canToggle) "  (tap to turn off)" else ""
-            HotspotController.State.OFF -> "Hotspot: off" + if (canToggle) "  (tap to turn on)" else ""
-            HotspotController.State.TURNING_ON -> "Hotspot: turning on…"
-            HotspotController.State.TURNING_OFF -> "Hotspot: turning off…"
-            HotspotController.State.FAILED -> "Hotspot: failed"
-            HotspotController.State.UNKNOWN -> "Hotspot: —"
+        val tile = hotspotTile ?: return
+        val label = hotspotText ?: return
+        val on = state == HotspotController.State.ON
+        val transitioning = state == HotspotController.State.TURNING_ON ||
+            state == HotspotController.State.TURNING_OFF
+
+        // Green when on, neutral otherwise; the colour is the state at a glance.
+        val fill = when {
+            on -> HOTSPOT_ON
+            transitioning -> HOTSPOT_BUSY
+            else -> if (palette.night) Color.parseColor("#2A2A2E") else Color.parseColor("#E4E4EA")
         }
-        b.isEnabled = canToggle &&
-            state != HotspotController.State.TURNING_ON &&
-            state != HotspotController.State.TURNING_OFF
+        tile.background = android.graphics.drawable.GradientDrawable().apply {
+            cornerRadius = pad(12).toFloat(); setColor(fill)
+        }
+        label.text = when (state) {
+            HotspotController.State.ON -> "Hotspot  ·  ON"
+            HotspotController.State.OFF -> "Hotspot  ·  off"
+            HotspotController.State.TURNING_ON -> "Hotspot  ·  turning on…"
+            HotspotController.State.TURNING_OFF -> "Hotspot  ·  turning off…"
+            HotspotController.State.FAILED -> "Hotspot  ·  failed"
+            HotspotController.State.UNKNOWN -> "Hotspot  ·  —"
+        }
+        label.setTextColor(if (on || transitioning) Color.WHITE else palette.foreground)
+        tile.isEnabled = app.hotspotController.canToggle() && !transitioning
+        tile.alpha = if (tile.isEnabled) 1f else 0.5f
     }
 
     private fun toggleHotspot() {
@@ -514,6 +555,9 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
 
         /** How wide our window must be, as a percentage of the display, to count as the anchor. */
         const val FULL_WIDTH_PERCENT = 90
+
+        val HOTSPOT_ON = Color.parseColor("#2E7D32")   // green
+        val HOTSPOT_BUSY = Color.parseColor("#F9A825") // amber, transitioning
 
 
         val CLOCK = SimpleDateFormat("HH:mm", Locale.US)

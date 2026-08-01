@@ -296,11 +296,23 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
         c.addView(activity.heading("New layout"))
         c.addView(buildLayoutControls(activity))
 
-        // The editable list, as clean cards with a Delete on the ones you added.
+        // The editable list, as clean cards in the same adaptive grid as Home.
         c.addView(activity.heading("Your layouts"))
+        val grid = FlowLayout(activity).apply {
+            hGap = activity.dp(10); vGap = activity.dp(10)
+            setPadding(0, activity.dp(6), 0, 0)
+        }
         app.layoutRepository.allPresets()
             .filter { it.kind == PresetKind.TILED && it.windows.size >= 2 }
-            .forEach { c.addView(presetCard(activity, it)) }
+            .forEach { preset ->
+                val card = presetCard(activity, preset).apply {
+                    layoutParams = ViewGroup.MarginLayoutParams(
+                        activity.dp(380), ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
+                }
+                grid.addView(card)
+            }
+        c.addView(grid)
 
         return activity.scroll(c)
     }

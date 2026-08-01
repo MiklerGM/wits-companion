@@ -19,7 +19,7 @@ how concrete they are.
 
 ## Notification access
 
-- **Self-grant notification access from the app** (platform build). The vendor's system
+- **[DONE]** Self-grant notification access from the app (platform build). The vendor's system
   menu for notification access is unreachable on this unit, and the grant is lost on every
   reinstall, so it currently needs ADB. With the platform signature we can hold
   `WRITE_SECURE_SETTINGS` and append our listener component to
@@ -77,16 +77,16 @@ how concrete they are.
   bothers.
 - **Blue top strip in Cockpit** — reported, then found the panel is actually black and not
   showing through. Re-check only if it reappears.
-- **Panel reservation handles only a left-anchored map.** With the map swapped to the right,
+- **[DONE]** Panel reservation is now side-aware (was: only a left-anchored map). With the map swapped to the right,
   the reserve-left logic returns 0 and the panel goes full-width (content then risks sitting
   under the map). Make the reservation side-aware, or fix the map to one side.
 
 ## UI
 
-- **Reset on Home.** Add a reset entry to the Home tab (currently only in Settings) so the
+- **[DONE]** Reset on Home. Add a reset entry to the Home tab (currently only in Settings) so the
   "return everything to the vendor launcher" action is one tap from the landing screen.
   (`LayoutEngine.resetToVendorState()` already exists — just surface it as a Home tile/card.)
-- **"Your layouts" cards** could flow into the same adaptive grid as Home (currently a
+- **[DONE]** "Your layouts" cards flow into the same adaptive grid as Home (currently a
   single column).
 - **Cockpit layout** — user mentioned wanting to rearrange the blocks (clock / media / apps
   / hotspot); gather specifics.
