@@ -53,7 +53,6 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     private lateinit var stateView: TextView
     private lateinit var trackView: TextView
     private lateinit var artistView: TextView
-    private lateinit var volumeView: TextView
     private lateinit var playPauseButton: Button
     private lateinit var artView: android.widget.ImageView
     private lateinit var progressBar: android.widget.ProgressBar
@@ -186,23 +185,10 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         }
         panel.addView(switcher)
 
-        volumeView = TextView(this).apply {
-            textSize = 12f; setTextColor(palette.muted); typeface = Typeface.MONOSPACE
-            setPadding(0, pad(14), 0, 0)
-        }
-        panel.addView(volumeView)
-
-        // Measured 2026-07-31: neither the steering buttons nor the NBT knob changed the
-        // Android stream or wits_mcu:1, while source and reverse markers in the same
-        // session captured events normally. What is shown here is the head-unit stage,
-        // not what the ear hears — say so rather than let the number be misread.
-        panel.addView(TextView(this).apply {
-            text = "Head-unit stage only. Steering and NBT volume are handled by the " +
-                "car's amplifier and are not visible to Android."
-            textSize = 11f
-            setTextColor(palette.muted)
-            setPadding(0, pad(6), 0, 0)
-        })
+        // The volume readouts live in the Car/Signals tabs, not here. On this vehicle the
+        // value is the head-unit stage, not what the ear hears (steering and NBT volume
+        // run through the car's amplifier), so a block of numbers on the driving surface
+        // was clutter that could be misread. Keeping the panel to what is useful in motion.
 
         panel.addView(View(this), LinearLayout.LayoutParams(MATCH, 0, 1f))
 
@@ -266,7 +252,6 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         app.mediaRepository.addListener(this)
         ui.post(clockTick)
         onCarState(app.carStateRepository.state)
-        refreshVolume()
     }
 
     override fun onStop() {
@@ -285,7 +270,6 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             append("   ACC ").append(state.acc.display())
             if (state.reverseActive == true) append("   REVERSE")
         }
-        refreshVolume()
     }
 
     /** Delivered on the main thread by [MediaSessionRepository]. */
@@ -384,21 +368,6 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
 
     private fun toast(message: String) =
         android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_SHORT).show()
-
-    /**
-     * Read-only. The percentage is appended so the MCU line can be compared directly with
-     * the vendor launcher's own dial, which renders the same value as `low byte / 40`
-     * (`Id8UgCarModelFragment.updateVolume`, docs/audio-volume.md §3.2).
-     */
-    private fun refreshVolume() {
-        volumeView.text = app.signalExplorer.volumeReadings().joinToString("\n") { r ->
-            val value = r.value
-            val max = r.max
-            val percent =
-                if (value != null && max != null && max > 0) "  (${value * 100 / max}%)" else ""
-            "${r.domain.label.padEnd(24)} ${r.display()}$percent"
-        }
-    }
 
     // ------------------------------------------------------------------ helpers
 

@@ -70,7 +70,9 @@ private fun Context.scroll(content: View) = ScrollView(this).apply { addView(con
 // ------------------------------------------------------------------ Dashboard
 
 class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section {
-    override val title = "Dashboard"
+    // "Home", not "Dashboard": the driving dashboard is the Mode B panel
+    // (DashboardActivity). This tab is the configuration app's landing screen.
+    override val title = "Home"
 
     private lateinit var mediaText: TextView
     private lateinit var carText: TextView
@@ -82,6 +84,31 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
     override fun onCreateView(activity: MainActivity): View {
         this.activity = activity
         val c = activity.column()
+
+        // The driving surface is the first thing offered: this app is the setup screen,
+        // the panel is what you actually use. Starts Mode B (panel + map over it) if an
+        // anchored preset exists, otherwise just opens the panel.
+        c.addView(activity.heading("Driving panel"))
+        c.addView(Button(activity).apply {
+            text = "▶  Open the driving panel"
+            isAllCaps = false
+            textSize = 16f
+            setOnClickListener {
+                val anchored = app.layoutRepository.preset(DefaultPresets.ID_MAPS_ANCHORED)
+                if (anchored != null) {
+                    app.layoutEngine.apply(anchored, app.carStateRepository.state, Trigger.USER)
+                    app.layoutRepository.lastAppliedPresetId = anchored.id
+                }
+                activity.startActivity(android.content.Intent(activity, DashboardActivity::class.java))
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = activity.dp(6) }
+        })
+        c.addView(activity.body(
+            "The panel is the screen for driving. This app underneath is for setup — " +
+                "layouts, day/night, diagnostics."
+        ))
 
         c.addView(activity.heading("Media"))
         mediaText = activity.body("—")

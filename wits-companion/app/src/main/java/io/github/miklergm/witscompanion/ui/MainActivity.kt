@@ -38,10 +38,11 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        sections += DashboardSection(app)
+        // Primary tabs first (what you use), diagnostics last (Car / Signals / Debug).
+        sections += DashboardSection(app)   // Home
         sections += LayoutsSection(app)
+        sections += SettingsSection(app)    // Day/Night
         sections += CarStateSection(app)
-        sections += SettingsSection(app)
         sections += SignalExplorerSection(app)
         sections += DebugSection(app)
 
