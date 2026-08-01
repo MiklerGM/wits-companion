@@ -86,36 +86,61 @@ unit is platform-signed and uses `resizeTask`.
   correct. Needs extra stale-task cleanup before/while applying an anchored preset (park or
   fullscreen any freeform task not in the new layout, not just the last-applied set).
 
-## Layout mental model (needs formalization — user is still deciding)
+## Layout mental model (design discussion — pick up interactively)
 
 The current model: the **proportion slider** rewrites the split for *all* presets, and
-**"primary left/right"** (swap) flips which side the floating app takes. Two rough edges the
-user hit on 2026-08-01, flagged as "to think about", not yet a decided change:
+**"primary left/right"** (swap) flips which side the floating app takes.
 
-- **Changing the slider also changes how the Cockpit looks.** Expected in hindsight (the
-  Cockpit panel reserves the strip the floating app covers, which the split defines), but
-  surprising in the moment. Consider decoupling, or making it visibly obvious that the slider
-  drives the Cockpit reservation too.
-- **Changing "primary left/right" does not re-position an already-floating map in the
-  Cockpit.** The Cockpit's reservation and the floating map come from the *last-applied*
-  anchored preset (baked bounds); flipping the global swap doesn't re-float the current map,
-  so it stays on its old side until the app is re-picked. Decide the intended behaviour:
-  either re-apply the anchored preset when swap changes, or make swap a per-apply choice.
-- Broader: the user finds swap "works strangely for everything" and wants a simpler mental
-  model. Gather how they'd prefer to think about it (pick layout first, then apps? one split
-  that means the same thing everywhere?) before changing code.
+**Audit (2026-08-01): the geometry math is correct, and now well covered by tests**
+(`PresetKindAndCustomisationTest`: `withGeometry`/`mirrored`/`withSplit`, both kinds, swap,
+clamping, reservation). So the reported "swap works strangely for everything" is **not** a
+geometry bug — it is *propagation*, plus emulator limits:
 
-## Brightness (Cockpit control — feasibility to verify on car)
+- **Changing swap/split does not update an already-open Cockpit or an already-floating map.**
+  Nothing re-applies on the change; the map stays put until the app is re-picked. This is the
+  real "primary left/right didn't move the map" report. **This is the design decision to make
+  interactively:** should changing the slider/side re-apply the current layout immediately, or
+  should swap be a per-apply choice? (Leaning: re-apply on change — it matches "the slider
+  changes all presets".) Not implemented pending that call.
+- **On the emulator specifically, re-applying to an already-running app doesn't move it:**
+  `setLaunchBounds` only positions a *new* task, so relaunching live Maps via the unprivileged
+  path is a no-op on position. On the head unit the privileged `resizeTask` *does* move it, so
+  this particular strangeness is largely emulator-only — another reason to settle the model on
+  the car, not the emulator.
+- **Changing the slider also changes how the Cockpit looks** — expected (the panel reserves
+  the strip the floating app covers, which the split defines), but surprising. Decide whether
+  to make that visibly obvious or decouple.
 
-- **A brightness control in the Cockpit: one or two tiles that nudge ±~15–25%.** For when
-  the auto night level is too bright or the day level too dim. Relative nudges (−/+) from the
-  current value fit driving better than a slider. **Blocked on one on-car check:** does this
-  head unit's panel backlight follow Android's `Settings.System.SCREEN_BRIGHTNESS`, or is it
-  driven by the vendor MCU (day/night tracks the car's illumination line)? Change brightness
-  manually in vendor settings and watch `SCREEN_BRIGHTNESS` + the signal recorder to see
-  which moves. If it's the framework setting, we can write it (platform signature /
-  `WRITE_SETTINGS`); if it's the MCU, we'd need the vendor channel and the change may be
-  re-asserted on the next illumination event.
+**Fixed along the way (not design):** the switcher's `anchored_<pkg>` presets are not in
+`allPresets`, so after floating Chrome/Spotify the highlight fell back to the map on an
+activity recreation (e.g. a day/night flip). Now the floating package is remembered directly
+(`LayoutRepository.cockpitFloatingPackage`).
+
+## Cockpit: play hides the map (needs on-car confirm)
+
+- Tapping **play** in the Cockpit occasionally hid the floating map (companion task came to
+  front, the freeform map went to back). Reproduced once on the emulator, not reliably; `prev`
+  and empty-panel taps never did it. Cause is almost certainly emulator-specific: Spotify is
+  **logged out** there ("Please login"), so a `play()` command makes it grab focus / open its
+  login UI, which reorders the windows. On the head unit (logged-in, actually playing) `play`/
+  `pause` is a pure transport toggle with no window side effect. **Confirm in the car.** If it
+  does happen there, the fix is to **pin the map tile always-on-top** (privileged path) so a
+  panel tap can't push it behind — no relaunch, no route loss — rather than re-floating after
+  every transport tap.
+
+## Brightness (Cockpit control)
+
+- **[DONE, one on-car check left]** A brightness − / + control in the Cockpit that nudges
+  ±20 % of the range. Built as `BrightnessController` + a tile in the panel; writes
+  `Settings.System.SCREEN_BRIGHTNESS` after switching off auto-brightness, floors at ~5 %
+  (never black in motion), caps at 100 %. Validated on the emulator (2026-08-01): +/− step by
+  51/255, floor holds at 12, label tracks. `WRITE_SETTINGS` is already declared (granted by
+  signature on the platform build; on the emulator granted via `appops set … WRITE_SETTINGS
+  allow`). Covered by `BrightnessControllerTest`.
+  - **On-car check that remains:** does this panel's backlight actually follow the framework
+    `SCREEN_BRIGHTNESS`, or the vendor MCU (day/night tracks the illumination line)? Tap the
+    tiles in the car — if the panel dims/brightens, done; if it snaps back on the next
+    illumination event, the MCU owns it and we'd need the vendor channel instead.
 - **No ambient-light sensor to auto-tune from.** These units have no photodiode; day/night
   comes from the car's illumination (headlight) line over CAN, which is why the theme flips
   with the headlights, not the clock. `SensorManager` has no `TYPE_LIGHT` on the hardware
@@ -125,8 +150,14 @@ user hit on 2026-08-01, flagged as "to think about", not yet a decided change:
 
 ## Cockpit / panel polish
 
-- **[DONE]** Floating-app switcher shows which app is active (rounded highlight + bold
-  label) and the labels are centre-aligned (were drifting sideways). 2026-08-01.
+- **[DONE]** Floating-app switcher shows which app is active — a filled pill with an outline
+  and a bold label, the other tiles dimmed so the active one is obvious at a glance; the
+  tapped tile pops in so the focus visibly moves onto it. Labels are centre-aligned (were
+  drifting sideways). 2026-08-01.
+- **[DONE]** Media reworked into a single rounded card tinted by what is playing: album-art
+  accent (`AlbumAccent`), brand-colour fallback (Spotify/YouTube/…) + the player's icon when a
+  source is live but artless, a filled accent play button, centred transport. Real album art
+  needs a logged-in player (validate on the car with Spotify). 2026-08-01.
 
 - **Flicker artifact in Spotify's top-left, just under the status bar** — seen only with
   Spotify tiled, not Maps. Likely a freeform caption/handle or a Spotify overlay redrawing.

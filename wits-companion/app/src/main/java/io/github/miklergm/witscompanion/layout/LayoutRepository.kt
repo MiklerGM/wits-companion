@@ -80,6 +80,18 @@ class LayoutRepository(context: Context) {
 
     fun lastAppliedPreset(): LayoutPreset? = lastAppliedPresetId?.let { preset(it) }
 
+    /**
+     * The package currently floating over the Cockpit panel, remembered directly.
+     *
+     * The switcher's on-the-fly presets have ids like `anchored_<pkg>` that are not stored
+     * in [allPresets], so [lastAppliedPreset] cannot resolve them back to a package. This
+     * survives an activity recreation (e.g. a day/night flip) so the switcher keeps the right
+     * tile highlighted instead of falling back to the map.
+     */
+    var cockpitFloatingPackage: String?
+        get() = prefs.getString(KEY_COCKPIT_FLOAT, null)
+        set(value) = prefs.edit().putString(KEY_COCKPIT_FLOAT, value).apply()
+
     // ------------------------------------------------------------- preferences
     // All automatic behaviours default to OFF. The user opts in explicitly.
 
@@ -155,6 +167,7 @@ class LayoutRepository(context: Context) {
         const val PREFS = "wits_companion_layouts"
         const val KEY_CUSTOM_PRESETS = "custom_presets"
         const val KEY_LAST_PRESET = "last_preset"
+        const val KEY_COCKPIT_FLOAT = "cockpit_floating_package"
         const val KEY_RESTORE_ON_RESUME = "restore_on_resume"
         const val KEY_RESTORE_ON_ACC = "restore_on_acc"
         const val KEY_RESTORE_ON_SOURCE = "restore_on_android_source"

@@ -46,6 +46,8 @@ class WitsCompanionApp : Application() {
         private set
     lateinit var hotspotController: io.github.miklergm.witscompanion.wits.HotspotController
         private set
+    lateinit var brightnessController: io.github.miklergm.witscompanion.wits.BrightnessController
+        private set
     lateinit var reverseGuard: ReverseGuard
         private set
     lateinit var rateLimiter: ActionRateLimiter
@@ -90,6 +92,7 @@ class WitsCompanionApp : Application() {
         )
         nightModeController = WitsNightModeController(this, rateLimiter, eventLogger)
         hotspotController = io.github.miklergm.witscompanion.wits.HotspotController(this, eventLogger)
+        brightnessController = io.github.miklergm.witscompanion.wits.BrightnessController(this, eventLogger)
 
         recoveryCoordinator = LayoutRecoveryCoordinator(
             appContext = this,

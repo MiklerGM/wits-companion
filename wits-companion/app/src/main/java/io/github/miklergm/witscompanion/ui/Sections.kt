@@ -259,6 +259,8 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
         if (anchored != null) {
             app.layoutEngine.apply(anchored, app.carStateRepository.state, Trigger.USER)
             app.layoutRepository.lastAppliedPresetId = anchored.id
+            app.layoutRepository.cockpitFloatingPackage =
+                anchored.windows.firstOrNull { it.packageName != WitsPackages.SELF }?.packageName
         }
         activity.startActivity(android.content.Intent(activity, DashboardActivity::class.java))
     }

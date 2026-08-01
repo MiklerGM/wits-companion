@@ -19,6 +19,7 @@ import io.github.miklergm.witscompanion.layout.PresetKind
 import io.github.miklergm.witscompanion.media.MediaSessionRepository
 import io.github.miklergm.witscompanion.media.MediaSnapshot
 import io.github.miklergm.witscompanion.safety.Trigger
+import io.github.miklergm.witscompanion.wits.BrightnessController
 import io.github.miklergm.witscompanion.wits.HotspotController
 import io.github.miklergm.witscompanion.wits.WitsPackages
 import java.text.SimpleDateFormat
@@ -60,6 +61,8 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     private lateinit var mediaCard: LinearLayout
     private var hotspotTile: LinearLayout? = null
     private var hotspotText: TextView? = null
+    private var brightnessTile: LinearLayout? = null
+    private var brightnessLabel: TextView? = null
     private lateinit var artView: android.widget.ImageView
     private lateinit var progressBar: android.widget.ProgressBar
     private lateinit var progressLabel: TextView
@@ -247,6 +250,32 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             renderHotspot(app.hotspotController.state())
         }
 
+        // Brightness as a relative − / + control (no slider): a couple of taps to soften a
+        // too-bright night or lift a too-dim day. There is no ambient-light sensor on this
+        // unit, so nothing can auto-tune it — day/night is the CAN illumination line.
+        val brightLabel = TextView(this).apply {
+            textSize = 15f; setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER; setTextColor(palette.foreground)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        brightnessLabel = brightLabel
+        brightnessTile = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(pad(8), pad(4), pad(8), pad(4))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = pad(12).toFloat()
+                setColor(if (palette.night) Color.parseColor("#161618") else Color.parseColor("#F0F0F3"))
+            }
+            layoutParams = LinearLayout.LayoutParams(MATCH, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { topMargin = pad(8) }
+            addView(transportButton("−", emphasised = false) { stepBrightness(dim = true) })
+            addView(brightLabel)
+            addView(transportButton("+", emphasised = false) { stepBrightness(dim = false) })
+        }
+        panel.addView(brightnessTile)
+        renderBrightness()
+
         panel.addView(View(this), LinearLayout.LayoutParams(MATCH, 0, 1f))
 
         // Settings and a one-tap reset side by side. Reset is on the panel deliberately:
@@ -382,6 +411,23 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
                 if (!ok) toast("Hotspot change failed")
                 renderHotspot(app.hotspotController.state())
             }
+        }
+    }
+
+    private fun renderBrightness() {
+        val label = brightnessLabel ?: return
+        val pct = app.brightnessController.percent()
+        label.text = if (pct != null) "Brightness · $pct%" else "Brightness"
+    }
+
+    private fun stepBrightness(dim: Boolean) {
+        when (val r = if (dim) app.brightnessController.dim() else app.brightnessController.brighten()) {
+            is BrightnessController.Result.Written -> brightnessLabel?.text = "Brightness · ${r.percent}%"
+            BrightnessController.Result.PermissionRequired -> {
+                toast("Allow ‘modify system settings’ to control brightness")
+                runCatching { startActivity(app.brightnessController.permissionIntent()) }
+            }
+            is BrightnessController.Result.Error -> toast("Brightness: ${r.message}")
         }
     }
 
@@ -557,7 +603,11 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         when (val r = app.layoutEngine.apply(preset, app.carStateRepository.state, Trigger.USER)) {
             is LayoutEngine.Result.Applied -> {
                 app.layoutRepository.lastAppliedPresetId = preset.id
-                switcherTiles.forEach { (pkg, tile) -> setTileSelected(tile, pkg == packageName) }
+                app.layoutRepository.cockpitFloatingPackage = packageName
+                // Move the highlight onto the chosen app, popping the one just tapped.
+                switcherTiles.forEach { (pkg, tile) ->
+                    setTileSelected(tile, pkg == packageName, animate = pkg == packageName)
+                }
                 toast("$label over panel")
             }
             is LayoutEngine.Result.Refused -> toast("Refused: ${r.reason}")
@@ -584,13 +634,16 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     }
 
     /**
-     * Which app currently floats over the panel, to highlight its tile. The same preset
-     * resolution as [reservation]: the last-applied anchored preset, else the default map.
+     * Which app currently floats over the panel, to highlight its tile. Prefers the package
+     * remembered directly (survives an activity recreation and resolves the switcher's
+     * `anchored_<pkg>` presets, which are not in allPresets); falls back to the last-applied
+     * anchored preset, then the default map.
      */
     private fun currentFloatingPackage(): String? =
-        (app.layoutRepository.lastAppliedPreset()?.takeIf { it.kind == PresetKind.ANCHORED }
-            ?: app.layoutRepository.preset(DefaultPresets.ID_MAPS_ANCHORED))
-            ?.windows?.firstOrNull { it.packageName != WitsPackages.SELF }?.packageName
+        app.layoutRepository.cockpitFloatingPackage
+            ?: (app.layoutRepository.lastAppliedPreset()?.takeIf { it.kind == PresetKind.ANCHORED }
+                ?: app.layoutRepository.preset(DefaultPresets.ID_MAPS_ANCHORED))
+                ?.windows?.firstOrNull { it.packageName != WitsPackages.SELF }?.packageName
 
     /**
      * A compact app tile: a centred icon over a centred label, in a fixed-width box. The
@@ -626,18 +679,31 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         return box
     }
 
-    /** Marks a switcher tile as the active floating app: a rounded highlight and bold label. */
-    private fun setTileSelected(tile: LinearLayout, selected: Boolean) {
+    /**
+     * Marks a switcher tile as the active floating app. The selected tile gets a filled pill
+     * with an outline and a bold label; the others are dimmed so the active one is obvious at
+     * a glance. When [animate] is set, the tile pops in — a small motion so a tap visibly
+     * *moves the focus* onto the app just chosen.
+     */
+    private fun setTileSelected(tile: LinearLayout, selected: Boolean, animate: Boolean = false) {
         tile.background = if (selected) {
             android.graphics.drawable.GradientDrawable().apply {
-                cornerRadius = pad(14).toFloat()
-                setColor(if (palette.night) Color.parseColor("#26FFFFFF") else Color.parseColor("#14000000"))
+                cornerRadius = pad(16).toFloat()
+                setColor(if (palette.night) Color.parseColor("#33FFFFFF") else Color.parseColor("#1F000000"))
                 setStroke(pad(2), palette.foreground)
             }
         } else null
+        tile.alpha = if (selected) 1f else 0.55f
         (tile.getChildAt(1) as? TextView)?.apply {
             setTextColor(if (selected) palette.foreground else palette.muted)
             setTypeface(typeface, if (selected) Typeface.BOLD else Typeface.NORMAL)
+        }
+        if (selected && animate) {
+            tile.scaleX = 0.88f; tile.scaleY = 0.88f
+            tile.animate().scaleX(1f).scaleY(1f).setDuration(150L).start()
+        } else {
+            tile.animate().cancel()
+            tile.scaleX = 1f; tile.scaleY = 1f
         }
     }
 

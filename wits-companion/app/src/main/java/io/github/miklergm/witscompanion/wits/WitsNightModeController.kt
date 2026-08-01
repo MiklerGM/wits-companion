@@ -11,9 +11,9 @@ import io.github.miklergm.witscompanion.safety.GuardVerdict
 /**
  * Reads and writes `Settings.System/wits_night_mode`.
  *
- * This is the ONLY setting the companion ever writes. It does not touch screen
- * brightness, MCU PWM dimming, `wits_skin`, or navigation day/night broadcasts —
- * those are separate mechanisms (docs/night-mode.md §4).
+ * Scope: this touches only `wits_night_mode`. It does not change MCU PWM dimming,
+ * `wits_skin`, or navigation day/night broadcasts (docs/night-mode.md §4). Screen
+ * brightness is a separate, user-driven control — see [BrightnessController].
  */
 class WitsNightModeController(
     private val appContext: Context,
