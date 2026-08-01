@@ -119,15 +119,21 @@ class LayoutEngine(
             GuardVerdict.Allowed -> Unit
         }
 
-        // 3. Rate limit.
-        when (val verdict = rateLimiter.check(
-            ActionRateLimiter.KEY_LAYOUT, ActionRateLimiter.LAYOUT_APPLY
-        )) {
-            is GuardVerdict.Blocked -> {
-                logger?.log("layout", "apply", result = "rate_limited:${verdict.reason}")
-                return Result.Refused(verdict.reason)
+        // 3. Rate limit — automatic triggers only. A deliberate user tap must never be
+        //    refused: rapid taps used to raise "rate limit" toasts and, because each apply
+        //    supersedes the previous one mid-sequence, could leave a half-applied layout.
+        //    The generation token already makes the last tap win cleanly, so user applies
+        //    are not throttled; the limiter still guards against automatic-restore loops.
+        if (trigger != Trigger.USER) {
+            when (val verdict = rateLimiter.check(
+                ActionRateLimiter.KEY_LAYOUT, ActionRateLimiter.LAYOUT_APPLY
+            )) {
+                is GuardVerdict.Blocked -> {
+                    logger?.log("layout", "apply", result = "rate_limited:${verdict.reason}")
+                    return Result.Refused(verdict.reason)
+                }
+                GuardVerdict.Allowed -> Unit
             }
-            GuardVerdict.Allowed -> Unit
         }
 
         val warnings = issues.filter { it.severity == LayoutIssue.Severity.WARNING }

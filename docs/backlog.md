@@ -27,6 +27,35 @@ how concrete they are.
   when privileged, falling back to the system intent otherwise. (Manifest permission +
   `MediaSessionRepository.grantSelf()`.)
 
+## Vendor integration to explore (offline)
+
+- **"Car Device" source / transitions.** The vendor launcher has a "Car Device" tile and
+  source transitions. Investigate what it switches to and whether a clean, safe entry point
+  is worth surfacing (we removed the old OEM/Android buttons because they were broken).
+- **Vendor dashboard with car metrics.** The default launcher has a dashboard that pulls
+  some vehicle readings. Study which properties it reads and whether any are worth showing
+  in the Cockpit (keeping to what is genuinely useful in motion — speed/doors are on the
+  cluster/HUD already).
+
+## Status bar / top strip
+
+- **Hide / reveal the top bar.** The vendor 99 px top strip can be hidden and pulled back
+  down. Unclear yet whether the Cockpit wants this (more screen for the map) — decide, then
+  see if we can drive it (likely `SYSTEM_UI_FLAG_*` / WindowInsetsController from a
+  full-screen Cockpit, or a vendor call).
+- **Top bar colour.** The vendor's 99 px top strip (home / clock / recents / back) has its
+  own colour that does not match the app or the Cockpit. See whether it can be themed
+  (status-bar colour is a per-window property; with the platform signature there may be more
+  reach) or at least made consistent with the panel.
+
+## Hotspot
+
+- **Toggling the hotspot closes the focused app.** Clicking hotspot on/off in the Cockpit
+  turns off / hides whatever app was in focus (e.g. the map). Likely a side effect of
+  `TetheringManager.start/stopTethering` on the vendor ROM (Wi-Fi station/AP transition or a
+  focus/window change), not the button itself. Needs on-car logcat around the toggle. Until
+  understood, consider re-asserting the layout after a toggle, or gating the toggle.
+
 ## Cockpit / panel polish
 
 - **Flicker artifact in Spotify's top-left, just under the status bar** — seen only with
@@ -42,6 +71,9 @@ how concrete they are.
 
 ## UI
 
+- **Reset on Home.** Add a reset entry to the Home tab (currently only in Settings) so the
+  "return everything to the vendor launcher" action is one tap from the landing screen.
+  (`LayoutEngine.resetToVendorState()` already exists — just surface it as a Home tile/card.)
 - **"Your layouts" cards** could flow into the same adaptive grid as Home (currently a
   single column).
 - **Cockpit layout** — user mentioned wanting to rearrange the blocks (clock / media / apps
