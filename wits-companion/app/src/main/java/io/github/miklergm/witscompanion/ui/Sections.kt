@@ -140,7 +140,7 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
         val c = activity.column()
         val repo = app.layoutRepository
 
-        // Cockpit — the primary, accented card.
+        // Cockpit — the primary, accented card, spanning the full width.
         c.addView(activity.launchTile(
             title = "Cockpit",
             subtitle = "map + panel",
@@ -148,17 +148,26 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
             primary = true,
         ) { openCockpit(activity) })
 
-        // Side-by-side layouts, one card each, tap to apply.
-        val tiled = repo.allPresets().filter { it.windows.size >= 2 && it.kind == PresetKind.TILED }
-        tiled.forEach { preset ->
+        // Side-by-side layouts flow into as many columns as the width allows: a grid on the
+        // wide head-unit display, a single column on a narrow one.
+        val grid = FlowLayout(activity).apply {
+            hGap = activity.dp(10); vGap = activity.dp(10)
+            setPadding(0, activity.dp(10), 0, 0)
+        }
+        val tileWidth = activity.dp(360)
+        repo.allPresets().filter { it.windows.size >= 2 && it.kind == PresetKind.TILED }.forEach { preset ->
             val installed = preset.windows.all { app.windowController.isLaunchable(it.packageName) }
             val ratio = preset.splitFraction()?.let { "${(it * 100).toInt()}/${100 - (it * 100).toInt()}" }
-            c.addView(activity.launchTile(
+            val card = activity.launchTile(
                 title = tileTitle(preset),
                 subtitle = if (!installed) "not installed" else ratio,
                 packages = preset.windows.map { it.packageName },
-            ) { applyFromHome(activity, preset) })
+            ) { applyFromHome(activity, preset) }
+            // Fixed width so the flow can grid them; height wraps content.
+            card.layoutParams = ViewGroup.MarginLayoutParams(tileWidth, ViewGroup.LayoutParams.WRAP_CONTENT)
+            grid.addView(card)
         }
+        c.addView(grid)
         return activity.scroll(c)
     }
 
