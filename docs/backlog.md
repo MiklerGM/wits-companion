@@ -56,6 +56,18 @@ how concrete they are.
   focus/window change), not the button itself. Needs on-car logcat around the toggle. Until
   understood, consider re-asserting the layout after a toggle, or gating the toggle.
 
+## Layout placement (needs on-car re-test)
+
+- **Spotify stretches to full width after tiling.** Spotify launches at the given bounds
+  then grows itself to full width, covering the layout. Fix applied but untested on the car:
+  the retry pass now re-asserts geometry with `resizeTask` on the privileged path (it was a
+  no-op there before), which should pull Spotify back. Verify, and if it still fights,
+  consider a short watcher that re-resizes it until it settles.
+- **Cockpit shows a stale fullscreen app on the first open after churn.** After messy rapid
+  taps, opening the Cockpit first showed a leftover fullscreen Spotify; second try was
+  correct. Needs extra stale-task cleanup before/while applying an anchored preset (park or
+  fullscreen any freeform task not in the new layout, not just the last-applied set).
+
 ## Cockpit / panel polish
 
 - **Flicker artifact in Spotify's top-left, just under the status bar** — seen only with

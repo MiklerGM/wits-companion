@@ -271,18 +271,26 @@ class LayoutEngine(
                 // resetting it.
                 if (window.packageName in preserveLive) return@forEachIndexed
                 val pixels = window.bounds.toPixels(area)
-                // Launches only — deliberately no geometry phase.
-                //
-                // CHANGE_WINDOW is exclusive: re-sending it would hide every tile the
-                // initial pass has already placed, so each retry would flash the layout.
-                // A launch is inclusive and carries the bounds itself through
-                // ActivityOptions.setLaunchBounds, so it still repairs a tile that never
-                // became visible, without disturbing the ones that did.
+                // What a retry does depends on the path:
+                //  - Privileged: re-assert the geometry with resizeTask. Some apps (Spotify)
+                //    launch at the given bounds and then grow themselves to full width; a
+                //    delayed resizeTask pulls the now-visible tile back to where it belongs.
+                //    `launchPackage` is a no-op when privileged, so without this the retry
+                //    did nothing and the tile stayed stretched.
+                //  - Unprivileged: launch only. CHANGE_WINDOW is exclusive — re-sending it
+                //    would hide the other tiles and flash the layout — whereas an inclusive
+                //    launch carries the bounds itself and repairs a tile that never appeared.
                 handler.postDelayed({
                     if (stillValid(myGeneration, "retry_visible", window.packageName) &&
                         windowController.isLaunchable(window.packageName)
                     ) {
-                        windowController.launchPackage(window.packageName, pixels, window.windowMode)
+                        if (windowController.isPrivileged) {
+                            windowController.applyWindow(
+                                WitsWindowController.WindowRequest(window.packageName, pixels, window.windowMode)
+                            )
+                        } else {
+                            windowController.launchPackage(window.packageName, pixels, window.windowMode)
+                        }
                     }
                 }, RETRY_TOKEN, passStart + index * LAUNCH_DELAY_MS)
             }
