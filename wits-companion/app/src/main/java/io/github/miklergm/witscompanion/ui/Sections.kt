@@ -215,70 +215,24 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
 
     override fun onCreateView(activity: MainActivity): View {
         val c = activity.column()
-        val repo = app.layoutRepository
 
-        // ------------------------------------------------------------- geometry
-        // One control for the proportion, shared by every combination of apps. Nothing
-        // here re-inflates the section: rebuilding it threw the ScrollView back to the
-        // top on every tap, which made adjusting the ratio needlessly annoying.
-        c.addView(activity.heading("Proportion"))
-        geometryLabel = activity.body("", mono = true)
-        c.addView(geometryLabel)
-
-        c.addView(android.widget.SeekBar(activity).apply {
-            max = SPLIT_STEPS
-            progress = splitToProgress(repo.split)
-            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: android.widget.SeekBar, p: Int, fromUser: Boolean) {
-                    // Live feedback while dragging; persisted only when the user lets go.
-                    updateGeometryLabel(progressToSplit(p))
-                }
-
-                override fun onStartTrackingTouch(sb: android.widget.SeekBar) = Unit
-
-                override fun onStopTrackingTouch(sb: android.widget.SeekBar) {
-                    repo.split = progressToSplit(sb.progress)
-                }
-            })
-        })
-
-        swapButton = activity.button("") {
-            repo.swapped = !repo.swapped
-            updateGeometryLabel(repo.split)
-        }
-        c.addView(swapButton)
-        updateGeometryLabel(repo.split)
-
-        c.addView(activity.body(
-            "The proportion applies to whichever combination you pick below. " +
-                "Changing it does not move any window until you apply a combination."
-        ))
-
-        // ------------------------------------------------------- build a layout
-        c.addView(activity.heading("Build a layout"))
+        // One coherent creator: pick two apps, set the proportion, then Apply or Save.
+        c.addView(activity.heading("New layout"))
         c.addView(buildLayoutControls(activity))
 
-        // ----------------------------------------------------- saved & built-in
+        // The editable list, as clean cards with a Delete on the ones you added.
         c.addView(activity.heading("Your layouts"))
-        c.addView(activity.body(
-            "Tap to apply, or launch them from the Home tab. Auto-restore, autostart and " +
-                "reset moved to the Settings tab."
-        ))
-        app.layoutRepository.allPresets().forEach { preset ->
-            c.addView(presetRow(activity, preset))
-        }
+        app.layoutRepository.allPresets()
+            .filter { it.kind == PresetKind.TILED && it.windows.size >= 2 }
+            .forEach { c.addView(presetCard(activity, it)) }
 
         return activity.scroll(c)
     }
 
-    /**
-     * Pick two apps and apply them at the current proportion, or save the pair as a
-     * reusable preset. Seeded from the vendor's own nav/music choices so the obvious apps
-     * are at the top without the user re-picking what they already set in system settings.
-     */
+    /** Two app pickers, the proportion slider, and Apply / Save — the whole creator. */
     private fun buildLayoutControls(activity: MainActivity): View {
         val box = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-
+        val repo = app.layoutRepository
         val catalog = app.appCatalog
         val suggested = catalog.suggestedPackages()
         if (suggested.size < 2) {
@@ -287,15 +241,6 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
         }
         val labels = suggested.map { catalog.labelFor(it) }
         val defaults = catalog.vendorDefaults()
-        if (defaults.any) {
-            box.addView(activity.body(
-                "Seeded from your vendor settings: " +
-                    listOfNotNull(
-                        defaults.navigation?.let { "nav = ${catalog.labelFor(it)}" },
-                        defaults.music?.let { "music = ${catalog.labelFor(it)}" },
-                    ).joinToString(", ").ifEmpty { "—" }
-            ))
-        }
 
         fun spinner(initial: Int) = android.widget.Spinner(activity).apply {
             adapter = android.widget.ArrayAdapter(
@@ -303,28 +248,52 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
             )
             setSelection(initial.coerceIn(0, labels.lastIndex))
         }
-
-        // Left defaults to the nav app (or the first suggestion); right to the music app.
         val leftInit = defaults.navigation?.let { suggested.indexOf(it) }?.takeIf { it >= 0 } ?: 0
         val rightInit = defaults.music?.let { suggested.indexOf(it) }?.takeIf { it >= 0 }
             ?: (if (suggested.size > 1) 1 else 0)
 
-        box.addView(activity.body("Left / primary"))
-        val left = spinner(leftInit); box.addView(left)
-        box.addView(activity.body("Right / secondary"))
-        val right = spinner(rightInit); box.addView(right)
+        val left = spinner(leftInit)
+        val right = spinner(rightInit)
+        box.addView(activity.body("Left app"))
+        box.addView(left)
+        box.addView(activity.body("Right app"))
+        box.addView(right)
 
-        val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+        // Proportion, inline. Persisted only on release; the label updates live.
+        geometryLabel = activity.body("", mono = true).apply { setPadding(0, activity.dp(10), 0, 0) }
+        box.addView(geometryLabel)
+        box.addView(android.widget.SeekBar(activity).apply {
+            max = SPLIT_STEPS
+            progress = splitToProgress(repo.split)
+            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: android.widget.SeekBar, p: Int, fromUser: Boolean) =
+                    updateGeometryLabel(progressToSplit(p))
+                override fun onStartTrackingTouch(sb: android.widget.SeekBar) = Unit
+                override fun onStopTrackingTouch(sb: android.widget.SeekBar) {
+                    repo.split = progressToSplit(sb.progress)
+                }
+            })
+        })
+        swapButton = activity.button("") {
+            repo.swapped = !repo.swapped
+            updateGeometryLabel(repo.split)
+        }
+        box.addView(swapButton)
+        updateGeometryLabel(repo.split)
+
         fun chosen(): Pair<String, String> =
             suggested[left.selectedItemPosition] to suggested[right.selectedItemPosition]
+        fun preset() = chosen().let { (l, r) ->
+            DefaultPresets.tiledFor(l, r, catalog.labelFor(l), catalog.labelFor(r))
+        }
 
+        val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
         row.addView(Button(activity).apply {
             text = "Apply"; isAllCaps = false
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
                 val (l, r) = chosen()
-                if (l == r) { activity.toast("Pick two different apps"); return@setOnClickListener }
-                applyPreset(activity, DefaultPresets.tiledFor(l, r, catalog.labelFor(l), catalog.labelFor(r)))
+                if (l == r) activity.toast("Pick two different apps") else applyPreset(activity, preset())
             }
         })
         row.addView(Button(activity).apply {
@@ -333,64 +302,37 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
             setOnClickListener {
                 val (l, r) = chosen()
                 if (l == r) { activity.toast("Pick two different apps"); return@setOnClickListener }
-                app.layoutRepository.saveCustomPreset(
-                    DefaultPresets.tiledFor(l, r, catalog.labelFor(l), catalog.labelFor(r))
-                )
+                app.layoutRepository.saveCustomPreset(preset())
                 activity.toast("Saved"); activity.refreshCurrentSection()
             }
         })
         box.addView(row)
-        box.addView(activity.body("Uses the proportion set above. Save adds it to the list below."))
         return box
     }
 
-    private fun presetRow(activity: MainActivity, preset: LayoutPreset): View {
-        val box = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, activity.dp(8), 0, activity.dp(8))
+    /** A saved layout as a card: icons + title + ratio, tap to apply, Delete if custom. */
+    private fun presetCard(activity: MainActivity, preset: LayoutPreset): View {
+        val installed = preset.windows.all { app.windowController.isLaunchable(it.packageName) }
+        val ratio = preset.splitFraction()?.let { "${(it * 100).toInt()}/${100 - (it * 100).toInt()}" }
+        val title = preset.windows.sortedBy { it.bounds.left }.joinToString("  +  ") {
+            if (it.packageName == WitsPackages.SELF) "Panel" else app.appCatalog.labelFor(it.packageName)
         }
-        val issues = LayoutValidator.validate(preset)
-        val missing = preset.windows.filterNot { app.windowController.isLaunchable(it.packageName) }
+        val card = activity.launchTile(
+            title = title,
+            subtitle = if (!installed) "not installed" else ratio,
+            packages = preset.windows.map { it.packageName },
+        ) { applyPreset(activity, preset) }
 
-        val kindTag = when (preset.kind) {
-            io.github.miklergm.witscompanion.layout.PresetKind.ANCHORED -> "  [anchor]"
-            else -> ""
-        }
-        box.addView(activity.body(
-            preset.title + kindTag + if (preset.experimental) "  [experimental]" else ""
-        ))
-        box.addView(activity.body(
-            preset.windows.joinToString("\n") { w ->
-                "  ${w.packageName}  ${fmt(w.bounds.left)},${fmt(w.bounds.top)}–${fmt(w.bounds.right)},${fmt(w.bounds.bottom)}"
-            },
-            mono = true,
-        ))
-        if (missing.isNotEmpty()) {
-            box.addView(activity.body("  missing: ${missing.joinToString { it.packageName }}").apply {
-                setTextColor(Color.RED)
-            })
-        }
-        issues.forEach { box.addView(activity.body("  ! ${it.message}")) }
-
-        val isCustom = app.layoutRepository.customPresets().any { it.id == preset.id }
-        val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
-        row.addView(Button(activity).apply {
-            text = "Apply"; isAllCaps = false
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener { applyPreset(activity, preset) }
-        })
-        if (isCustom) {
-            row.addView(Button(activity).apply {
-                text = "Delete"; isAllCaps = false
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        if (app.layoutRepository.customPresets().any { it.id == preset.id }) {
+            (card as LinearLayout).addView(Button(activity).apply {
+                text = "Delete"; isAllCaps = false; textSize = 12f
                 setOnClickListener {
                     app.layoutRepository.deleteCustomPreset(preset.id)
                     activity.toast("Deleted"); activity.refreshCurrentSection()
                 }
             })
         }
-        box.addView(row)
-        return box
+        return card
     }
 
     // ------------------------------------------------------------------ geometry
