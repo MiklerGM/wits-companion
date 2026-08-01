@@ -68,6 +68,23 @@ private fun Context.check(text: String, initial: Boolean, onChange: (Boolean) ->
 
 private fun Context.scroll(content: View) = ScrollView(this).apply { addView(content) }
 
+/** Resolves a theme colour attribute, so cards follow the Material DayNight theme. */
+private fun Context.attrColor(attr: Int, fallback: Int = Color.GRAY): Int =
+    com.google.android.material.color.MaterialColors.getColor(this, attr, fallback)
+
+/** A rounded rectangle with a ripple clipped to its corners. */
+private fun roundedRipple(fill: Int, radius: Float, ripple: Int): android.graphics.drawable.Drawable {
+    val content = android.graphics.drawable.GradientDrawable().apply {
+        setColor(fill); cornerRadius = radius
+    }
+    val mask = android.graphics.drawable.GradientDrawable().apply {
+        setColor(Color.WHITE); cornerRadius = radius
+    }
+    return android.graphics.drawable.RippleDrawable(
+        android.content.res.ColorStateList.valueOf(ripple), content, mask,
+    )
+}
+
 /**
  * A compact launch card: app icons on the left, a short title on the right, tappable.
  * Horizontal and rounded so a list of them reads as distinct cards without much height.
@@ -80,15 +97,27 @@ private fun Context.launchTile(
     primary: Boolean = false,
     onClick: () -> Unit,
 ): View {
+    // Colours from the Material DayNight theme, so the cards flip with the system setting.
+    val fill = attrColor(
+        if (primary) com.google.android.material.R.attr.colorPrimary
+        else com.google.android.material.R.attr.colorSurfaceVariant
+    )
+    val titleColor = attrColor(
+        if (primary) com.google.android.material.R.attr.colorOnPrimary
+        else com.google.android.material.R.attr.colorOnSurface
+    )
+    val subColor = attrColor(
+        if (primary) com.google.android.material.R.attr.colorOnPrimary
+        else com.google.android.material.R.attr.colorOnSurfaceVariant
+    )
+    val ripple = attrColor(android.R.attr.colorControlHighlight)
+
     val card = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(14), dp(12), dp(14), dp(12))
         isClickable = true
-        background = android.graphics.drawable.GradientDrawable().apply {
-            cornerRadius = dp(14).toFloat()
-            setColor(if (primary) Color.parseColor("#1E88E5") else Color.parseColor("#EDEDF2"))
-        }
+        background = roundedRipple(fill, dp(14).toFloat(), ripple)
         layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(8) }
@@ -119,11 +148,12 @@ private fun Context.launchTile(
         this.text = title
         textSize = 16f
         setTypeface(typeface, Typeface.BOLD)
-        setTextColor(if (primary) Color.WHITE else Color.parseColor("#1A1A1A"))
+        setTextColor(titleColor)
     })
     if (subtitle != null) text.addView(TextView(this).apply {
         this.text = subtitle; textSize = 12f
-        setTextColor(if (primary) Color.parseColor("#DCEBFB") else Color.parseColor("#6E6E73"))
+        setTextColor(subColor)
+        if (primary) alpha = 0.85f
     })
     card.addView(text)
     return card
