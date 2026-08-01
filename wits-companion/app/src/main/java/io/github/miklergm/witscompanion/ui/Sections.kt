@@ -315,6 +315,9 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
         c.addView(activity.check("Auto-start the panel (Mode B) on boot & ACC", repo.autostartPanel) {
             repo.autostartPanel = it
         })
+        c.addView(activity.check("Re-enable the hotspot when it was on before", repo.restoreHotspot) {
+            repo.restoreHotspot = it
+        })
         c.addView(activity.body(
             "All automatic triggers are refused while reverse is active or unknown. " +
                 "None of them ever switches the video source.\n\n" +

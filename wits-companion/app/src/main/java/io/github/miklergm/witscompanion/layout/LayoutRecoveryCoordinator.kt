@@ -25,6 +25,7 @@ class LayoutRecoveryCoordinator(
     private val engine: LayoutEngine,
     private val reverseGuard: ReverseGuard,
     private val propertyReader: PropertyReader? = null,
+    private val hotspotController: io.github.miklergm.witscompanion.wits.HotspotController? = null,
     private val logger: EventLogger? = null,
     private val nowMs: () -> Long = { android.os.SystemClock.elapsedRealtime() },
 ) : CarStateRepository.Observer {
@@ -56,6 +57,7 @@ class LayoutRecoveryCoordinator(
         if (lastAcc == false && acc == true) {
             if (repository.restoreOnAcc) attempt("acc_on", state)
             else startPanelIfEnabled("acc_on", state)
+            restoreHotspotIfEnabled("acc_on")
         }
 
         // Source became Android
@@ -83,6 +85,26 @@ class LayoutRecoveryCoordinator(
     fun onBootCompleted(state: CarState) {
         if (repository.restoreOnBoot) attempt("boot_completed", state)
         else startPanelIfEnabled("boot_completed", state)
+        restoreHotspotIfEnabled("boot_completed")
+    }
+
+    /**
+     * Re-enables the hotspot if the user opted in and it was on before. A short stop turns
+     * the hotspot off; this brings it back on the next ACC-on or boot without a trip to the
+     * quick-settings shade. Only turns it on — never off — and only from a known-off state.
+     */
+    fun restoreHotspotIfEnabled(reason: String) {
+        val hs = hotspotController ?: return
+        if (!repository.restoreHotspot) return
+        if (repository.hotspotDesiredOn != true) return
+        if (!hs.canToggle()) return
+        val state = hs.state()
+        if (state == io.github.miklergm.witscompanion.wits.HotspotController.State.OFF) {
+            hs.setEnabled(true) { ok ->
+                logger?.log("hotspot", "auto_restore", result = if (ok) "on" else "failed",
+                    extras = mapOf("reason" to reason))
+            }
+        }
     }
 
     /** Explicit user action; bypasses the debounce but not the safety guards. */

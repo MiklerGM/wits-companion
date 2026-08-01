@@ -29,6 +29,15 @@
     <!-- Optional: only used by the opt-in "restore layout at boot" feature. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- Hotspot: reading its state needs only ACCESS_WIFI_STATE (normal). Toggling needs
+         TETHER_PRIVILEGED (signature|privileged), granted on the platform build; on a
+         debug build the toggle is simply unavailable and only the status shows. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission
+        android:name="android.permission.TETHER_PRIVILEGED"
+        tools:ignore="ProtectedPermissions" />
+
     <!-- Optional: only used to write Settings.System/wits_night_mode.
          This is an appop; the user grants it via ACTION_MANAGE_WRITE_SETTINGS. -->
     <uses-permission

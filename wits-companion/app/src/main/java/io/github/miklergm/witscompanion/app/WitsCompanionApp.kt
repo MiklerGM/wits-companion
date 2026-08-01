@@ -44,6 +44,8 @@ class WitsCompanionApp : Application() {
         private set
     lateinit var mediaRepository: MediaSessionRepository
         private set
+    lateinit var hotspotController: io.github.miklergm.witscompanion.wits.HotspotController
+        private set
     lateinit var reverseGuard: ReverseGuard
         private set
     lateinit var rateLimiter: ActionRateLimiter
@@ -87,6 +89,7 @@ class WitsCompanionApp : Application() {
             onBeforeSwitch = { layoutEngine.cancelPending() },
         )
         nightModeController = WitsNightModeController(this, rateLimiter, eventLogger)
+        hotspotController = io.github.miklergm.witscompanion.wits.HotspotController(this, eventLogger)
 
         recoveryCoordinator = LayoutRecoveryCoordinator(
             appContext = this,
@@ -94,6 +97,7 @@ class WitsCompanionApp : Application() {
             engine = layoutEngine,
             reverseGuard = reverseGuard,
             propertyReader = propertyReader,
+            hotspotController = hotspotController,
             logger = eventLogger,
         )
 

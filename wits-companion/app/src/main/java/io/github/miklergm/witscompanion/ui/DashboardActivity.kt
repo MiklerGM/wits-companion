@@ -19,6 +19,7 @@ import io.github.miklergm.witscompanion.layout.PresetKind
 import io.github.miklergm.witscompanion.media.MediaSessionRepository
 import io.github.miklergm.witscompanion.media.MediaSnapshot
 import io.github.miklergm.witscompanion.safety.Trigger
+import io.github.miklergm.witscompanion.wits.HotspotController
 import io.github.miklergm.witscompanion.wits.WitsPackages
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -54,6 +55,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     private lateinit var trackView: TextView
     private lateinit var artistView: TextView
     private lateinit var playPauseButton: Button
+    private var hotspotButton: Button? = null
     private lateinit var artView: android.widget.ImageView
     private lateinit var progressBar: android.widget.ProgressBar
     private lateinit var progressLabel: TextView
@@ -190,6 +192,18 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         // run through the car's amplifier), so a block of numbers on the driving surface
         // was clutter that could be misread. Keeping the panel to what is useful in motion.
 
+        // Hotspot status + one-tap toggle, so it need not be reached through the
+        // quick-settings shade (which takes two pulls). Hidden entirely if the platform
+        // cannot even report hotspot state.
+        if (app.hotspotController.isSupported()) {
+            hotspotButton = Button(this).apply {
+                isAllCaps = false
+                setOnClickListener { toggleHotspot() }
+            }
+            panel.addView(hotspotButton)
+            renderHotspot(app.hotspotController.state())
+        }
+
         panel.addView(View(this), LinearLayout.LayoutParams(MATCH, 0, 1f))
 
         // Settings and a one-tap reset side by side. Reset is on the panel deliberately:
@@ -250,6 +264,10 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         super.onStart()
         app.carStateRepository.addObserver(this)
         app.mediaRepository.addListener(this)
+        if (hotspotButton != null) {
+            app.hotspotController.observe(hotspotListener)
+            renderHotspot(app.hotspotController.state())
+        }
         ui.post(clockTick)
         onCarState(app.carStateRepository.state)
     }
@@ -257,8 +275,38 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     override fun onStop() {
         app.carStateRepository.removeObserver(this)
         app.mediaRepository.removeListener(this)
+        if (hotspotButton != null) app.hotspotController.stopObserving()
         ui.removeCallbacks(clockTick)
         super.onStop()
+    }
+
+    private val hotspotListener = HotspotController.Listener { state -> ui.post { renderHotspot(state) } }
+
+    private fun renderHotspot(state: HotspotController.State) {
+        val b = hotspotButton ?: return
+        val canToggle = app.hotspotController.canToggle()
+        b.text = when (state) {
+            HotspotController.State.ON -> "Hotspot: ON" + if (canToggle) "  (tap to turn off)" else ""
+            HotspotController.State.OFF -> "Hotspot: off" + if (canToggle) "  (tap to turn on)" else ""
+            HotspotController.State.TURNING_ON -> "Hotspot: turning on…"
+            HotspotController.State.TURNING_OFF -> "Hotspot: turning off…"
+            HotspotController.State.FAILED -> "Hotspot: failed"
+            HotspotController.State.UNKNOWN -> "Hotspot: —"
+        }
+        b.isEnabled = canToggle &&
+            state != HotspotController.State.TURNING_ON &&
+            state != HotspotController.State.TURNING_OFF
+    }
+
+    private fun toggleHotspot() {
+        val turnOn = app.hotspotController.state() != HotspotController.State.ON
+        app.layoutRepository.hotspotDesiredOn = turnOn  // remember the intent for auto-restore
+        app.hotspotController.setEnabled(turnOn) { ok ->
+            ui.post {
+                if (!ok) toast("Hotspot change failed")
+                renderHotspot(app.hotspotController.state())
+            }
+        }
     }
 
     // ----------------------------------------------------------------- updates

@@ -108,6 +108,21 @@ class LayoutRepository(context: Context) {
         get() = prefs.getBoolean(KEY_AUTOSTART_PANEL, false)
         set(v) = prefs.edit().putBoolean(KEY_AUTOSTART_PANEL, v).apply()
 
+    /**
+     * The hotspot state the user last chose, remembered so it can be restored after a
+     * short stop turns it off. null = never set, so nothing to restore.
+     */
+    var hotspotDesiredOn: Boolean?
+        get() = if (prefs.contains(KEY_HOTSPOT_DESIRED)) prefs.getBoolean(KEY_HOTSPOT_DESIRED, false) else null
+        set(v) = prefs.edit().apply {
+            if (v == null) remove(KEY_HOTSPOT_DESIRED) else putBoolean(KEY_HOTSPOT_DESIRED, v)
+        }.apply()
+
+    /** Re-enable the hotspot on ACC-on/boot when it was on before. Opt-in. */
+    var restoreHotspot: Boolean
+        get() = prefs.getBoolean(KEY_RESTORE_HOTSPOT, false)
+        set(v) = prefs.edit().putBoolean(KEY_RESTORE_HOTSPOT, v).apply()
+
     var simulationEnabled: Boolean
         get() = prefs.getBoolean(KEY_SIMULATION, false)
         set(v) = prefs.edit().putBoolean(KEY_SIMULATION, v).apply()
@@ -146,6 +161,8 @@ class LayoutRepository(context: Context) {
         const val KEY_RESTORE_AFTER_REVERSE = "restore_after_reverse"
         const val KEY_RESTORE_ON_BOOT = "restore_on_boot"
         const val KEY_AUTOSTART_PANEL = "autostart_panel"
+        const val KEY_HOTSPOT_DESIRED = "hotspot_desired_on"
+        const val KEY_RESTORE_HOTSPOT = "restore_hotspot"
         const val KEY_SIMULATION = "simulation_enabled"
         const val KEY_NIGHT_BACKUP = "night_mode_backup"
         const val KEY_SPLIT = "geometry_split"
