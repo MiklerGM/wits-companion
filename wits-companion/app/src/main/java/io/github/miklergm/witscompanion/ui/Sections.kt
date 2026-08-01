@@ -166,17 +166,32 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
     // dashboard itself — that is the Cockpit (DashboardActivity).
     override val title = "Home"
 
+    private val ui = android.os.Handler(android.os.Looper.getMainLooper())
+    private val cards = mutableListOf<View>()
+
+    /**
+     * True while a layout is being placed. Overlapping applies (rapid taps) supersede each
+     * other mid-sequence and could leave an app freeform-but-invisible, so the cards are
+     * locked for the duration of the placement rather than churning.
+     */
+    @Volatile
+    private var locked = false
+
     override fun onCreateView(activity: MainActivity): View {
         val c = activity.column()
         val repo = app.layoutRepository
+        cards.clear()
+        locked = false
 
         // Cockpit — the primary, accented card, spanning the full width.
-        c.addView(activity.launchTile(
+        val cockpit = activity.launchTile(
             title = "Cockpit",
             subtitle = "map + panel",
             packages = listOfNotNull(cockpitFloatPackage()),
             primary = true,
-        ) { openCockpit(activity) })
+        ) { if (!locked) openCockpit(activity) }
+        cards += cockpit
+        c.addView(cockpit)
 
         // Side-by-side layouts flow into as many columns as the width allows: a grid on the
         // wide head-unit display, a single column on a narrow one.
@@ -192,13 +207,24 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
                 title = tileTitle(preset),
                 subtitle = if (!installed) "not installed" else ratio,
                 packages = preset.windows.map { it.packageName },
-            ) { applyFromHome(activity, preset) }
+            ) { if (!locked) applyFromHome(activity, preset) }
             // Fixed width so the flow can grid them; height wraps content.
             card.layoutParams = ViewGroup.MarginLayoutParams(tileWidth, ViewGroup.LayoutParams.WRAP_CONTENT)
+            cards += card
             grid.addView(card)
         }
         c.addView(grid)
         return activity.scroll(c)
+    }
+
+    /** Blocks further taps and dims the cards while a layout is being placed. */
+    private fun lockWhilePlacing() {
+        locked = true
+        cards.forEach { it.alpha = 0.5f }
+        ui.postDelayed({
+            locked = false
+            cards.forEach { it.alpha = 1f }
+        }, PLACING_LOCK_MS)
     }
 
     /** A clean tile name from the apps themselves, e.g. "Maps + Chrome" — not the preset's
@@ -214,6 +240,7 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
             ?.windows?.firstOrNull { it.packageName != WitsPackages.SELF }?.packageName
 
     private fun openCockpit(activity: MainActivity) {
+        lockWhilePlacing()
         val anchored = app.layoutRepository.preset(DefaultPresets.ID_MAPS_ANCHORED)
         if (anchored != null) {
             app.layoutEngine.apply(anchored, app.carStateRepository.state, Trigger.USER)
@@ -223,6 +250,7 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
     }
 
     private fun applyFromHome(activity: MainActivity, preset: LayoutPreset) {
+        lockWhilePlacing()
         when (val r = app.layoutEngine.apply(preset, app.carStateRepository.state, Trigger.USER)) {
             is LayoutEngine.Result.Applied -> {
                 app.layoutRepository.lastAppliedPresetId = preset.id
@@ -233,6 +261,10 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
         }
     }
 
+    private companion object {
+        /** Cards stay locked for the placement sequence (two phases + a small buffer). */
+        const val PLACING_LOCK_MS = 1_800L
+    }
 }
 
 // -------------------------------------------------------------------- Layouts
