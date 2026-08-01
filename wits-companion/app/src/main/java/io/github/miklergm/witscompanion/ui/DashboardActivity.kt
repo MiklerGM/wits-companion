@@ -54,12 +54,18 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     private lateinit var stateView: TextView
     private lateinit var trackView: TextView
     private lateinit var artistView: TextView
-    private lateinit var playPauseButton: Button
+    private lateinit var playPauseButton: TextView
+    private lateinit var prevButton: TextView
+    private lateinit var nextButton: TextView
+    private lateinit var mediaCard: LinearLayout
     private var hotspotTile: LinearLayout? = null
     private var hotspotText: TextView? = null
     private lateinit var artView: android.widget.ImageView
     private lateinit var progressBar: android.widget.ProgressBar
     private lateinit var progressLabel: TextView
+
+    /** Floating-app switcher tiles, kept so the highlight can move on selection. */
+    private val switcherTiles = mutableListOf<Pair<String, LinearLayout>>()
 
     @Volatile
     private var latestMedia: MediaSnapshot? = null
@@ -121,15 +127,30 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         }
         panel.addView(stateView)
 
-        // Album art beside the track text, so the media block reads at a glance.
+        // Media as a single rounded card, tinted by what is playing — the panel takes on
+        // the album's colour (Mini AA's MediaPlayerCard in spirit). onMedia() fills in the
+        // accent, the art and the transport state; here we only build the frame.
+        mediaCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad(16), pad(14), pad(16), pad(14))
+            layoutParams = LinearLayout.LayoutParams(MATCH, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        panel.addView(mediaCard)
+
         val nowPlaying = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        // Bigger, rounded album art. Kept visible with an app-icon placeholder when a
+        // player is active but exposes no artwork, so the card never reads as empty.
         artView = android.widget.ImageView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(pad(72), pad(72))
-                .apply { rightMargin = pad(12) }
+            layoutParams = LinearLayout.LayoutParams(pad(96), pad(96))
+                .apply { rightMargin = pad(16) }
             scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+            clipToOutline = true
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = pad(14).toFloat()
+            }
             visibility = View.GONE
         }
         nowPlaying.addView(artView)
@@ -140,41 +161,46 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         }
         trackView = TextView(this).apply {
             textSize = 22f; setTextColor(palette.foreground); maxLines = 2
+            setTypeface(typeface, Typeface.BOLD)
         }
         texts.addView(trackView)
 
         artistView = TextView(this).apply {
-            textSize = 15f; setTextColor(palette.muted); maxLines = 1; setPadding(0, pad(2), 0, 0)
+            textSize = 14f; setTextColor(palette.muted); maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, pad(3), 0, 0)
         }
         texts.addView(artistView)
         nowPlaying.addView(texts)
-        panel.addView(nowPlaying)
-        panel.addView(View(this), LinearLayout.LayoutParams(MATCH, pad(12)))
+        mediaCard.addView(nowPlaying)
 
         progressBar = android.widget.ProgressBar(
             this, null, android.R.attr.progressBarStyleHorizontal
         ).apply {
             max = PROGRESS_MAX
-            layoutParams = LinearLayout.LayoutParams(MATCH, pad(3))
+            layoutParams = LinearLayout.LayoutParams(MATCH, pad(3)).apply { topMargin = pad(14) }
             visibility = View.INVISIBLE
         }
-        panel.addView(progressBar)
+        mediaCard.addView(progressBar)
 
         progressLabel = TextView(this).apply {
             textSize = 11f; setTextColor(palette.muted); typeface = Typeface.MONOSPACE
-            setPadding(0, pad(3), 0, pad(8))
+            setPadding(0, pad(3), 0, pad(6))
         }
-        panel.addView(progressLabel)
+        mediaCard.addView(progressLabel)
 
+        // Transport centred, with an emphasised (filled) play/pause between the skips.
         val transport = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(0, pad(4), 0, 0)
         }
-        transport.addView(bigButton("<<") { app.mediaRepository.previous() })
-        playPauseButton = bigButton("Play") { app.mediaRepository.playPause() }
+        prevButton = transportButton("⏮", emphasised = false) { app.mediaRepository.previous() }
+        playPauseButton = transportButton("▶", emphasised = true) { app.mediaRepository.playPause() }
+        nextButton = transportButton("⏭", emphasised = false) { app.mediaRepository.next() }
+        transport.addView(prevButton)
         transport.addView(playPauseButton)
-        transport.addView(bigButton(">>") { app.mediaRepository.next() })
-        panel.addView(transport)
+        transport.addView(nextButton)
+        mediaCard.addView(transport)
 
         // Which app floats over the panel. Re-applies the anchored layout with the chosen
         // package, so switching is one tap instead of a trip to the Layouts tab.
@@ -187,8 +213,13 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         // The apps offered come from the vendor's nav/music choices plus the well-known
         // ones, so the switcher reflects what the user actually set, not a fixed triple.
         val switcher = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        switcherTiles.clear()
+        val current = currentFloatingPackage()
         floatableApps().forEach { pkg ->
-            switcher.addView(appIcon(pkg, app.appCatalog.labelFor(pkg)))
+            val tile = appIcon(pkg, app.appCatalog.labelFor(pkg))
+            setTileSelected(tile, pkg == current)
+            switcherTiles += pkg to tile
+            switcher.addView(tile)
         }
         panel.addView(switcher)
 
@@ -291,6 +322,10 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     override fun onStart() {
         super.onStart()
         app.carStateRepository.addObserver(this)
+        // Start/refresh observation on open: notification access may have been granted since
+        // the process started, and the repository is not started elsewhere.
+        app.mediaRepository.start()
+        app.mediaRepository.ensureObserving()
         app.mediaRepository.addListener(this)
         if (hotspotTile != null) {
             app.hotspotController.observe(hotspotListener)
@@ -365,39 +400,113 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     override fun onMedia(snapshot: MediaSnapshot) {
         if (!snapshot.permissionGranted) {
             trackView.text = "Media access not granted"
-            artistView.text = "Settings -> notification access"
-            playPauseButton.isEnabled = false
+            artistView.text = "Settings → Media, or grant notification access"
+            setTransportEnabled(prev = false, playPause = false, next = false)
             artView.visibility = View.GONE
+            tintMediaCard(null)
             return
         }
-        trackView.text = snapshot.title ?: "—"
-        artistView.text = listOfNotNull(snapshot.artist, snapshot.packageName).joinToString(" · ")
-        playPauseButton.text = if (snapshot.isPlaying) "Pause" else "Play"
-        playPauseButton.isEnabled = snapshot.canPlay || snapshot.canPause
 
-        val art = snapshot.albumArt
-        if (art != null) {
-            artView.setImageBitmap(art)
-            artView.visibility = View.VISIBLE
+        // Three states: a track playing (title present), a live source with no track loaded
+        // yet (a session exists — show the app, not a blank panel), or nothing at all.
+        val hasTrack = snapshot.available && snapshot.title != null
+        val source = snapshot.packageName?.takeIf { snapshot.available }
+        val sourceLabel = source?.let { app.appCatalog.labelFor(it) }
+
+        trackView.text = snapshot.title ?: sourceLabel ?: "Nothing playing"
+        artistView.text = if (hasTrack) {
+            listOfNotNull(snapshot.artist, snapshot.album).joinToString(" · ").ifBlank { sourceLabel ?: "" }
         } else {
-            artView.setImageDrawable(null)
-            artView.visibility = View.GONE
+            ""
+        }
+        playPauseButton.text = if (snapshot.isPlaying) "⏸" else "▶"
+        setTransportEnabled(
+            prev = snapshot.canSkipPrevious,
+            playPause = snapshot.canPlay || snapshot.canPause,
+            next = snapshot.canSkipNext,
+        )
+
+        // Album art, or the player's own icon as a placeholder so an active-but-artless
+        // source (before the first track loads, or a logged-out player) still reads as its
+        // app rather than blank.
+        val art = snapshot.albumArt
+        when {
+            art != null -> {
+                artView.setImageBitmap(art); artView.visibility = View.VISIBLE
+            }
+            source != null -> {
+                artView.setImageDrawable(
+                    runCatching { packageManager.getApplicationIcon(source) }.getOrNull()
+                )
+                artView.visibility = View.VISIBLE
+            }
+            else -> {
+                artView.setImageDrawable(null); artView.visibility = View.GONE
+            }
         }
 
-        // The panel takes on the colour of what is playing; falls back to the plain
-        // foreground when the art has no usable hue, rather than tinting everything grey.
-        // In day mode the accent is darkened so it stays readable on the light background.
-        val raw = AlbumAccent.from(art)
+        // The card takes on the colour of the source: the album's accent when a track is
+        // loaded, else the player's brand colour, else a neutral card when nothing is live.
         val accent = when {
-            raw == null -> palette.foreground
-            palette.night -> raw
-            else -> darken(raw, 0.55f)
+            hasTrack -> AlbumAccent.from(art) ?: brandColor(source)
+            source != null -> brandColor(source)
+            else -> null
         }
-        trackView.setTextColor(accent)
-        progressBar.progressTintList = android.content.res.ColorStateList.valueOf(accent)
+        tintMediaCard(accent)
 
         latestMedia = snapshot
         refreshProgress()
+    }
+
+    /** Enables/greys the three transport glyphs without the default Button wash. */
+    private fun setTransportEnabled(prev: Boolean, playPause: Boolean, next: Boolean) {
+        prevButton.isEnabled = prev
+        prevButton.alpha = if (prev) 1f else 0.35f
+        playPauseButton.isEnabled = playPause
+        playPauseButton.alpha = if (playPause) 1f else 0.5f
+        nextButton.isEnabled = next
+        nextButton.alpha = if (next) 1f else 0.35f
+    }
+
+    /**
+     * Paints the media card and the play button with [accent] (or neutral when null).
+     * The card fill is a soft wash of the accent so text stays readable; the play button
+     * is the solid accent. In day mode the accent is darkened for contrast on the light
+     * panel; the track text follows so it reads against the wash.
+     */
+    private fun tintMediaCard(accent: Int?) {
+        val neutral = if (palette.night) Color.parseColor("#161618") else Color.parseColor("#F0F0F3")
+        val a = accent?.let { if (palette.night) it else darken(it, 0.6f) }
+        val cardFill = if (a == null) neutral else washed(a, if (palette.night) 0.22f else 0.14f, neutral)
+        mediaCard.background = android.graphics.drawable.GradientDrawable().apply {
+            cornerRadius = pad(20).toFloat(); setColor(cardFill)
+        }
+        val button = a ?: (if (palette.night) Color.parseColor("#3A3A40") else Color.parseColor("#C8C8CE"))
+        playPauseButton.background = android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(button)
+        }
+        trackView.setTextColor(if (a == null) palette.foreground else a)
+        progressBar.progressTintList = android.content.res.ColorStateList.valueOf(a ?: palette.muted)
+    }
+
+    /** Blends [color] over [base] at [alpha] — a soft tint without needing alpha compositing. */
+    private fun washed(color: Int, alpha: Float, base: Int): Int {
+        fun mix(c: Int, b: Int) = (b + (c - b) * alpha).toInt().coerceIn(0, 255)
+        return Color.rgb(
+            mix(Color.red(color), Color.red(base)),
+            mix(Color.green(color), Color.green(base)),
+            mix(Color.blue(color), Color.blue(base)),
+        )
+    }
+
+    /** Brand colour for a known player, so an artless session still has a hue. */
+    private fun brandColor(pkg: String?): Int? = when (pkg) {
+        WitsPackages.SPOTIFY -> Color.parseColor("#1DB954")
+        "com.google.android.apps.youtube.music" -> Color.parseColor("#FF0000")
+        "com.google.android.youtube" -> Color.parseColor("#FF0000")
+        "com.apple.android.music" -> Color.parseColor("#FA243C")
+        "deezer.android.app" -> Color.parseColor("#A238FF")
+        else -> null
     }
 
     /**
@@ -448,6 +557,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         when (val r = app.layoutEngine.apply(preset, app.carStateRepository.state, Trigger.USER)) {
             is LayoutEngine.Result.Applied -> {
                 app.layoutRepository.lastAppliedPresetId = preset.id
+                switcherTiles.forEach { (pkg, tile) -> setTileSelected(tile, pkg == packageName) }
                 toast("$label over panel")
             }
             is LayoutEngine.Result.Refused -> toast("Refused: ${r.reason}")
@@ -474,22 +584,32 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     }
 
     /**
-     * A compact app tile: icon and label kept together in a fixed-width box, so a row of
-     * two or three does not spread to the screen edges. Packed from the left rather than
-     * stretched by weight.
+     * Which app currently floats over the panel, to highlight its tile. The same preset
+     * resolution as [reservation]: the last-applied anchored preset, else the default map.
      */
-    private fun appIcon(packageName: String, label: String): View {
+    private fun currentFloatingPackage(): String? =
+        (app.layoutRepository.lastAppliedPreset()?.takeIf { it.kind == PresetKind.ANCHORED }
+            ?: app.layoutRepository.preset(DefaultPresets.ID_MAPS_ANCHORED))
+            ?.windows?.firstOrNull { it.packageName != WitsPackages.SELF }?.packageName
+
+    /**
+     * A compact app tile: a centred icon over a centred label, in a fixed-width box. The
+     * label is full-width and centre-gravity so a longer name stays centred and ellipsises
+     * instead of drifting sideways.
+     */
+    private fun appIcon(packageName: String, label: String): LinearLayout {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(pad(96), ViewGroup.LayoutParams.WRAP_CONTENT)
+            layoutParams = LinearLayout.LayoutParams(pad(92), ViewGroup.LayoutParams.WRAP_CONTENT)
                 .apply { rightMargin = pad(8) }
             isClickable = true
-            setPadding(pad(6), pad(8), pad(6), pad(8))
+            setPadding(pad(8), pad(8), pad(8), pad(8))
             setOnClickListener { floatApp(packageName, label) }
         }
         box.addView(android.widget.ImageView(this).apply {
             layoutParams = LinearLayout.LayoutParams(pad(44), pad(44))
+                .apply { gravity = Gravity.CENTER_HORIZONTAL }
             setImageDrawable(
                 runCatching { packageManager.getApplicationIcon(packageName) }.getOrNull()
             )
@@ -498,20 +618,47 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             text = label
             textSize = 11f
             maxLines = 1
-            setTextColor(palette.muted)
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER_HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(MATCH, ViewGroup.LayoutParams.WRAP_CONTENT)
             setPadding(0, pad(4), 0, 0)
         })
         return box
     }
 
-    private fun bigButton(label: String, onClick: () -> Unit) = Button(this).apply {
-        text = label
-        isAllCaps = false
-        textSize = 18f
-        setOnClickListener { onClick() }
-        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            .apply { rightMargin = pad(6) }
+    /** Marks a switcher tile as the active floating app: a rounded highlight and bold label. */
+    private fun setTileSelected(tile: LinearLayout, selected: Boolean) {
+        tile.background = if (selected) {
+            android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = pad(14).toFloat()
+                setColor(if (palette.night) Color.parseColor("#26FFFFFF") else Color.parseColor("#14000000"))
+                setStroke(pad(2), palette.foreground)
+            }
+        } else null
+        (tile.getChildAt(1) as? TextView)?.apply {
+            setTextColor(if (selected) palette.foreground else palette.muted)
+            setTypeface(typeface, if (selected) Typeface.BOLD else Typeface.NORMAL)
+        }
     }
+
+    /**
+     * A round transport glyph. The emphasised one (play/pause) is a filled accent circle
+     * with a white glyph; the skips are borderless. A [TextView] rather than a [Button] so
+     * there is no all-caps wash or default min-size, and the fill can be re-tinted per track.
+     */
+    private fun transportButton(glyph: String, emphasised: Boolean, onClick: () -> Unit) =
+        TextView(this).apply {
+            text = glyph
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            textSize = if (emphasised) 24f else 21f
+            setTextColor(if (emphasised) Color.WHITE else palette.foreground)
+            val size = if (emphasised) pad(66) else pad(54)
+            layoutParams = LinearLayout.LayoutParams(size, size)
+                .apply { leftMargin = pad(12); rightMargin = pad(12) }
+            isClickable = true
+            setOnClickListener { onClick() }
+        }
 
     private fun pad(dp: Int) = (dp * resources.displayMetrics.density).toInt()
 

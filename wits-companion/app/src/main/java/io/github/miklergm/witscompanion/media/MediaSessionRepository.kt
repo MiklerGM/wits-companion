@@ -121,21 +121,41 @@ class MediaSessionRepository(
 
     // -------------------------------------------------------------- lifecycle
 
+    /** True once the active-sessions listener is registered, so it is only added once. */
+    private var observing = false
+
     fun start() {
         if (started) return
         started = true
         manager = appContext.getSystemService(MediaSessionManager::class.java)
-        refresh()
-        runCatching {
-            manager?.addOnActiveSessionsChangedListener(sessionsChanged, componentName)
-        }.onFailure {
-            Log.d(TAG, "cannot observe sessions yet: ${it.javaClass.simpleName}")
+        ensureObserving()
+    }
+
+    /**
+     * (Re)registers the active-sessions listener and refreshes the snapshot. Idempotent, and
+     * safe to call before permission exists — registration needs the listener to be an
+     * enabled notification listener, so it is retried here rather than only once at [start].
+     *
+     * This is what a media screen calls on open: notification access can be granted *after*
+     * the app started (self-grant, or ADB on this head unit), and without a re-check the
+     * panel would keep showing "not granted" until the process restarts. `[RUNTIME]`
+     * 2026-08-01 — the repository was never started at all, so media stayed dead until this.
+     */
+    fun ensureObserving() {
+        if (manager == null) manager = appContext.getSystemService(MediaSessionManager::class.java)
+        if (!observing && isPermissionGranted()) {
+            runCatching {
+                manager?.addOnActiveSessionsChangedListener(sessionsChanged, componentName)
+                observing = true
+            }.onFailure { Log.d(TAG, "cannot observe sessions yet: ${it.javaClass.simpleName}") }
         }
+        refresh()
     }
 
     fun stop() {
         if (!started) return
         started = false
+        observing = false
         runCatching { manager?.removeOnActiveSessionsChangedListener(sessionsChanged) }
         controller?.unregisterCallback(controllerCallback)
         controller = null

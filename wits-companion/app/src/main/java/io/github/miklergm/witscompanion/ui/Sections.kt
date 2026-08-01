@@ -596,6 +596,9 @@ class SettingsSection(private val app: WitsCompanionApp) : MainActivity.Section 
                 app.mediaRepository.grantSelf() -> activity.toast("Granted")
                 else -> activity.startActivity(app.mediaRepository.permissionIntent())
             }
+            // Pick up the grant (self-grant or returning from the system menu) without a
+            // restart, so the Cockpit's media controls come alive immediately.
+            app.mediaRepository.ensureObserving()
         })
 
         // ------------------------------------------------------------ reset

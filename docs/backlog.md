@@ -56,6 +56,24 @@ how concrete they are.
   focus/window change), not the button itself. Needs on-car logcat around the toggle. Until
   understood, consider re-asserting the layout after a toggle, or gating the toggle.
 
+## Emulator-only (does not affect the head unit)
+
+Kept here so we don't chase them as product bugs. All stem from the emulator using the
+**unprivileged** launch path (`launchViaPlainStart` + `setLaunchBounds`), whereas the head
+unit is platform-signed and uses `resizeTask`.
+
+- **Switching the floating app cascades the new window ~150 px off the anchor** (and it
+  carries an AOSP caption bar). `[RUNTIME]` 2026-08-01, dumpsys: with the anchor bounds
+  `1656–2400`, Maps lands exactly there, Chrome at `1506–2250` (−150), Spotify at
+  `1356–2100` (−300) — a fixed +150 px cascade per launch. Cause: the previous floating
+  app's freeform task is still present (hidden) at the same bounds, so AOSP's freeform
+  placement offsets the new one to avoid perfect overlap. On the head unit this can't happen:
+  `parkStaleWindows` turns the previous app fullscreen (no freeform task left at those
+  bounds) and `resizeTask` sets exact bounds with no caption. This is the "Chrome opens in a
+  window and isn't positioned right" report from emulator testing — **not reproducible on the
+  car** (freeform tiling there was verified flush and caption-less). Confirm with a glance
+  next time in the car; no code change planned for the emulator path.
+
 ## Layout placement (needs on-car re-test)
 
 - **Spotify stretches to full width after tiling.** Spotify launches at the given bounds
@@ -68,7 +86,47 @@ how concrete they are.
   correct. Needs extra stale-task cleanup before/while applying an anchored preset (park or
   fullscreen any freeform task not in the new layout, not just the last-applied set).
 
+## Layout mental model (needs formalization — user is still deciding)
+
+The current model: the **proportion slider** rewrites the split for *all* presets, and
+**"primary left/right"** (swap) flips which side the floating app takes. Two rough edges the
+user hit on 2026-08-01, flagged as "to think about", not yet a decided change:
+
+- **Changing the slider also changes how the Cockpit looks.** Expected in hindsight (the
+  Cockpit panel reserves the strip the floating app covers, which the split defines), but
+  surprising in the moment. Consider decoupling, or making it visibly obvious that the slider
+  drives the Cockpit reservation too.
+- **Changing "primary left/right" does not re-position an already-floating map in the
+  Cockpit.** The Cockpit's reservation and the floating map come from the *last-applied*
+  anchored preset (baked bounds); flipping the global swap doesn't re-float the current map,
+  so it stays on its old side until the app is re-picked. Decide the intended behaviour:
+  either re-apply the anchored preset when swap changes, or make swap a per-apply choice.
+- Broader: the user finds swap "works strangely for everything" and wants a simpler mental
+  model. Gather how they'd prefer to think about it (pick layout first, then apps? one split
+  that means the same thing everywhere?) before changing code.
+
+## Brightness (Cockpit control — feasibility to verify on car)
+
+- **A brightness control in the Cockpit: one or two tiles that nudge ±~15–25%.** For when
+  the auto night level is too bright or the day level too dim. Relative nudges (−/+) from the
+  current value fit driving better than a slider. **Blocked on one on-car check:** does this
+  head unit's panel backlight follow Android's `Settings.System.SCREEN_BRIGHTNESS`, or is it
+  driven by the vendor MCU (day/night tracks the car's illumination line)? Change brightness
+  manually in vendor settings and watch `SCREEN_BRIGHTNESS` + the signal recorder to see
+  which moves. If it's the framework setting, we can write it (platform signature /
+  `WRITE_SETTINGS`); if it's the MCU, we'd need the vendor channel and the change may be
+  re-asserted on the next illumination event.
+- **No ambient-light sensor to auto-tune from.** These units have no photodiode; day/night
+  comes from the car's illumination (headlight) line over CAN, which is why the theme flips
+  with the headlights, not the clock. `SensorManager` has no `TYPE_LIGHT` on the hardware
+  (the emulator's "Goldfish Light sensor" is virtual and irrelevant). Worth a one-line
+  `getSensorList` confirmation on the car, but the absence is expected — which is exactly why
+  a manual ± control is the right call rather than an auto-brightness curve.
+
 ## Cockpit / panel polish
+
+- **[DONE]** Floating-app switcher shows which app is active (rounded highlight + bold
+  label) and the labels are centre-aligned (were drifting sideways). 2026-08-01.
 
 - **Flicker artifact in Spotify's top-left, just under the status bar** — seen only with
   Spotify tiled, not Maps. Likely a freeform caption/handle or a Spotify overlay redrawing.
