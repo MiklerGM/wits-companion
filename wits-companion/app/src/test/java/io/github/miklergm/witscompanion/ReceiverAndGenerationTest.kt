@@ -311,6 +311,26 @@ class ReceiverAndGenerationTest {
         )
     }
 
+    /**
+     * The fire-time re-check must use the apply's ORIGINAL trigger, not a hard-coded
+     * AUTOMATIC. A deliberate user tap should still place when reverse is merely unknown
+     * (common — the property is not always readable); only automatic restores fail closed
+     * on unknown. Hard-coding AUTOMATIC silently dropped user applies with no CAN data.
+     */
+    @Test
+    fun `the fire-time reverse re-check honours the original trigger`() {
+        val src = engineSource()
+        val body = src.substringAfter("private fun stillValid(").substringBefore("\n    }")
+        assertTrue(
+            "stillValid must re-check with the stored applyTrigger",
+            body.contains("reverseGuard.check(latestState, applyTrigger)"),
+        )
+        assertTrue(
+            "apply must record its trigger for the re-check",
+            src.contains("applyTrigger = trigger"),
+        )
+    }
+
     @Test
     fun `stillValid re-checks the reverse guard at fire time, not only at request time`() {
         val src = engineSource()

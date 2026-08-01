@@ -146,6 +146,7 @@ class LayoutEngine(
         // Invalidate anything still queued from an earlier apply.
         val myGeneration = generation.incrementAndGet()
         latestState = state
+        applyTrigger = trigger
         handler.removeCallbacksAndMessages(RETRY_TOKEN)
 
         // Windows left over from the previous layout would keep floating above the new
@@ -420,7 +421,13 @@ class LayoutEngine(
             )
             return false
         }
-        val verdict = reverseGuard.check(latestState, Trigger.AUTOMATIC)
+        // Re-check with the ORIGINAL trigger, not always AUTOMATIC. A deliberate user tap
+        // should still place its windows when the reverse state is merely *unknown* (common
+        // — the property is not always readable); it must abort only if reverse is actually
+        // engaged. Downgrading every fire-time check to AUTOMATIC dropped user applies
+        // whenever reverse was unknown (e.g. no CAN data), which read as "nothing happened".
+        // fail-closed on unknown is preserved for automatic restores.
+        val verdict = reverseGuard.check(latestState, applyTrigger)
         if (!verdict.isAllowed) {
             logger?.log(
                 "layout", "send_skipped", pkg,
@@ -431,6 +438,10 @@ class LayoutEngine(
         }
         return true
     }
+
+    /** Trigger of the apply whose delayed sends are in flight, for the fire-time re-check. */
+    @Volatile
+    private var applyTrigger: Trigger = Trigger.AUTOMATIC
 
     /**
      * Feed vehicle state so delayed sends can re-check safety, and abort immediately if
