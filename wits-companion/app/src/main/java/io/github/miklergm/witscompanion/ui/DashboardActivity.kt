@@ -432,14 +432,19 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         return preferred.filter { app.windowController.isLaunchable(it) }.distinct().take(4)
     }
 
-    /** A launcher icon that floats its app over the panel, with the name underneath. */
+    /**
+     * A compact app tile: icon and label kept together in a fixed-width box, so a row of
+     * two or three does not spread to the screen edges. Packed from the left rather than
+     * stretched by weight.
+     */
     private fun appIcon(packageName: String, label: String): View {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            layoutParams = LinearLayout.LayoutParams(pad(96), ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { rightMargin = pad(8) }
             isClickable = true
-            setPadding(0, pad(6), 0, pad(6))
+            setPadding(pad(6), pad(8), pad(6), pad(8))
             setOnClickListener { floatApp(packageName, label) }
         }
         box.addView(android.widget.ImageView(this).apply {
@@ -451,6 +456,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         box.addView(TextView(this).apply {
             text = label
             textSize = 11f
+            maxLines = 1
             setTextColor(palette.muted)
             setPadding(0, pad(4), 0, 0)
         })

@@ -117,13 +117,10 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
 
     override fun onCarState(state: CarState) {
         current?.onCarState(state)
-        binding.statusBar.text = getString(
-            R.string.status_line,
-            state.sourceName,
-            state.acc.display(),
-            if (state.reverseActive == true) "REVERSE" else "—",
-            state.observedCount(),
-        )
+        // The old global "Source / ACC / signals" status bar was removed: it read "—" for
+        // most of the drive, and by the time the source is OEM this Android screen is not
+        // visible anyway, so it was confusing rather than informative. Live car state lives
+        // on the Car tab; the Cockpit shows what matters while driving.
     }
 
     @Deprecated("Simple SAF callback; adequate for a single export action")
