@@ -357,7 +357,15 @@ class LayoutEngine(
      * @return how many packages were parked, so the caller can offset what follows
      */
     private fun parkStaleWindows(keep: Set<String>): Int {
-        val stale = lastAppliedPackages - keep
+        // Everything to clear away: what we last placed, plus — on the privileged path —
+        // any live freeform tile at all that is not part of the incoming layout. Rapid
+        // taps can leave freeform tasks we never recorded in lastAppliedPackages; without
+        // this they float over the new layout (e.g. a leftover fullscreen Spotify when the
+        // Cockpit is opened). SELF is never parked: the companion is the anchor.
+        val liveFreeform = windowController.rootTasks()
+            .filter { it.windowingMode == WitsWindowMode.FREEFORM }
+            .mapNotNull { it.packageName }
+        val stale = (lastAppliedPackages + liveFreeform - keep) - WitsPackages.SELF
         if (stale.isEmpty()) return 0
 
         val full = windowController.fullDisplayArea(appContext)

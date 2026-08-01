@@ -214,6 +214,20 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
             grid.addView(card)
         }
         c.addView(grid)
+
+        // Reset: one tap from the landing screen to return everything to the vendor
+        // launcher. Neutral card so it does not compete with the layout tiles.
+        val reset = activity.launchTile(
+            title = "Reset",
+            subtitle = "close the tiles, show the launcher",
+            packages = emptyList(),
+        ) {
+            if (!locked) {
+                app.layoutEngine.resetToVendorState()
+                activity.toast("Returned to the vendor launcher")
+            }
+        }
+        c.addView(reset)
         return activity.scroll(c)
     }
 
@@ -564,8 +578,12 @@ class SettingsSection(private val app: WitsCompanionApp) : MainActivity.Section 
             "The Cockpit's play/pause/next needs notification access to read the player."
         ))
         c.addView(activity.button("Grant notification access") {
-            if (app.mediaRepository.isPermissionGranted()) activity.toast("Already granted")
-            else activity.startActivity(app.mediaRepository.permissionIntent())
+            when {
+                app.mediaRepository.isPermissionGranted() -> activity.toast("Already granted")
+                // Platform build: grant it ourselves, since the vendor menu is unreachable.
+                app.mediaRepository.grantSelf() -> activity.toast("Granted")
+                else -> activity.startActivity(app.mediaRepository.permissionIntent())
+            }
         })
 
         // ------------------------------------------------------------ reset

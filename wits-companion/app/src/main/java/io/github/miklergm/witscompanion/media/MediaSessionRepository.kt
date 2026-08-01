@@ -86,6 +86,39 @@ class MediaSessionRepository(
         Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS
     )
 
+    /** True when the app can grant notification access itself (platform build). */
+    fun canSelfGrant(): Boolean =
+        appContext.checkSelfPermission("android.permission.WRITE_SECURE_SETTINGS") ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    /**
+     * Grants our listener notification access by appending it to
+     * `enabled_notification_listeners`. Needs `WRITE_SECURE_SETTINGS` (held on the platform
+     * build), which is why this exists at all: the vendor's system menu for notification
+     * access is unreachable on this head unit, and the grant is lost on every reinstall.
+     *
+     * @return true if the setting now contains our component (already-granted counts)
+     */
+    fun grantSelf(): Boolean {
+        if (isPermissionGranted()) return true
+        if (!canSelfGrant()) return false
+        return runCatching {
+            val current = Settings.Secure.getString(
+                appContext.contentResolver, "enabled_notification_listeners"
+            )?.takeIf { it.isNotBlank() }
+            val ours = componentName.flattenToString()
+            val merged = when {
+                current == null -> ours
+                current.split(":").contains(ours) -> current
+                else -> "$current:$ours"
+            }
+            Settings.Secure.putString(
+                appContext.contentResolver, "enabled_notification_listeners", merged
+            )
+            isPermissionGranted()
+        }.getOrDefault(false)
+    }
+
     // -------------------------------------------------------------- lifecycle
 
     fun start() {

@@ -26,6 +26,14 @@
         android:name="android.permission.MANAGE_ACTIVITY_TASKS"
         tools:ignore="ProtectedPermissions" />
 
+    <!-- Signature-level. Granted only on the platform build. Used solely to self-grant the
+         media notification-listener access, because the vendor's system menu for it is
+         unreachable on this head unit and the grant is lost on every reinstall. On a debug
+         build it stays ungranted and the app falls back to the system settings intent. -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+
     <!-- Optional: only used by the opt-in "restore layout at boot" feature. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
