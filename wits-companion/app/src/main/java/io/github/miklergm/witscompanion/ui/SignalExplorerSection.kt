@@ -10,22 +10,17 @@ import android.widget.ScrollView
 import android.widget.TextView
 import io.github.miklergm.witscompanion.app.WitsCompanionApp
 import io.github.miklergm.witscompanion.carstate.CarState
-import io.github.miklergm.witscompanion.signalexplorer.AudibleChange
-import io.github.miklergm.witscompanion.signalexplorer.Correlator
 import io.github.miklergm.witscompanion.signalexplorer.EventKind
 import io.github.miklergm.witscompanion.signalexplorer.EventPayload
 import io.github.miklergm.witscompanion.signalexplorer.Exporter
-import io.github.miklergm.witscompanion.signalexplorer.GuidedSession
 import io.github.miklergm.witscompanion.signalexplorer.MarkerType
 import io.github.miklergm.witscompanion.signalexplorer.OtaPhase
 import io.github.miklergm.witscompanion.signalexplorer.ReplayEngine
 import io.github.miklergm.witscompanion.signalexplorer.SessionEvent
 import io.github.miklergm.witscompanion.signalexplorer.SessionRecorder
-import io.github.miklergm.witscompanion.signalexplorer.Tristate
-import io.github.miklergm.witscompanion.signalexplorer.UserObservations
 
 /**
- * Signal Explorer UI: live timeline, markers, guided wizard, sessions and replay.
+ * Signal Explorer UI: record, a live timeline, and sessions/replay for offline analysis.
  *
  * The screen contains no control that changes vehicle or head-unit state.
  */
@@ -37,7 +32,6 @@ class SignalExplorerSection(private val app: WitsCompanionApp) : MainActivity.Se
     private lateinit var timelineView: TextView
     private lateinit var contextField: EditText
     private var activity: MainActivity? = null
-    private var otaPhase = OtaPhase.UNSPECIFIED
     private var filter: String = ""
     private var replay: ReplayEngine? = null
     private val replayEvents = ArrayDeque<SessionEvent>()
@@ -84,109 +78,47 @@ class SignalExplorerSection(private val app: WitsCompanionApp) : MainActivity.Se
         statusView = mono(activity, "—")
         c.addView(statusView)
 
-        // ---------------------------------------------------------- volume panel
-        c.addView(head(activity, "Volume domains"))
-        volumeView = mono(activity, "—")
-        c.addView(volumeView)
-        c.addView(body(activity,
-            "The OEM/NBT domain has no absolute value in this firmware, so it is shown as " +
-                "unavailable rather than guessed. The relative estimate is opt-in and is " +
-                "never presented as exact."))
-        c.addView(btn(activity, "Toggle OEM relative estimate") {
-            val on = app.signalExplorer.oemRelativeEstimate == null
-            app.signalExplorer.enableRelativeEstimate(on)
-            activity.toast(if (on) "Relative estimate ON (labelled an estimate)" else "OFF")
-            refreshVolume()
-        })
-        c.addView(btn(activity, "Reset relative estimate") {
-            app.signalExplorer.resetRelativeEstimate(); refreshVolume()
-        })
-
-        // -------------------------------------------------------------- session
-        c.addView(head(activity, "Session"))
+        // -------------------------------------------------------------- record
+        c.addView(head(activity, "Record"))
         contextField = EditText(activity).apply {
-            hint = "Test context (e.g. 'scheme Type 1, engine off')"
+            hint = "Note (optional, e.g. 'engine off, parked')"
             setSingleLine()
         }
         c.addView(contextField)
-
-        c.addView(btn(activity, "OTA phase: ${otaPhase.name}") {
-            otaPhase = when (otaPhase) {
-                OtaPhase.UNSPECIFIED -> OtaPhase.BEFORE_OTA
-                OtaPhase.BEFORE_OTA -> OtaPhase.AFTER_OTA
-                OtaPhase.AFTER_OTA -> OtaPhase.UNSPECIFIED
-            }
-            (it as Button).text = "OTA phase: ${otaPhase.name}"
-        })
-        c.addView(btn(activity, "Start recording") {
+        val recordRow = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+        recordRow.addView(btn(activity, "Start") {
             if (app.signalExplorer.isRecording) { activity.toast("Already recording"); return@btn }
             val raw = app.signalExplorer.steeringSchemeRaw()
-            val rec = app.signalExplorer.startSession(otaPhase, contextField.text.toString(), raw)
+            val rec = app.signalExplorer.startSession(OtaPhase.UNSPECIFIED, contextField.text.toString(), raw)
             rec.addListener(recorderListener)
-            activity.toast("Recording ${rec.metadata.sessionId}")
-            refreshAll()
-        })
-        c.addView(btn(activity, "Stop recording") {
+            activity.toast("Recording"); refreshAll()
+        }.weighted())
+        recordRow.addView(btn(activity, "Stop") {
             app.signalExplorer.recorder?.removeListener(recorderListener)
             app.signalExplorer.stopSession()
             activity.toast("Stopped"); refreshAll()
-        })
+        }.weighted())
+        c.addView(recordRow)
 
-        // -------------------------------------------------------------- markers
-        c.addView(head(activity, "Markers"))
-        c.addView(body(activity,
-            "Press the marker the instant you perform the physical action. Each marker " +
-                "keeps 3 s of prior events and 8 s afterwards, plus audio snapshots."))
-        val markerGrid = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+        // A compact row of the common markers — tag a physical action while recording.
+        val markerRow = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
         listOf(
-            MarkerType.STEERING_VOLUME_UP, MarkerType.STEERING_VOLUME_DOWN, MarkerType.STEERING_MUTE,
-            MarkerType.NBT_KNOB_VOLUME_UP, MarkerType.NBT_KNOB_VOLUME_DOWN, MarkerType.NBT_KNOB_MUTE,
-            MarkerType.SOURCE_OEM_TO_ANDROID, MarkerType.SOURCE_ANDROID_TO_OEM,
-            MarkerType.IDRIVE_ROTATE_LEFT, MarkerType.IDRIVE_ROTATE_RIGHT, MarkerType.IDRIVE_PRESS,
-            MarkerType.ANDROID_SPOTIFY_START, MarkerType.OEM_RADIO_START,
-            MarkerType.OEM_BLUETOOTH_START, MarkerType.ZLINK_START,
-            MarkerType.REVERSE_START, MarkerType.REVERSE_END, MarkerType.CUSTOM,
-        ).chunked(3).forEach { row ->
-            val rowView = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
-            row.forEach { type ->
-                rowView.addView(Button(activity).apply {
-                    text = type.name.replace('_', ' ').lowercase()
-                    textSize = 11f
-                    isAllCaps = false
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                    setOnClickListener {
-                        val m = app.signalExplorer.mark(type)
-                        activity.toast(if (m == null) "Not recording" else "Marked ${type.name}")
-                        refreshStatus(); refreshTimeline()
-                    }
-                    markerButtons += this
-                })
-            }
-            markerGrid.addView(rowView)
+            "reverse" to MarkerType.REVERSE_START,
+            "→ OEM" to MarkerType.SOURCE_ANDROID_TO_OEM,
+            "→ Android" to MarkerType.SOURCE_OEM_TO_ANDROID,
+            "mark" to MarkerType.CUSTOM,
+        ).forEach { (label, type) ->
+            markerRow.addView(Button(activity).apply {
+                text = label; textSize = 12f; isAllCaps = false
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                setOnClickListener {
+                    val m = app.signalExplorer.mark(type)
+                    activity.toast(if (m == null) "Not recording" else "Marked"); refreshTimeline()
+                }
+                markerButtons += this
+            })
         }
-        c.addView(markerGrid)
-
-        c.addView(btn(activity, "Answer observations for last marker") {
-            showObservationDialog(activity)
-        })
-
-        // --------------------------------------------------------------- wizard
-        c.addView(head(activity, "Guided session"))
-        c.addView(body(activity,
-            "Minimal matrix = 2 sources × 2 controls, the acceptance minimum. " +
-                "You perform every physical action; the app only instructs and records."))
-        c.addView(btn(activity, "Show minimal matrix steps") {
-            val steps = GuidedSession.minimalMatrix().joinToString("\n\n") {
-                "${it.index + 1}. [${it.source.label}] ${it.instruction} -> marker ${it.marker.name}"
-            }
-            showText(activity, "Minimal matrix", steps)
-        })
-        c.addView(btn(activity, "Show full matrix steps") {
-            val steps = GuidedSession.fullMatrix().joinToString("\n") {
-                "${it.index + 1}. [${it.source.label}] ${it.instruction.replace("\n", " ")}"
-            }
-            showText(activity, "Full matrix", steps)
-        })
+        c.addView(markerRow)
 
         // ------------------------------------------------------------- timeline
         c.addView(head(activity, "Live timeline"))
@@ -204,13 +136,21 @@ class SignalExplorerSection(private val app: WitsCompanionApp) : MainActivity.Se
 
         // ------------------------------------------------------------- sessions
         c.addView(head(activity, "Sessions"))
-        c.addView(btn(activity, "List sessions") { showSessions(activity) })
-        c.addView(btn(activity, "Export latest session") { exportLatest(activity) })
-        c.addView(btn(activity, "Correlate latest markers") { showCorrelation(activity) })
-        c.addView(btn(activity, "Replay latest session") { startReplay(activity) })
-        c.addView(btn(activity, "Stop replay") {
+        val sessionRow = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+        sessionRow.addView(btn(activity, "List") { showSessions(activity) }.weighted())
+        sessionRow.addView(btn(activity, "Export") { exportLatest(activity) }.weighted())
+        sessionRow.addView(btn(activity, "Replay") { startReplay(activity) }.weighted())
+        sessionRow.addView(btn(activity, "Stop") {
             replay?.stop(); replay = null; activity.toast("Replay stopped")
-        })
+        }.weighted())
+        c.addView(sessionRow)
+
+        // -------------------------------------------------------------- volume
+        // Kept as a reference readout; the volume domains are understood
+        // (docs/audio-volume.md), so the research controls that used to live here are gone.
+        c.addView(head(activity, "Volume domains"))
+        volumeView = mono(activity, "—")
+        c.addView(volumeView)
 
         refreshAll()
         return ScrollView(activity).apply { addView(c) }
@@ -230,18 +170,12 @@ class SignalExplorerSection(private val app: WitsCompanionApp) : MainActivity.Se
         if (!::statusView.isInitialized) return
         val ex = app.signalExplorer
         val rec = ex.recorder
-        val raw = ex.steeringSchemeRaw()
         // Markers are meaningless outside a session; grey them out so the screen says so.
         markerButtons.forEach { it.isEnabled = ex.isRecording }
-        statusView.text = buildString {
-            appendLine("recording        : ${if (ex.isRecording) "YES" else "no — press Start recording"}")
-            appendLine("session          : ${rec?.metadata?.sessionId ?: "—"}")
-            appendLine("events / markers : ${rec?.eventCount ?: 0} / ${rec?.markerCount() ?: 0}")
-            appendLine("catalog version  : ${ex.catalog.version} (${ex.catalog.subscribableActions().size} actions)")
-            appendLine("property access  : ${ex.propertyStrategy()}")
-            appendLine("missed samples   : ${ex.missedSamples()}")
-            appendLine("steering scheme  : ${ex.steeringSchemeLabel(raw)} (raw ${raw ?: "unset"})")
-            appendLine("catalog seen     : ${rec?.catalogDelta?.seenCount() ?: 0} actions")
+        statusView.text = if (ex.isRecording) {
+            "recording — ${rec?.eventCount ?: 0} events, ${rec?.markerCount() ?: 0} markers"
+        } else {
+            "not recording — press Start, then use a control in the car"
         }
     }
 
@@ -317,61 +251,6 @@ class SignalExplorerSection(private val app: WitsCompanionApp) : MainActivity.Se
 
     // ------------------------------------------------------------------ dialogs
 
-    private fun showObservationDialog(activity: MainActivity) {
-        if (app.signalExplorer.recorder?.markerCount()?.let { it > 0 } != true) {
-            activity.toast("No marker yet"); return
-        }
-        val container = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(activity, 20), dp(activity, 8), dp(activity, 20), 0)
-        }
-        var oem = Tristate.UNKNOWN
-        var android = Tristate.UNKNOWN
-        var audible = AudibleChange.UNCLEAR
-        var both = Tristate.UNKNOWN
-        var srcChanged = Tristate.UNKNOWN
-
-        fun tri(label: String, onSet: (Tristate) -> Unit) {
-            container.addView(body(activity, label))
-            val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
-            Tristate.entries.forEach { v ->
-                row.addView(Button(activity).apply {
-                    text = v.name; textSize = 11f; isAllCaps = false
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                    setOnClickListener { onSet(v); activity.toast("$label = ${v.name}") }
-                })
-            }
-            container.addView(row)
-        }
-        tri("BMW/OEM volume graphic visible?") { oem = it }
-        tri("Android volume graphic visible?") { android = it }
-        tri("Both domains appear to change?") { both = it }
-        tri("Source changed unexpectedly?") { srcChanged = it }
-
-        container.addView(body(activity, "Audible level changed?"))
-        val audRow = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
-        AudibleChange.entries.forEach { v ->
-            audRow.addView(Button(activity).apply {
-                text = v.name; textSize = 11f; isAllCaps = false
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                setOnClickListener { audible = v; activity.toast("audible = ${v.name}") }
-            })
-        }
-        container.addView(audRow)
-
-        androidx.appcompat.app.AlertDialog.Builder(activity)
-            .setTitle("Observations for the last marker")
-            .setView(ScrollView(activity).apply { addView(container) })
-            .setPositiveButton("Save") { _, _ ->
-                app.signalExplorer.attachObservations(
-                    UserObservations(oem, android, audible, both, srcChanged)
-                )
-                activity.toast("Saved")
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
     private fun showSessions(activity: MainActivity) {
         val sessions = SessionRecorder.listSessions(activity)
         if (sessions.isEmpty()) { activity.toast("No sessions"); return }
@@ -386,29 +265,6 @@ class SignalExplorerSection(private val app: WitsCompanionApp) : MainActivity.Se
         if (dir == null) { activity.toast("No sessions"); return }
         val text = Exporter.bundleAsText(dir, app.signalExplorer.catalog)
         LogExportHelper.exportText(activity, text, "${dir.name}-signal-session.txt")
-    }
-
-    private fun showCorrelation(activity: MainActivity) {
-        val dir = SessionRecorder.listSessions(activity).firstOrNull()
-        if (dir == null) { activity.toast("No sessions"); return }
-        val events = Exporter.readEvents(dir)
-        val markers = app.signalExplorer.recorder?.allMarkers().orEmpty()
-        if (markers.isEmpty()) { activity.toast("No markers in the active session"); return }
-        val text = markers.joinToString("\n\n") { m ->
-            val f = Correlator.analyse(m, events)
-            buildString {
-                appendLine("### ${f.marker.markerType.name}")
-                appendLine("wits key broadcast : ${f.witsKeyBroadcast}")
-                appendLine("raw key codes      : ${f.rawKeyCodes}")
-                appendLine("android key events : ${f.androidKeyEvents}")
-                appendLine("android stream Δ   : ${f.androidStreamDeltas.ifEmpty { listOf("none") }}")
-                appendLine("volume broadcasts  : ${f.volumeBroadcasts.ifEmpty { listOf("none") }}")
-                appendLine("MCU volume Δ       : ${f.mcuVolumeDelta ?: "none"}")
-                appendLine("source changed     : ${f.sourceChanged}")
-                appendLine("=> ${f.conclusion()}")
-            }
-        }
-        showText(activity, "Correlation", text)
     }
 
     private fun startReplay(activity: MainActivity) {
@@ -465,6 +321,11 @@ class SignalExplorerSection(private val app: WitsCompanionApp) : MainActivity.Se
         layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(a, 6) }
+    }
+
+    /** Makes a button share its row equally — for the Start/Stop and Sessions rows. */
+    private fun <T : View> T.weighted(): T = apply {
+        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
     }
 
     private companion object {
