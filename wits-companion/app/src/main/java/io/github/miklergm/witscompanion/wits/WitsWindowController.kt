@@ -63,15 +63,27 @@ class WitsWindowController(
             val insets = metrics.windowInsets.getInsetsIgnoringVisibility(
                 android.view.WindowInsets.Type.systemBars()
             )
+            // On this head unit the display-level metrics report zero decor insets — the
+            // 99 px top bar (home / clock / recents) is a per-window inset, not a display
+            // inset (`ITYPE_STATUS_BAR frame=[0,0][2400,99]`). Floor the top with the
+            // framework `status_bar_height` so tiles do not land under it. `[RUNTIME]`
+            // 2026-08-01 — regressed when the size source moved to maximumWindowMetrics.
+            val top = maxOf(insets.top, barHeight(context, "status_bar_height"))
             return Rect(
                 bounds.left + insets.left,
-                bounds.top + insets.top,
+                bounds.top + top,
                 bounds.right - insets.right,
                 bounds.bottom - insets.bottom,
             )
         }
         val dm = context.resources.displayMetrics
         return Rect(0, 0, dm.widthPixels, dm.heightPixels)
+    }
+
+    /** A framework bar-height dimen in px, or 0 if the resource is absent. */
+    private fun barHeight(context: Context, name: String): Int {
+        val id = context.resources.getIdentifier(name, "dimen", "android")
+        return if (id > 0) context.resources.getDimensionPixelSize(id) else 0
     }
 
     /** Full display bounds, ignoring insets. Shown on the capability screen. */

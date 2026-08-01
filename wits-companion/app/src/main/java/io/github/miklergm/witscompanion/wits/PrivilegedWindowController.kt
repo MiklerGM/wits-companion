@@ -73,7 +73,12 @@ class PrivilegedWindowController(
         preserve: Boolean = false,
     ): PlaceResult {
         val existing = findTask(packageName)
-        if (existing != null && existing.windowingMode == WitsWindowMode.FREEFORM) {
+        // Fast, flicker-free path — but ONLY for a tile that is already visible. resizeTask
+        // moves bounds without changing visibility or z-order, so on an existing-but-hidden
+        // freeform task (a leftover tile behind the launcher) it would reposition something
+        // the user never sees — the app "does not open". Such a task must be launched to be
+        // brought forward. `[RUNTIME]` 2026-08-01.
+        if (existing != null && existing.windowingMode == WitsWindowMode.FREEFORM && existing.visible) {
             return if (resizeTask(existing.taskId, bounds)) {
                 logger?.log(
                     "window", "resize_task", packageName,
@@ -85,10 +90,9 @@ class PrivilegedWindowController(
                 PlaceResult.Failed("resizeTask returned false")
             }
         }
-        // A live task in another mode (e.g. fullscreen) can only be re-tiled by relaunching
-        // it, which sends a MAIN intent and can reset the app. When asked to preserve it —
-        // an automatic restore of an app the user is still in — leave it exactly as it is.
-        // resizeTask cannot help: a non-freeform task is not resizable.
+        // A live task the user is still in must not be reset on an automatic restore: leave
+        // it as-is rather than sending it a MAIN intent. (A fresh user apply does not
+        // preserve, so it falls through and is brought forward.)
         if (existing != null && preserve) {
             logger?.log(
                 "window", "preserve_in_place", packageName,

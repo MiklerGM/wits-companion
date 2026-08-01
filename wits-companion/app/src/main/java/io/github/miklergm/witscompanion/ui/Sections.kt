@@ -526,6 +526,16 @@ class SettingsSection(private val app: WitsCompanionApp) : MainActivity.Section 
                 "deep-sleep wake."
         ))
 
+        // ------------------------------------------------------------- media
+        c.addView(activity.heading("Media"))
+        c.addView(activity.body(
+            "The Cockpit's play/pause/next needs notification access to read the player."
+        ))
+        c.addView(activity.button("Grant notification access") {
+            if (app.mediaRepository.isPermissionGranted()) activity.toast("Already granted")
+            else activity.startActivity(app.mediaRepository.permissionIntent())
+        })
+
         // ------------------------------------------------------------ reset
         c.addView(activity.heading("Reset"))
         c.addView(activity.body(
