@@ -208,6 +208,21 @@ class WitsWindowController(
         return launchViaPlainStart(packageName, bounds, windowMode)
     }
 
+    /**
+     * Brings [packageName]'s existing window back to the front, to undo the reorder that
+     * happens when a Cockpit control tap focuses the fullscreen panel and pushes the floating
+     * tile behind it.
+     *
+     * Mode-preserving on the privileged path (`moveTaskToFront` keeps the task freeform and
+     * where it is); on the unprivileged path a plain launcher-intent start, which reuses the
+     * already-running task and moves it forward — no MAIN reset of an active route, because
+     * the task already exists. Best effort: a failure just leaves the tile where it was.
+     */
+    fun raiseToFront(packageName: String): Boolean {
+        if (isPrivileged && privileged.moveToFront(packageName)) return true
+        return launchViaPlainStart(packageName, null, WitsWindowMode.FREEFORM)
+    }
+
     private fun launchViaPlainStart(
         packageName: String,
         bounds: Rect?,

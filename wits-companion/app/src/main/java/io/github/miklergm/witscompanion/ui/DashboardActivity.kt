@@ -120,15 +120,16 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         row.addView(panel, LinearLayout.LayoutParams(0, MATCH, 1f - reserved))
         if (reservation?.side == MapSide.RIGHT) addSpacer()
 
-        clockView = TextView(this).apply {
-            textSize = 34f; setTextColor(palette.foreground); typeface = Typeface.DEFAULT_BOLD
-        }
-        panel.addView(clockView)
+        // The clock and the ACC/source line are intentionally not shown in the Cockpit: the
+        // vendor's top strip already carries a clock, and every extra row pushed the footer
+        // (Settings / Reset) off a short panel. Kept as detached views so the per-second tick
+        // and onCarState stay valid without null checks.
+        clockView = TextView(this)
+        stateView = TextView(this)
 
-        stateView = TextView(this).apply {
-            textSize = 13f; setTextColor(palette.muted); setPadding(0, pad(2), 0, pad(14))
-        }
-        panel.addView(stateView)
+        // Everything between the (hidden) header and the pinned footer scrolls, so a tall
+        // panel — media + switcher + hotspot + brightness — never hides the footer.
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
         // Media as a single rounded card, tinted by what is playing — the panel takes on
         // the album's colour (Mini AA's MediaPlayerCard in spirit). onMedia() fills in the
@@ -138,7 +139,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             setPadding(pad(16), pad(14), pad(16), pad(14))
             layoutParams = LinearLayout.LayoutParams(MATCH, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
-        panel.addView(mediaCard)
+        content.addView(mediaCard)
 
         val nowPlaying = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -197,9 +198,15 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             gravity = Gravity.CENTER
             setPadding(0, pad(4), 0, 0)
         }
-        prevButton = transportButton("⏮", emphasised = false) { app.mediaRepository.previous() }
-        playPauseButton = transportButton("▶", emphasised = true) { app.mediaRepository.playPause() }
-        nextButton = transportButton("⏭", emphasised = false) { app.mediaRepository.next() }
+        prevButton = transportButton("⏮", emphasised = false) {
+            app.mediaRepository.previous(); keepFloatingOnTop()
+        }
+        playPauseButton = transportButton("▶", emphasised = true) {
+            app.mediaRepository.playPause(); keepFloatingOnTop()
+        }
+        nextButton = transportButton("⏭", emphasised = false) {
+            app.mediaRepository.next(); keepFloatingOnTop()
+        }
         transport.addView(prevButton)
         transport.addView(playPauseButton)
         transport.addView(nextButton)
@@ -207,7 +214,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
 
         // Which app floats over the panel. Re-applies the anchored layout with the chosen
         // package, so switching is one tap instead of a trip to the Layouts tab.
-        panel.addView(TextView(this).apply {
+        content.addView(TextView(this).apply {
             text = "Floating app"
             textSize = 12f; setTextColor(palette.muted); setPadding(0, pad(16), 0, pad(4))
         })
@@ -224,7 +231,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             switcherTiles += pkg to tile
             switcher.addView(tile)
         }
-        panel.addView(switcher)
+        content.addView(switcher)
 
         // The volume readouts live in the Car/Signals tabs, not here. On this vehicle the
         // value is the head-unit stage, not what the ear hears (steering and NBT volume
@@ -246,7 +253,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
                     .apply { topMargin = pad(4) }
                 addView(hotspotText)
             }
-            panel.addView(hotspotTile)
+            content.addView(hotspotTile)
             renderHotspot(app.hotspotController.state())
         }
 
@@ -273,15 +280,26 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             addView(brightLabel)
             addView(transportButton("+", emphasised = false) { stepBrightness(dim = false) })
         }
-        panel.addView(brightnessTile)
+        content.addView(brightnessTile)
         renderBrightness()
 
-        panel.addView(View(this), LinearLayout.LayoutParams(MATCH, 0, 1f))
+        // The content scrolls in the space above the footer; the footer stays pinned so
+        // Settings / Reset are always reachable no matter how tall the content gets.
+        panel.addView(
+            android.widget.ScrollView(this).apply {
+                isFillViewport = true
+                addView(content)
+            },
+            LinearLayout.LayoutParams(MATCH, 0, 1f),
+        )
 
         // Settings and a one-tap reset side by side. Reset is on the panel deliberately:
         // if a layout looks wrong while driving, returning to the vendor launcher must be
         // reachable without hunting through tabs.
-        val footer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val footer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, pad(8), 0, 0)
+        }
         footer.addView(Button(this).apply {
             text = "Settings"
             isAllCaps = false
@@ -369,6 +387,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         app.mediaRepository.removeListener(this)
         if (hotspotTile != null) app.hotspotController.stopObserving()
         ui.removeCallbacks(clockTick)
+        ui.removeCallbacks(raiseFloating)
         super.onStop()
     }
 
@@ -412,6 +431,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
                 renderHotspot(app.hotspotController.state())
             }
         }
+        keepFloatingOnTop()
     }
 
     private fun renderBrightness() {
@@ -429,6 +449,23 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             }
             is BrightnessController.Result.Error -> toast("Brightness: ${r.message}")
         }
+        keepFloatingOnTop()
+    }
+
+    /** Re-raises the floating tile after a burst of control taps that pushed it behind. */
+    private val raiseFloating = Runnable {
+        currentFloatingPackage()?.let { app.windowController.raiseToFront(it) }
+    }
+
+    /**
+     * A tap on any panel control (brightness, hotspot, transport) focuses the fullscreen
+     * panel, which moves it in front of the floating map and hides it. Bring the map back to
+     * the front — debounced, so a burst of taps coalesces into a single raise instead of
+     * flickering the map on every press.
+     */
+    private fun keepFloatingOnTop() {
+        ui.removeCallbacks(raiseFloating)
+        ui.postDelayed(raiseFloating, RAISE_DELAY_MS)
     }
 
     // ----------------------------------------------------------------- updates
@@ -764,6 +801,9 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         /** Clock and track position share one tick. */
         const val TICK_MS = 1_000L
+
+        /** Debounce before re-raising the floating tile after control taps. */
+        const val RAISE_DELAY_MS = 250L
         const val PROGRESS_MAX = 1_000
 
         /** How wide our window must be, as a percentage of the display, to count as the anchor. */

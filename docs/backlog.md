@@ -37,6 +37,23 @@ how concrete they are.
   in the Cockpit (keeping to what is genuinely useful in motion — speed/doors are on the
   cluster/HUD already).
 
+## zlink (CarPlay / Android Auto mirroring) — upscaled / low resolution
+
+- **zlink renders soft/stretched because it negotiates a low resolution** — the user recalls
+  it settling on ~**1280×480** while the panel is 2400×900, so the image is upscaled. Note
+  1280×480 and 2400×900 are the **same 8:3 aspect**, so it is a resolution problem, not a
+  stretch/aspect one — it just needs a higher negotiated mode.
+- **What to find out (needs the logs the user captured + on-device):**
+  - Where 1280×480 comes from: is it hard-coded in zlink, driven by the **surface/window
+    size** zlink is given, or negotiated with the phone? If it follows the window size, giving
+    zlink a full 2400×900 surface (fullscreen, or a correctly-sized freeform tile) may make it
+    negotiate higher; if it is tiled *smaller* it may go *lower*, so tiling could hurt here.
+  - Whether a zlink setting or a `wits_*` / system property pins the mirror resolution (use
+    the signal recorder: change zlink's display/quality setting and watch what moves).
+  - Whether zlink exposes a resolution/quality option in its own UI we simply have not set.
+- **Ask the user** to share the logs they took (the resolution-negotiation lines) before
+  designing anything. Offline there is nothing to build yet — this is research first.
+
 ## Status bar / top strip
 
 - **Hide / reveal the top bar.** The vendor 99 px top strip can be hidden and pulled back
@@ -50,11 +67,16 @@ how concrete they are.
 
 ## Hotspot
 
-- **Toggling the hotspot closes the focused app.** Clicking hotspot on/off in the Cockpit
-  turns off / hides whatever app was in focus (e.g. the map). Likely a side effect of
-  `TetheringManager.start/stopTethering` on the vendor ROM (Wi-Fi station/AP transition or a
-  focus/window change), not the button itself. Needs on-car logcat around the toggle. Until
-  understood, consider re-asserting the layout after a toggle, or gating the toggle.
+- **[FIXED — verify on car] Toggling the hotspot (and, it turned out, any panel control)
+  pushed the floating map behind the panel.** Root cause was *not* tethering: any tap on a
+  Cockpit control focuses the fullscreen panel task, which moves it in front of the freeform
+  map (`dumpsys`: companion `MOVE_TO_TOP`, map `TO_BACK`). Confirmed on the emulator with the
+  brightness buttons, and matches the on-car hotspot report. Fix: after a control tap the
+  Cockpit re-raises the floating tile (`WitsWindowController.raiseToFront`), debounced so a
+  burst coalesces — mode-preserving `moveTaskToFront` on the privileged path, launcher-intent
+  bring-to-front on the unprivileged path. Verified on the emulator (map returns as freeform
+  at its bounds, no route reset). **On the car, confirm the privileged `moveTaskToFront`
+  raises without flicker; if it fails, the launcher-intent fallback still applies.**
 
 ## Emulator-only (does not affect the head unit)
 
@@ -116,17 +138,17 @@ geometry bug — it is *propagation*, plus emulator limits:
 activity recreation (e.g. a day/night flip). Now the floating package is remembered directly
 (`LayoutRepository.cockpitFloatingPackage`).
 
-## Cockpit: play hides the map (needs on-car confirm)
+## Cockpit: play hides the map — [FIXED, same cause as hotspot]
 
-- Tapping **play** in the Cockpit occasionally hid the floating map (companion task came to
-  front, the freeform map went to back). Reproduced once on the emulator, not reliably; `prev`
-  and empty-panel taps never did it. Cause is almost certainly emulator-specific: Spotify is
-  **logged out** there ("Please login"), so a `play()` command makes it grab focus / open its
-  login UI, which reorders the windows. On the head unit (logged-in, actually playing) `play`/
-  `pause` is a pure transport toggle with no window side effect. **Confirm in the car.** If it
-  does happen there, the fix is to **pin the map tile always-on-top** (privileged path) so a
-  panel tap can't push it behind — no relaunch, no route loss — rather than re-floating after
-  every transport tap.
+- This was the same root cause as the hotspot item above: a panel-control tap focuses the
+  panel and pushes the freeform map behind it — not the `play()` command itself (the earlier
+  emulator theory about logged-out Spotify grabbing focus was a red herring; brightness, which
+  talks to nothing, does it just as reliably). The transport buttons now also re-raise the
+  floating tile after the command (`keepFloatingOnTop`). Empty-panel taps never triggered it
+  because a non-interactive touch does not focus/raise the panel task. Verify on the car along
+  with the hotspot fix.
+- Considered but rejected: pinning the tile always-on-top. `moveTaskToFront` after the tap is
+  simpler, needs no always-on-top API, and the debounce keeps it to one raise per burst.
 
 ## Brightness (Cockpit control)
 
