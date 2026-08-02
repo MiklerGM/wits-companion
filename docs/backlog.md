@@ -39,20 +39,49 @@ how concrete they are.
 
 ## zlink (CarPlay / Android Auto mirroring) — upscaled / low resolution
 
-- **zlink renders soft/stretched because it negotiates a low resolution** — the user recalls
-  it settling on ~**1280×480** while the panel is 2400×900, so the image is upscaled. Note
-  1280×480 and 2400×900 are the **same 8:3 aspect**, so it is a resolution problem, not a
-  stretch/aspect one — it just needs a higher negotiated mode.
-- **What to find out (needs the logs the user captured + on-device):**
-  - Where 1280×480 comes from: is it hard-coded in zlink, driven by the **surface/window
-    size** zlink is given, or negotiated with the phone? If it follows the window size, giving
-    zlink a full 2400×900 surface (fullscreen, or a correctly-sized freeform tile) may make it
-    negotiate higher; if it is tiled *smaller* it may go *lower*, so tiling could hurt here.
-  - Whether a zlink setting or a `wits_*` / system property pins the mirror resolution (use
-    the signal recorder: change zlink's display/quality setting and watch what moves).
-  - Whether zlink exposes a resolution/quality option in its own UI we simply have not set.
-- **Ask the user** to share the logs they took (the resolution-negotiation lines) before
-  designing anything. Offline there is nothing to build yet — this is research first.
+zlink (zjinnova) renders soft because it mirrors at a **low, forced resolution** and the head
+unit upscales it. From the log the user captured (`research/zlink-log-1.txt`, wireless Android
+Auto, Galaxy S24):
+
+- The HU advertises the Android Auto display as **1280×480 @ 160 dpi**, forced:
+  - `MESSAGE_INIT_INFO`: `hu_AA_width=1280  hu_AA_height=480  hu_AA_density=160`
+  - `get_best_res … is_force_res=1`; content area `1280×480` inside a `1280×720` video frame
+    (`height_margin=240`). The phone can do more — the HU pins it low.
+  - zlink reads the system property **`persist.zj.dpi.aaDensity`** for the AA density (`zj` =
+    zjinnova). Other `init_*` values in the log: `init_cp_dpi=180`, `init_video_res=0`.
+- That `1280×480` is then scaled to zlink's `video_viewarea 1856×704`, and that onto the
+  2400×900 panel — **two/three upscales**, hence the softness. `1280×480` and `2400×900` are
+  the **same 8:3 aspect**, so this is purely resolution, not stretch.
+- `is_developer_options: 0` — zlink's developer options are OFF; they often expose a
+  resolution/quality picker.
+
+**The companion cannot fix this by tiling** — the low resolution is decided inside zlink's
+negotiation, driven by the HU config / `persist.zj.*` properties, not by the window we give
+it. Giving zlink a bigger surface only improves the *second* upscale, not the `1280×480` core;
+tiling it *smaller* could make it negotiate even lower. So this is a property/settings change,
+plus the companion's signal recorder + property reader as the tools to find and test it.
+
+### Test task (on the car)
+
+1. **Enumerate the knobs.** With zlink running (or just installed), read its properties:
+   `getprop | grep -iE 'persist\.zj|zlink|\.aa'`. Expect `persist.zj.dpi.aaDensity` and likely
+   companions for AA width/height or a resolution/quality index. Record the current values.
+2. **Baseline.** Confirm the live values match the log: capture a fresh zlink log (or logcat)
+   and note `hu_AA_width/height/density` + `is_force_res`.
+3. **Try zlink's own developer options** first (least invasive): enable them in zlink's UI if
+   possible and look for a resolution/quality setting; set it higher; reconnect AA; re-read the
+   log to see whether `hu_AA_width/height` rose.
+4. **Try the property route.** Raise the AA resolution/lower the density via the `persist.zj.*`
+   props found in step 1 (e.g. a higher AA width/height, or `aaDensity`). Note: these are
+   `/data` persistent properties, **not** a vendor-partition change, so within the "don't touch
+   system/vendor" rule — but the SELinux context may block a plain `setprop`; try `adb setprop`
+   and, if needed, the platform-signed app. Reconnect AA and re-read `hu_AA_*`.
+5. **Use the signal recorder** around each change: Start → change the setting/prop → Stop, so we
+   have a before/after of any `Settings`/property that moved.
+6. **Judge by the numbers, not just the eye:** success = `hu_AA_width/height` (and `get_best_res`
+   content size) go up and the picture sharpens. If nothing moves the forced `1280×480`, the cap
+   is baked into the HU's zlink config and the realistic options are (a) zlink developer options,
+   or (b) accept it. Capture whatever worked here for reference.
 
 ## Status bar / top strip
 
