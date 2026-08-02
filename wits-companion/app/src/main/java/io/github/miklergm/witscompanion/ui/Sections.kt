@@ -257,12 +257,19 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
         lockWhilePlacing()
         val anchored = app.layoutRepository.preset(DefaultPresets.ID_MAPS_ANCHORED)
         if (anchored != null) {
+            // Applying the anchored preset also brings the Cockpit panel up — as a freeform
+            // tile beside the map (LayoutEngine.bringAnchorToFront). We deliberately do NOT
+            // start DashboardActivity here as well: a plain start would create it fullscreen
+            // first, and the later freeform placement would only reorder that fullscreen task,
+            // leaving the panel overlapping (and hiding) the map on the first control tap.
             app.layoutEngine.apply(anchored, app.carStateRepository.state, Trigger.USER)
             app.layoutRepository.lastAppliedPresetId = anchored.id
             app.layoutRepository.cockpitFloatingPackage =
                 anchored.windows.firstOrNull { it.packageName != WitsPackages.SELF }?.packageName
+        } else {
+            // No anchored preset to place the map with — still open the panel.
+            activity.startActivity(android.content.Intent(activity, DashboardActivity::class.java))
         }
-        activity.startActivity(android.content.Intent(activity, DashboardActivity::class.java))
     }
 
     private fun applyFromHome(activity: MainActivity, preset: LayoutPreset) {

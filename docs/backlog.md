@@ -67,16 +67,25 @@ how concrete they are.
 
 ## Hotspot
 
-- **[FIXED — verify on car] Toggling the hotspot (and, it turned out, any panel control)
-  pushed the floating map behind the panel.** Root cause was *not* tethering: any tap on a
-  Cockpit control focuses the fullscreen panel task, which moves it in front of the freeform
-  map (`dumpsys`: companion `MOVE_TO_TOP`, map `TO_BACK`). Confirmed on the emulator with the
-  brightness buttons, and matches the on-car hotspot report. Fix: after a control tap the
-  Cockpit re-raises the floating tile (`WitsWindowController.raiseToFront`), debounced so a
-  burst coalesces — mode-preserving `moveTaskToFront` on the privileged path, launcher-intent
-  bring-to-front on the unprivileged path. Verified on the emulator (map returns as freeform
-  at its bounds, no route reset). **On the car, confirm the privileged `moveTaskToFront`
-  raises without flicker; if it fails, the launcher-intent fallback still applies.**
+- **[FIXED structurally — verify on car] Toggling the hotspot (and, it turned out, any panel
+  control) pushed the floating map behind the panel.** Root cause was *not* tethering: the
+  Cockpit panel was a **fullscreen** window with the map floating *over* it, so any tap on a
+  panel control focused the panel task and the framework raised it in front of the map
+  (`dumpsys`: companion `MOVE_TO_TOP`, map `TO_BACK`). Confirmed on the emulator with the
+  brightness buttons; matches the on-car hotspot report.
+  - First attempt was a debounced *re-raise* of the map after each tap — it worked but the map
+    visibly blinked out and back (rejected: "очень заметно").
+  - **Real fix:** make the panel a **freeform tile beside the map**, not a fullscreen anchor
+    behind it. Two non-overlapping freeform tiles never occlude each other on focus, verified
+    both with a Maps+Chrome pair and with the panel itself (`bringAnchorToFront` now launches
+    `DashboardActivity` into freeform at the map's complement bounds; a distinct
+    `taskAffinity` gives it its own task). On the emulator the map stays `visible=true` through
+    every control tap — no flicker.
+  - **Verify on car:** the privileged `resizeTask` should place the panel tile *exactly* and
+    the vendor hides the freeform caption, so it looks seamless. On the **emulator** the panel
+    tile shows the usual freeform caption + a cascade/size offset (same emulator-only quirk as
+    the tile cascade), and MainActivity can peek in the uncovered strips — cosmetic, emulator
+    only. Confirm the clean look on the head unit.
 
 ## Emulator-only (does not affect the head unit)
 
@@ -140,15 +149,14 @@ activity recreation (e.g. a day/night flip). Now the floating package is remembe
 
 ## Cockpit: play hides the map — [FIXED, same cause as hotspot]
 
-- This was the same root cause as the hotspot item above: a panel-control tap focuses the
-  panel and pushes the freeform map behind it — not the `play()` command itself (the earlier
-  emulator theory about logged-out Spotify grabbing focus was a red herring; brightness, which
-  talks to nothing, does it just as reliably). The transport buttons now also re-raise the
-  floating tile after the command (`keepFloatingOnTop`). Empty-panel taps never triggered it
-  because a non-interactive touch does not focus/raise the panel task. Verify on the car along
-  with the hotspot fix.
-- Considered but rejected: pinning the tile always-on-top. `moveTaskToFront` after the tap is
-  simpler, needs no always-on-top API, and the debounce keeps it to one raise per burst.
+- Same root cause as the hotspot item above (the fullscreen panel overlapping the map), and
+  fixed by the same change (panel is now a freeform tile beside the map). Not the `play()`
+  command — the earlier emulator theory about logged-out Spotify grabbing focus was a red
+  herring; brightness, which talks to nothing, hid the map just as reliably. Empty-panel taps
+  never triggered it because a non-interactive touch does not focus/raise the panel task.
+- Follow-ups from the two-tile change (cosmetic, mostly emulator): the panel tile's exact
+  placement + caption suppression need on-car confirmation; consider sending the launcher
+  (`MainActivity`) fully behind the tiles so it cannot peek in uncovered strips.
 
 ## Brightness (Cockpit control)
 

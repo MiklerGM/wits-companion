@@ -118,6 +118,7 @@
             android:exported="false"
             android:label="@string/app_name"
             android:launchMode="singleTask"
+            android:taskAffinity="io.github.miklergm.witscompanion.cockpit"
             android:screenOrientation="landscape"
             android:resizeableActivity="true"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboardHidden" />

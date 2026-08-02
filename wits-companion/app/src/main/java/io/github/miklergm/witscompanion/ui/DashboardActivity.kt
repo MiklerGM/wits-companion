@@ -198,15 +198,9 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             gravity = Gravity.CENTER
             setPadding(0, pad(4), 0, 0)
         }
-        prevButton = transportButton("⏮", emphasised = false) {
-            app.mediaRepository.previous(); keepFloatingOnTop()
-        }
-        playPauseButton = transportButton("▶", emphasised = true) {
-            app.mediaRepository.playPause(); keepFloatingOnTop()
-        }
-        nextButton = transportButton("⏭", emphasised = false) {
-            app.mediaRepository.next(); keepFloatingOnTop()
-        }
+        prevButton = transportButton("⏮", emphasised = false) { app.mediaRepository.previous() }
+        playPauseButton = transportButton("▶", emphasised = true) { app.mediaRepository.playPause() }
+        nextButton = transportButton("⏭", emphasised = false) { app.mediaRepository.next() }
         transport.addView(prevButton)
         transport.addView(playPauseButton)
         transport.addView(nextButton)
@@ -387,7 +381,6 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         app.mediaRepository.removeListener(this)
         if (hotspotTile != null) app.hotspotController.stopObserving()
         ui.removeCallbacks(clockTick)
-        ui.removeCallbacks(raiseFloating)
         super.onStop()
     }
 
@@ -431,7 +424,6 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
                 renderHotspot(app.hotspotController.state())
             }
         }
-        keepFloatingOnTop()
     }
 
     private fun renderBrightness() {
@@ -449,23 +441,6 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             }
             is BrightnessController.Result.Error -> toast("Brightness: ${r.message}")
         }
-        keepFloatingOnTop()
-    }
-
-    /** Re-raises the floating tile after a burst of control taps that pushed it behind. */
-    private val raiseFloating = Runnable {
-        currentFloatingPackage()?.let { app.windowController.raiseToFront(it) }
-    }
-
-    /**
-     * A tap on any panel control (brightness, hotspot, transport) focuses the fullscreen
-     * panel, which moves it in front of the floating map and hides it. Bring the map back to
-     * the front — debounced, so a burst of taps coalesces into a single raise instead of
-     * flickering the map on every press.
-     */
-    private fun keepFloatingOnTop() {
-        ui.removeCallbacks(raiseFloating)
-        ui.postDelayed(raiseFloating, RAISE_DELAY_MS)
     }
 
     // ----------------------------------------------------------------- updates
@@ -801,9 +776,6 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         /** Clock and track position share one tick. */
         const val TICK_MS = 1_000L
-
-        /** Debounce before re-raising the floating tile after control taps. */
-        const val RAISE_DELAY_MS = 250L
         const val PROGRESS_MAX = 1_000
 
         /** How wide our window must be, as a percentage of the display, to count as the anchor. */

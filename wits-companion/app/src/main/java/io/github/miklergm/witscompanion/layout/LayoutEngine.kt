@@ -160,8 +160,10 @@ class LayoutEngine(
         // the tile lands on top of it rather than behind.
         var offset = 0L
         if (preset.kind == PresetKind.ANCHORED) {
+            val panelBounds = ordered.firstOrNull { it.packageName != WitsPackages.SELF }
+                ?.let { panelComplement(it.bounds, area) }
             handler.postDelayed(
-                { if (stillValid(myGeneration, "anchor", WitsPackages.SELF)) bringAnchorToFront() },
+                { if (stillValid(myGeneration, "anchor", WitsPackages.SELF)) bringAnchorToFront(panelBounds) },
                 parked * PARK_DELAY_MS,
             )
             offset = parked * PARK_DELAY_MS + ANCHOR_SETTLE_MS
@@ -386,14 +388,20 @@ class LayoutEngine(
     }
 
     /**
-     * Brings the companion's own window to the front as the fullscreen anchor.
-     * Uses a plain activity start — no vendor hook needed for our own package.
+     * Brings the companion's own [DashboardActivity] up as the Cockpit panel — as a **freeform
+     * tile beside the map**, not a fullscreen anchor behind it, when [panelBounds] is given.
      *
-     * Targets `DashboardActivity`, not the launcher activity: the anchor is the screen
-     * behind the floating map while driving, whereas the launcher activity is the tabbed
-     * configuration UI.
+     * Why a tile and not fullscreen: a fullscreen panel *overlaps* the floating map, so any tap
+     * on a panel control focuses the panel task and the framework raises it over the map,
+     * hiding it (`[RUNTIME]` 2026-08-02 — the "map disappears when I tap brightness/hotspot"
+     * bug). Two non-overlapping freeform tiles never occlude each other on focus, so placing
+     * the panel beside the map removes the bug at the root — no re-raise, no flicker.
+     * [DashboardActivity]'s reservation logic already fills the window when it is not
+     * display-wide, so the panel simply fills its tile.
+     *
+     * Falls back to a plain (fullscreen) start when no bounds are known.
      */
-    private fun bringAnchorToFront() {
+    private fun bringAnchorToFront(panelBounds: android.graphics.Rect? = null) {
         runCatching {
             val intent = android.content.Intent(
                 appContext,
@@ -402,11 +410,42 @@ class LayoutEngine(
                 android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
                     android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
             )
-            appContext.startActivity(intent)
-            logger?.log("layout", "anchor_to_front", result = "sent")
+            val options = if (panelBounds != null && !panelBounds.isEmpty) {
+                val o = android.app.ActivityOptions.makeBasic().setLaunchBounds(panelBounds)
+                // Hidden setter; resolves under the platform signature, best-effort otherwise.
+                runCatching {
+                    android.app.ActivityOptions::class.java
+                        .getMethod("setLaunchWindowingMode", Int::class.javaPrimitiveType)
+                        .invoke(o, WitsWindowMode.FREEFORM)
+                }
+                o.toBundle()
+            } else {
+                null
+            }
+            appContext.startActivity(intent, options)
+            logger?.log(
+                "layout", "anchor_to_front",
+                extras = mapOf("bounds" to (panelBounds?.flattenToString() ?: "fullscreen")),
+                result = "sent",
+            )
         }.onFailure {
             logger?.log("layout", "anchor_to_front", result = "error:${it.javaClass.simpleName}")
         }
+    }
+
+    /**
+     * The panel's pixel bounds for an anchored layout: the strip the map does **not** cover.
+     * Null when the map is not flush to an edge (then the panel stays fullscreen).
+     */
+    private fun panelComplement(mapBounds: NormalizedBounds, area: android.graphics.Rect): android.graphics.Rect? {
+        val panel = when {
+            mapBounds.left <= 0.01f && mapBounds.right < 0.99f ->
+                NormalizedBounds(mapBounds.right, 0f, 1f, 1f)   // map left  → panel right
+            mapBounds.right >= 0.99f && mapBounds.left > 0.01f ->
+                NormalizedBounds(0f, 0f, mapBounds.left, 1f)    // map right → panel left
+            else -> return null
+        }
+        return panel.toPixels(area)
     }
 
     /**

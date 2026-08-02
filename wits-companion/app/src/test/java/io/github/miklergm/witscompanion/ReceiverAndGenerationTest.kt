@@ -231,7 +231,7 @@ class ReceiverAndGenerationTest {
     @Test
     fun `the anchor is the dashboard, not the tabbed configuration activity`() {
         val src = engineSource()
-        val body = src.substringAfter("private fun bringAnchorToFront()").substringBefore("\n    }")
+        val body = src.substringAfter("private fun bringAnchorToFront(").substringBefore("\n    }")
         assertTrue(
             "bringAnchorToFront must start DashboardActivity",
             body.contains("DashboardActivity"),

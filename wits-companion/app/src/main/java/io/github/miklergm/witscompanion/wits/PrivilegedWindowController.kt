@@ -130,34 +130,6 @@ class PrivilegedWindowController(
     fun findTask(packageName: String): TaskSnapshot? =
         rootTasks().firstOrNull { it.packageName == packageName }
 
-    /**
-     * Moves [packageName]'s task to the front **without** changing its windowing mode, so a
-     * floating freeform tile pushed behind the panel (a control tap focuses the panel) comes
-     * back on top where it was. Reflective `IActivityTaskManager.moveTaskToFront`; guarded,
-     * returns false if unavailable so the caller can fall back. `[UNVERIFIED on the head
-     * unit]` — validate on the car.
-     */
-    fun moveToFront(packageName: String): Boolean {
-        val task = findTask(packageName) ?: return false
-        val svc = service() ?: return false
-        return runCatching {
-            // void moveTaskToFront(IApplicationThread, String callingPackage, int taskId,
-            //                      int flags, Bundle options)
-            val appThreadClass = Class.forName("android.app.IApplicationThread")
-            svc.javaClass.getMethod(
-                "moveTaskToFront",
-                appThreadClass, String::class.java,
-                Int::class.javaPrimitiveType, Int::class.javaPrimitiveType,
-                android.os.Bundle::class.java,
-            ).invoke(svc, null, appContext.packageName, task.taskId, 0, null)
-            logger?.log("window", "move_to_front", packageName, extras = mapOf("taskId" to task.taskId))
-            true
-        }.getOrElse {
-            Log.w(TAG, "moveTaskToFront failed: ${it.javaClass.simpleName}")
-            false
-        }
-    }
-
     // ------------------------------------------------------------------ internals
 
     private fun readSnapshot(info: Any): TaskSnapshot? = runCatching {
