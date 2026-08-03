@@ -16,11 +16,10 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
 - [x] **Cockpit floating-app switch returns to Maps** — *fixed + verified 2026-08-03.* Two-tile
       mode had broken it: parking to fullscreen made the previous app cover the screen and the
       new one couldn't reach the front (§ Layout placement → floating-app switch).
-- [~] **zlink resolution** — *partly investigated 2026-08-03:* the 1280×480 is advertised by the
-      HU (not a zlink prop), `rw.zlink.resize=true` blanks the mirror (ruled out), config is
-      encrypted. Next: zlink **developer options** (safe, in-app), else the HU-side source of
-      `hu_AA_width` (§ zlink → On-car investigation / Next steps). Experiment only when a dropped
-      mirror is OK.
+- [~] **zlink resolution** — *root cause found 2026-08-03:* AA res = `panel × aaDensity/hiCarDensity`
+      = `2400×900 × 160/300 = 1280×480`. **Lever: `persist.zj.dpi.aaDensity`** (unset→160); set
+      240 → 1920×720. (`rw.zlink.resize=true` blanks the mirror — ruled out.) Next time: set it,
+      reconnect AA, check `hu_AA_width` (§ zlink). Experiment only when a dropped mirror is OK.
 - [ ] **Volume: read the live `STREAM_MUSIC` level** (`dumpsys audio`) before deciding whether
       any pinning is even needed (§ Volume).
 - [ ] **Spotify no longer stretches to full width** after tiling (§ Layout placement).
@@ -109,11 +108,35 @@ it. Giving zlink a bigger surface only improves the *second* upscale, not the `1
 tiling it *smaller* could make it negotiate even lower. So this is a property/settings change,
 plus the companion's signal recorder + property reader as the tools to find and test it.
 
+### Why 1280×480 — and the lever (2026-08-03)
+
+**The HU computes the AA resolution as `panel × (aaDensity / hiCarDensity)`:**
+
+```text
+1280 × 480  =  2400 × 900  ×  (160 / 300)
+```
+
+- `persist.zj.dpi.hiCarDensity = 300` (the panel's density for mirror modes),
+- `persist.zj.dpi.aaDensity` is **unset → 160**,
+- 160 / 300 = 0.533, so the panel is shrunk to 1280×480 and then upscaled back → the softness.
+
+So **`persist.zj.dpi.aaDensity` is the safe resolution lever** (unlike `rw.zlink.resize`, which
+blanked the mirror). Same ratio, higher number = more pixels at the same logical UI size:
+
+- `aaDensity = 240` → **1920×720** (≈1.5× sharper) — try this first.
+- `aaDensity = 300` → **2400×900** native — may be too heavy for wireless AA / rejected.
+
+**On-car test:** `setprop persist.zj.dpi.aaDensity 240`, restart zlink, reconnect AA, and check
+`hu_AA_width` in `/sdcard/zlinklog/zlink_log-1.txt` (expect ~1920). Judge sharpness by eye too.
+`[UNVERIFIED]`: couldn't confirm `wm density`=300 live (head unit went offline), but the numbers
+match exactly and `hiCarDensity=300` exists — verify the panel density when back on the car.
+
 ### On-car investigation (2026-08-03) — what we learned
 
 - **The 1280×480 comes from the head unit, not zlink.** The HU (com.wits side) sends it to zlink
   in `MESSAGE_INIT_INFO` (`hu_AA_width=1280 hu_AA_height=480 hu_AA_density=160`), and zlink then
-  forces it (`is_force_res=1`). So the cap is HU-side; changing zlink alone may not lift it.
+  forces it (`is_force_res=1`). So the cap is HU-side — but it is derived from `aaDensity` (above),
+  which we can set.
 - **Properties found:** `persist.zj.dpi.aaDensity` is **unset** (so it defaults to the 160 we
   see); `persist.zj.dpi.hiCarDensity=300` (the HiCar analog — shows the naming pattern);
   `rw.zlink.resize` was `false`; `rw.zlink.disable.features=dce`; `ak.af.carplay.package=
@@ -129,16 +152,19 @@ plus the companion's signal recorder + property reader as the tools to find and 
 
 ### Next steps (when we return to zlink, carefully)
 
-1. **zlink developer options (safest, in-app).** `is_developer_options=0` in the log — find how
-   to enable them in zlink's UI (often a hidden long-press/gesture on a version/logo), then look
-   for a resolution/quality toggle. This is the low-risk path.
-2. **`persist.zj.dpi.aaDensity`** (density only, not resolution) — could try a value to see if it
-   changes `hu_AA_density`, but density ≠ sharpness, so low expected payoff. Safer than `resize`.
-3. **HU-side source of `hu_AA_width=1280`.** The real lever: find where com.wits computes the AA
-   display size it advertises (a wits property or config). This is the deeper dig; needs a phone
-   connected via AA to measure each change from `hu_AA_*` in the log.
-4. Realistic ceiling is likely **1280×720** (what the phone offered as `get_best_res`), not
-   panel-native — so even a win is "less soft", not pixel-perfect. Weigh effort accordingly.
+1. **Set `persist.zj.dpi.aaDensity=240`** (the lever above → 1920×720), restart zlink, reconnect
+   AA, and read `hu_AA_width` from the log — expect ~1920, and judge sharpness. It is a `persist`
+   `/data` prop (not a vendor-partition change). Start at 240; if stable and the phone accepts it,
+   try 300 (native). Revert to unset (`setprop persist.zj.dpi.aaDensity ""` won't unset — use the
+   platform app or note the default is 160) if anything misbehaves. Do it when a dropped mirror
+   is acceptable.
+2. **First verify the panel density** (`wm density`) matches the 300 assumption before trusting
+   the formula blindly.
+3. **zlink developer options (fallback).** `is_developer_options=0` in the log — enabling them in
+   zlink's UI (often a hidden gesture on a version/logo) may expose a resolution/quality toggle.
+4. Note the phone offered `get_best_res` up to 1280×720 in the *old* log; whether it will accept
+   1920×720 depends on the negotiation once the HU advertises the larger `hu_AA_*` — the log will
+   tell.
 
 ## Status bar / top strip
 
