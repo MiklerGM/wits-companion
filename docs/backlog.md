@@ -8,17 +8,22 @@ further down (linked by name).
 
 Things whose next step needs the car — verify a fix, or run a probe that only works there.
 
-- [ ] **Cockpit panel-as-tile looks clean** — exact placement, no freeform caption, launcher
-      doesn't peek in the strips (§ Hotspot). This is the map-hide fix; confirm it's seamless.
-- [ ] **Brightness actually drives the backlight** — does the panel follow framework
-      `SCREEN_BRIGHTNESS`, or the vendor MCU? (§ Brightness)
+- [x] **Cockpit panel-as-tile looks clean** — *verified 2026-08-03: seamless on the head unit,
+      no caption, exact placement (panel `1560–2400`, map `0–1560`).* The map no longer
+      disappears on control taps.
+- [x] **Brightness actually drives the backlight** — *verified: the ± tiles change the panel
+      (it read 100 %); the framework `SCREEN_BRIGHTNESS` path is the right one here.*
+- [x] **Cockpit floating-app switch returns to Maps** — *fixed + verified 2026-08-03.* Two-tile
+      mode had broken it: parking to fullscreen made the previous app cover the screen and the
+      new one couldn't reach the front (§ Layout placement → floating-app switch).
 - [ ] **zlink resolution test task** — enumerate `persist.zj.*`, try zlink developer options /
       the property route, measure `hu_AA_*` before/after (§ zlink, numbered steps).
 - [ ] **Volume: read the live `STREAM_MUSIC` level** (`dumpsys audio`) before deciding whether
       any pinning is even needed (§ Volume).
 - [ ] **Spotify no longer stretches to full width** after tiling (§ Layout placement).
 - [ ] **No stale fullscreen app** on the first Cockpit open after churn (§ Layout placement).
-- [ ] **Media album art** shows with a logged-in Spotify (§ Cockpit / panel polish).
+- [x] **Media album art** — *verified 2026-08-03: cover art + progress + transport for a
+      logged-in Spotify track ("Weak", Skunk Anansie), playing behind the map.*
 - [ ] **Top bar** — decide hide/reveal, and whether the colour can be themed (§ Status bar).
 - [ ] **Swap / split model** — settle the propagation behaviour interactively, on the car
       (§ Layout mental model).
@@ -35,8 +40,10 @@ Things doable now, without the car.
       which properties they read (§ Vendor integration).
 - [ ] **Spotify top-left flicker** — is it a suppressible freeform caption/handle? (§ Cockpit /
       panel polish).
-- [ ] **Cockpit block layout** — gather specifics for rearranging clock/media/apps/hotspot, and
-      the "Cockpit" name check (§ UI).
+- [ ] **Cockpit right-hand control column** — user's proposal: a narrow rightmost column with
+      Settings (icon) at the top, the floating-app switcher, and Exit/Reset pinned to the
+      bottom; frees vertical space so the panel stops needing to scroll under the top bar
+      (§ UI). Plus the "Cockpit" name check.
 - [ ] **Volume: read-only probe scaffolding** (verify-first), no active pinning yet (§ Volume).
 
 ---
@@ -174,6 +181,18 @@ unit is platform-signed and uses `resizeTask`.
 
 ## Layout placement (needs on-car re-test)
 
+- **[FIXED + verified 2026-08-03] Cockpit floating-app switch could not return to Maps; the
+  previous app covered the screen full-size.** A consequence of the panel-as-tile change:
+  `parkStaleWindows` parked the previous floating app by resizing it to the *full display*
+  (still freeform), which the old fullscreen anchor used to hide but the new panel *tile* does
+  not — so it filled the screen; and the newly-selected app, already a freeform task behind it,
+  was only `resizeTask`-ed (never reordered), so it stayed hidden. Fix: for anchored (Cockpit)
+  layouts, park stale apps to the **floating tile's bounds** (not fullscreen), and place the
+  selected app with **`bringToFront`** (a launch that reorders, then the retry re-asserts the
+  bounds). On the car: switching Maps→Spotify→Maps returns to Maps, no full-size cover, Spotify
+  keeps playing behind. `WitsWindowController.applyWindow(bringToFront)` /
+  `PrivilegedWindowController.place(bringToFront)` / `LayoutEngine.parkStaleWindows(parkBounds,
+  parkMode)`.
 - **Spotify stretches to full width after tiling.** Spotify launches at the given bounds
   then grows itself to full width, covering the layout. Fix applied but untested on the car:
   the retry pass now re-asserts geometry with `resizeTask` on the privileged path (it was a
@@ -274,8 +293,15 @@ activity recreation (e.g. a day/night flip). Now the floating package is remembe
   (`LayoutEngine.resetToVendorState()` already exists — just surface it as a Home tile/card.)
 - **[DONE]** "Your layouts" cards flow into the same adaptive grid as Home (currently a
   single column).
-- **Cockpit layout** — user mentioned wanting to rearrange the blocks (clock / media / apps
-  / hotspot); gather specifics.
+- **Cockpit right-hand control column** (user proposal, 2026-08-03). Move the controls into a
+  narrow rightmost column so the media block has the full height and the panel no longer needs
+  to scroll under the vendor top bar:
+  - top: **Settings** as an icon;
+  - middle: the **floating-app switcher** (the app tiles), maybe smaller icons or vertical;
+  - bottom (pinned): **Exit / Reset**.
+  The media card + clock keep the rest of the panel width. This also sidesteps the "panel goes
+  under the header / scroll" issue reported on the car (the panel content was taller than the
+  tile). Doable offline; size it once we look at the panel width the map leaves (~28 %).
 - **Name check** — "Cockpit" is the working name for Mode B; confirm or change.
 
 ## Verified working on the vehicle (for reference, not backlog)

@@ -149,19 +149,29 @@ class LayoutEngine(
         applyTrigger = trigger
         handler.removeCallbacksAndMessages(RETRY_TOKEN)
 
-        // Windows left over from the previous layout would keep floating above the new
-        // one, because a freeform task always draws over fullscreen tasks and the vendor
-        // hook has no "close window" verb. Park them as plain fullscreen tasks instead:
-        // they drop behind whatever comes next while their process keeps running, so
-        // audio playback is unaffected.
-        val parked = parkStaleWindows(keep = ordered.map { it.packageName }.toSet())
+        // The floating app's pixel bounds (anchored presets have exactly this one foreign
+        // window), used both to park stale apps behind it and to reserve the panel strip.
+        val floatingBounds = ordered.firstOrNull { it.packageName != WitsPackages.SELF }
+            ?.bounds?.toPixels(area)
 
-        // An anchored preset needs the companion in front before the tile is placed, so
-        // the tile lands on top of it rather than behind.
+        // Windows left over from the previous layout would keep floating above the new one,
+        // because a freeform task always draws over fullscreen tasks and the vendor hook has
+        // no "close window" verb. Park them out of the way — behind the Cockpit's floating
+        // tile for an anchored layout (the panel is a tile now, so a fullscreen park would
+        // fill the screen), or fullscreen for a tiled layout.
+        val parked = if (preset.kind == PresetKind.ANCHORED && floatingBounds != null) {
+            parkStaleWindows(ordered.map { it.packageName }.toSet(), floatingBounds, WitsWindowMode.FREEFORM)
+        } else {
+            parkStaleWindows(
+                ordered.map { it.packageName }.toSet(),
+                windowController.fullDisplayArea(appContext), WitsWindowMode.FULLSCREEN,
+            )
+        }
+
+        // An anchored preset brings the companion up as the panel tile beside the map.
         var offset = 0L
         if (preset.kind == PresetKind.ANCHORED) {
-            val panelBounds = ordered.firstOrNull { it.packageName != WitsPackages.SELF }
-                ?.let { panelComplement(it.bounds, area) }
+            val panelBounds = floatingBounds?.let { panelComplement(ordered.first { w -> w.packageName != WitsPackages.SELF }.bounds, area) }
             handler.postDelayed(
                 { if (stillValid(myGeneration, "anchor", WitsPackages.SELF)) bringAnchorToFront(panelBounds) },
                 parked * PARK_DELAY_MS,
@@ -191,6 +201,12 @@ class LayoutEngine(
             // preserved-live tile is repositioned only if it can be moved in place; a live
             // task in another mode is left untouched rather than relaunched.
             val preserve = window.packageName in preserveLive
+            // The Cockpit's floating app must come to the FRONT of its tile — switching to an
+            // app that is already a hidden freeform task (behind the previous one) would
+            // otherwise just resize it in place and leave it hidden. Only when not preserving
+            // a live task (a restore leaves running apps as they are).
+            val bringToFront = preset.kind == PresetKind.ANCHORED &&
+                window.packageName != WitsPackages.SELF && !preserve
             handler.postDelayed(
                 {
                     if (stillValid(myGeneration, "geometry", window.packageName)) {
@@ -199,6 +215,7 @@ class LayoutEngine(
                                 window.packageName, pixels, window.windowMode
                             ),
                             preserveLive = preserve,
+                            bringToFront = bringToFront,
                         )
                     }
                 },
@@ -350,39 +367,47 @@ class LayoutEngine(
         launchPhaseStart(windowCount) + (windowCount - 1).coerceAtLeast(0) * LAUNCH_DELAY_MS
 
     /**
-     * Parks freeform windows that are not part of the incoming layout.
+     * Parks freeform windows that are not part of the incoming layout, to [parkBounds] in
+     * [parkMode].
      *
-     * There is no way to close a window through the vendor hook, and killing the process
-     * would stop playback. Re-issuing `CHANGE_WINDOW` with
-     * [WitsWindowMode.FULLSCREEN] turns the task back into an ordinary fullscreen task,
-     * which is then occluded by whatever is placed on top.
+     * There is no way to close a window through the vendor hook, and killing the process would
+     * stop playback, so a stale window is instead moved out of the way.
+     *
+     *  - **Tiled layouts** park to a fullscreen task, which whatever is placed on top occludes.
+     *  - **Anchored (Cockpit) layouts** must NOT park to fullscreen: the panel is now a freeform
+     *    *tile*, not a fullscreen anchor, so a full-size window has nothing covering it and
+     *    fills the screen (`[RUNTIME]` 2026-08-03 — switching the floating app left the previous
+     *    one stretched full-screen over the panel). They park to the **floating tile's bounds**
+     *    instead, so a switched-away app sits hidden behind the new one in the same tile.
      *
      * @return how many packages were parked, so the caller can offset what follows
      */
-    private fun parkStaleWindows(keep: Set<String>): Int {
+    private fun parkStaleWindows(keep: Set<String>, parkBounds: android.graphics.Rect, parkMode: Int): Int {
         // Everything to clear away: what we last placed, plus — on the privileged path —
         // any live freeform tile at all that is not part of the incoming layout. Rapid
         // taps can leave freeform tasks we never recorded in lastAppliedPackages; without
         // this they float over the new layout (e.g. a leftover fullscreen Spotify when the
-        // Cockpit is opened). SELF is never parked: the companion is the anchor.
+        // Cockpit is opened). SELF is never parked: the companion is the anchor/panel.
         val liveFreeform = windowController.rootTasks()
             .filter { it.windowingMode == WitsWindowMode.FREEFORM }
             .mapNotNull { it.packageName }
         val stale = (lastAppliedPackages + liveFreeform - keep) - WitsPackages.SELF
         if (stale.isEmpty()) return 0
 
-        val full = windowController.fullDisplayArea(appContext)
         stale.forEachIndexed { index, pkg ->
             if (!windowController.isLaunchable(pkg)) return@forEachIndexed
             handler.postDelayed({
                 windowController.applyWindow(
-                    WitsWindowController.WindowRequest(pkg, full, WitsWindowMode.FULLSCREEN)
+                    WitsWindowController.WindowRequest(pkg, parkBounds, parkMode)
                 )
             }, index * PARK_DELAY_MS)
         }
         logger?.log(
             "layout", "park_stale",
-            extras = mapOf("packages" to stale.joinToString(","), "count" to stale.size),
+            extras = mapOf(
+                "packages" to stale.joinToString(","), "count" to stale.size,
+                "mode" to WitsWindowMode.name(parkMode),
+            ),
         )
         return stale.size
     }

@@ -199,8 +199,10 @@ class ReceiverAndGenerationTest {
     fun `place preserves a live task in another mode instead of relaunching it`() {
         val src = sourceOf("wits/PrivilegedWindowController.kt")
         val place = src.substringAfter("fun place(").substringBefore("/** All root tasks")
-        assertTrue("preserve must short-circuit before launchIntoFreeform",
-            place.indexOf("PreservedInPlace") in 0 until place.indexOf("launchIntoFreeform"))
+        // The bringToFront path launches first on purpose (it is a separate, non-preserving
+        // branch); the preserve short-circuit must sit before the FALLBACK launchIntoFreeform.
+        assertTrue("preserve must short-circuit before the fallback launchIntoFreeform",
+            place.indexOf("PreservedInPlace") in 0 until place.lastIndexOf("launchIntoFreeform"))
     }
 
     /** Auto-starting our own panel is safe; doing it over the reverse camera is not. */

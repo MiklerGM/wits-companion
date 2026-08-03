@@ -71,8 +71,21 @@ class PrivilegedWindowController(
         bounds: Rect,
         windowMode: Int,
         preserve: Boolean = false,
+        bringToFront: Boolean = false,
     ): PlaceResult {
         val existing = findTask(packageName)
+        // Switching the Cockpit's floating app: the chosen app may already be a freeform task
+        // hidden *behind* another at the same tile bounds (the previous floating app). resizeTask
+        // moves it in place but never reorders, so it would stay hidden. A launch brings the task
+        // to the front; the retry pass then re-asserts the exact bounds with resizeTask.
+        if (bringToFront) {
+            return if (launchIntoFreeform(packageName, bounds, windowMode)) {
+                logger?.log("window", "launch_freeform", packageName, result = "front")
+                PlaceResult.Launched
+            } else {
+                PlaceResult.Failed("bring-to-front launch failed")
+            }
+        }
         // Fast, flicker-free path — but ONLY for a tile that is already visible. resizeTask
         // moves bounds without changing visibility or z-order, so on an existing-but-hidden
         // freeform task (a leftover tile behind the launcher) it would reposition something

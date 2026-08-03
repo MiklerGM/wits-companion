@@ -107,14 +107,22 @@ class WitsWindowController(
      * @param preserveLive when true, a live task that is not already a freeform tile is
      *   left untouched instead of being relaunched — the caller is restoring a running app
      *   and must not reset it (an active Maps route, an open menu).
+     * @param bringToFront when true, the app is brought to the front even if it is already a
+     *   visible freeform task — for switching the Cockpit's floating app, where the chosen app
+     *   may be hidden behind the previous one at the same tile bounds.
      */
-    fun applyWindow(request: WindowRequest, preserveLive: Boolean = false): Boolean {
+    fun applyWindow(
+        request: WindowRequest,
+        preserveLive: Boolean = false,
+        bringToFront: Boolean = false,
+    ): Boolean {
         // Privileged path: resizeTask moves an existing freeform tile in place, or the app
         // is launched straight into freeform. Either way there is no CHANGE_WINDOW and no
         // hiding of the other tiles, so the flicker is gone.
         if (isPrivileged) {
             return when (val r = privileged.place(
-                request.packageName, request.pixelBounds, request.windowMode, preserve = preserveLive
+                request.packageName, request.pixelBounds, request.windowMode,
+                preserve = preserveLive, bringToFront = bringToFront,
             )) {
                 is PrivilegedWindowController.PlaceResult.Failed -> {
                     Log.w(TAG, "privileged place failed for ${request.packageName}: ${r.reason}")
