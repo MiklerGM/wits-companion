@@ -126,6 +126,19 @@ blanked the mirror). Same ratio, higher number = more pixels at the same logical
 - `aaDensity = 240` → **1920×720** (≈1.5× sharper) — try this first.
 - `aaDensity = 300` → **2400×900** native — may be too heavy for wireless AA / rejected.
 
+**Scope — AA-mirror only.** `persist.zj.*` is zjinnova's (zlink) namespace and `aa` = Android
+Auto, so this only affects the AA mirror session. It does NOT touch the head unit's own UI
+density (`wm density` / `ro.sf.lcd_density` — the system-wide knob that would resize the launcher,
+the companion, vendor apps), nor CarPlay (`init_cp_dpi=180`), nor HiCar (`hiCarDensity=300`). Each
+mirror mode has its own density.
+
+**Expected effect — sharper, not resized UI.** The HU sends `aaDensity` to the phone as *both* the
+density and the resolution divisor (log: `hu_AA_density=160` = the default), so the logical dp size
+stays constant: `1920px / (240/160) = 1280 dp`, same as `1280px / (160/160)`. So AA keeps the same
+layout / element sizes and just renders more pixels. Watch during the test: wireless
+bandwidth/latency/heat (more pixels — 300 may be refused), the phone accepting the resolution, and
+touch mapping staying aligned.
+
 **On-car test:** `setprop persist.zj.dpi.aaDensity 240`, restart zlink, reconnect AA, and check
 `hu_AA_width` in `/sdcard/zlinklog/zlink_log-1.txt` (expect ~1920). Judge sharpness by eye too.
 `[UNVERIFIED]`: couldn't confirm `wm density`=300 live (head unit went offline), but the numbers
