@@ -1,7 +1,45 @@
 # Backlog
 
-Ideas and follow-ups captured during on-vehicle testing, not yet done. Roughly ordered by
-how concrete they are.
+Ideas and follow-ups captured during on-vehicle testing. The two checklists below are the
+quick index — where the *next* action happens. Full detail is in the per-topic sections
+further down (linked by name).
+
+## ☑ On-car checklist (needs the head unit)
+
+Things whose next step needs the car — verify a fix, or run a probe that only works there.
+
+- [ ] **Cockpit panel-as-tile looks clean** — exact placement, no freeform caption, launcher
+      doesn't peek in the strips (§ Hotspot). This is the map-hide fix; confirm it's seamless.
+- [ ] **Brightness actually drives the backlight** — does the panel follow framework
+      `SCREEN_BRIGHTNESS`, or the vendor MCU? (§ Brightness)
+- [ ] **zlink resolution test task** — enumerate `persist.zj.*`, try zlink developer options /
+      the property route, measure `hu_AA_*` before/after (§ zlink, numbered steps).
+- [ ] **Volume: read the live `STREAM_MUSIC` level** (`dumpsys audio`) before deciding whether
+      any pinning is even needed (§ Volume).
+- [ ] **Spotify no longer stretches to full width** after tiling (§ Layout placement).
+- [ ] **No stale fullscreen app** on the first Cockpit open after churn (§ Layout placement).
+- [ ] **Media album art** shows with a logged-in Spotify (§ Cockpit / panel polish).
+- [ ] **Top bar** — decide hide/reveal, and whether the colour can be themed (§ Status bar).
+- [ ] **Swap / split model** — settle the propagation behaviour interactively, on the car
+      (§ Layout mental model).
+- [ ] **One-line confirmations:** the emulator cascade is absent on the car (§ Emulator-only);
+      `SensorManager` has no `TYPE_LIGHT` (§ Brightness).
+
+## ☐ Offline checklist (emulator / code / study)
+
+Things doable now, without the car.
+
+- [ ] **Send `MainActivity` fully behind the Cockpit tiles** so it can't peek in uncovered
+      strips (§ Cockpit: play hides the map — follow-ups).
+- [ ] **Study the vendor "Car Device" source and the vendor dashboard** — what they switch to /
+      which properties they read (§ Vendor integration).
+- [ ] **Spotify top-left flicker** — is it a suppressible freeform caption/handle? (§ Cockpit /
+      panel polish).
+- [ ] **Cockpit block layout** — gather specifics for rearranging clock/media/apps/hotspot, and
+      the "Cockpit" name check (§ UI).
+- [ ] **Volume: read-only probe scaffolding** (verify-first), no active pinning yet (§ Volume).
+
+---
 
 ## Volume
 
