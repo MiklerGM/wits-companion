@@ -16,6 +16,11 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
 - [x] **Cockpit floating-app switch returns to Maps** — *fixed + verified 2026-08-03.* Two-tile
       mode had broken it: parking to fullscreen made the previous app cover the screen and the
       new one couldn't reach the front (§ Layout placement → floating-app switch).
+- [ ] **Eyeball the right-hand control rail** — Settings/switcher/Exit column: proportions on the
+      real ~28 % panel, tap targets, that Exit sits at the bottom and Settings at the top (built
+      2026-08-03, only seen clipped on the emulator).
+- [ ] **Top bar hide/reveal** — how to hide the vendor 99 px strip and pull it back (§ Status bar);
+      the panel content sometimes tucked under it.
 - [~] **zlink resolution** — *root cause found 2026-08-03:* AA res = `panel × aaDensity/hiCarDensity`
       = `2400×900 × 160/300 = 1280×480`. **Lever: `persist.zj.dpi.aaDensity`** (unset→160); set
       240 → 1920×720. (`rw.zlink.resize=true` blanks the mirror — ruled out.) Next time: set it,
@@ -42,11 +47,15 @@ Things doable now, without the car.
       which properties they read (§ Vendor integration).
 - [ ] **Spotify top-left flicker** — is it a suppressible freeform caption/handle? (§ Cockpit /
       panel polish).
-- [ ] **Cockpit right-hand control column** — user's proposal: a narrow rightmost column with
-      Settings (icon) at the top, the floating-app switcher, and Exit/Reset pinned to the
-      bottom; frees vertical space so the panel stops needing to scroll under the top bar
-      (§ UI). Plus the "Cockpit" name check.
+- [x] **Cockpit right-hand control column** — *implemented 2026-08-03* (`f3c6b3c`): main column
+      (media + hotspot + brightness) + narrow rail with Settings (gear) top, the app switcher
+      vertical, Exit (reset) pinned bottom; no more ScrollView/footer. Verified structurally on
+      the emulator (clipped there by the freeform cascade). **Eyeball on the car** — see On-car
+      checklist. Still to do: the "Cockpit" name check (§ UI).
 - [ ] **Volume: read-only probe scaffolding** (verify-first), no active pinning yet (§ Volume).
+- [ ] **Refresh Brightness values** - when android brightness is changed by the system (e.g. day night switch) companion will still show the previously set value
+- [ ] **Play and Pause** button styles: currently they are colored with orange-ish color, make it calmer
+- [ ] **Floating apps** tile style border is not needed, and we can find a better naming, "Apps" or just omit this "category" name
 
 ---
 
