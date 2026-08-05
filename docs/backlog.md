@@ -19,6 +19,12 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
 - [ ] **Eyeball the right-hand control rail** — Settings/switcher/Exit column: proportions on the
       real ~28 % panel, tap targets, that Exit sits at the bottom and Settings at the top (built
       2026-08-03, only seen clipped on the emulator).
+- [ ] **Settings button opens the config UI cleanly** — was just flashing (the freeform map drew
+      over MainActivity); now un-windows the tiles + finishes the panel first. Verify
+      `setTaskWindowingMode` actually un-freezes on the head unit.
+- [ ] **Exit un-windows the apps** — after Exit, navigation should open **fullscreen**, not in
+      the Cockpit's windowed format (the bug: `resizeTask` kept tiles freeform; now
+      `setTaskWindowingMode(FULLSCREEN)`).
 - [ ] **Top bar hide/reveal** — how to hide the vendor 99 px strip and pull it back (§ Status bar);
       the panel content sometimes tucked under it.
 - [~] **zlink resolution** — *root cause found 2026-08-03:* AA res = `panel × aaDensity/hiCarDensity`
