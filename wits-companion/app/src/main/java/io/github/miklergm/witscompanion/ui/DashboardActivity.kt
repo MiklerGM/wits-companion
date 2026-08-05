@@ -7,7 +7,6 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import io.github.miklergm.witscompanion.app.WitsCompanionApp
@@ -113,23 +112,27 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         }
         if (reservation?.side == MapSide.LEFT) addSpacer()
 
+        // Two columns: a main column (media + quick toggles) and a narrow right-hand rail
+        // (Settings on top, the floating-app switcher, Exit pinned to the bottom). Moving the
+        // switcher and the two actions into the rail frees the media block's height, so the
+        // panel no longer has to scroll under the vendor top bar.
         val panel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(pad(20), pad(16), pad(20), pad(16))
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(pad(16), pad(14), pad(12), pad(14))
         }
         row.addView(panel, LinearLayout.LayoutParams(0, MATCH, 1f - reserved))
         if (reservation?.side == MapSide.RIGHT) addSpacer()
 
-        // The clock and the ACC/source line are intentionally not shown in the Cockpit: the
-        // vendor's top strip already carries a clock, and every extra row pushed the footer
-        // (Settings / Reset) off a short panel. Kept as detached views so the per-second tick
-        // and onCarState stay valid without null checks.
+        // Clock/ACC are not shown (the vendor top strip already has a clock); kept as detached
+        // views so the per-second tick and onCarState stay valid without null checks.
         clockView = TextView(this)
         stateView = TextView(this)
 
-        // Everything between the (hidden) header and the pinned footer scrolls, so a tall
-        // panel — media + switcher + hotspot + brightness — never hides the footer.
-        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        // The main column: media card and the quick toggles, taking the width the rail leaves.
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, MATCH, 1f)
+        }
 
         // Media as a single rounded card, tinted by what is playing — the panel takes on
         // the album's colour (Mini AA's MediaPlayerCard in spirit). onMedia() fills in the
@@ -206,26 +209,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         transport.addView(nextButton)
         mediaCard.addView(transport)
 
-        // Which app floats over the panel. Re-applies the anchored layout with the chosen
-        // package, so switching is one tap instead of a trip to the Layouts tab.
-        content.addView(TextView(this).apply {
-            text = "Floating app"
-            textSize = 12f; setTextColor(palette.muted); setPadding(0, pad(16), 0, pad(4))
-        })
-        // Real launcher icons rather than text: recognisable at a glance and a bigger
-        // touch target, the one idea from Mini AA's NavRail that costs nothing here.
-        // The apps offered come from the vendor's nav/music choices plus the well-known
-        // ones, so the switcher reflects what the user actually set, not a fixed triple.
-        val switcher = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        switcherTiles.clear()
-        val current = currentFloatingPackage()
-        floatableApps().forEach { pkg ->
-            val tile = appIcon(pkg, app.appCatalog.labelFor(pkg))
-            setTileSelected(tile, pkg == current)
-            switcherTiles += pkg to tile
-            switcher.addView(tile)
-        }
-        content.addView(switcher)
+        // (The floating-app switcher now lives in the right-hand rail, built below.)
 
         // The volume readouts live in the Car/Signals tabs, not here. On this vehicle the
         // value is the head-unit stage, not what the ear hears (steering and NBT volume
@@ -277,41 +261,37 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         content.addView(brightnessTile)
         renderBrightness()
 
-        // The content scrolls in the space above the footer; the footer stays pinned so
-        // Settings / Reset are always reachable no matter how tall the content gets.
-        panel.addView(
-            android.widget.ScrollView(this).apply {
-                isFillViewport = true
-                addView(content)
-            },
-            LinearLayout.LayoutParams(MATCH, 0, 1f),
-        )
+        // Keep the media card + toggles top-aligned in the main column.
+        content.addView(View(this), LinearLayout.LayoutParams(MATCH, 0, 1f))
 
-        // Settings and a one-tap reset side by side. Reset is on the panel deliberately:
-        // if a layout looks wrong while driving, returning to the vendor launcher must be
-        // reachable without hunting through tabs.
-        val footer = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, pad(8), 0, 0)
+        // ---------- right-hand rail: Settings (top), app switcher, Exit (bottom) ----------
+        val rail = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, MATCH)
+                .apply { leftMargin = pad(10) }
         }
-        footer.addView(Button(this).apply {
-            text = "Settings"
-            isAllCaps = false
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener {
-                startActivity(android.content.Intent(this@DashboardActivity, MainActivity::class.java))
-            }
+        rail.addView(glyphTile("⚙", "Settings") {
+            startActivity(android.content.Intent(this@DashboardActivity, MainActivity::class.java))
         })
-        footer.addView(Button(this).apply {
-            text = "Reset"
-            isAllCaps = false
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener {
-                app.layoutEngine.resetToVendorState()
-                toast("Returned to the vendor launcher")
-            }
+        // The floating-app switcher, vertical: highlights the active app; a tap switches to it.
+        switcherTiles.clear()
+        val current = currentFloatingPackage()
+        floatableApps().forEach { pkg ->
+            val tile = appIcon(pkg, app.appCatalog.labelFor(pkg))
+            setTileSelected(tile, pkg == current)
+            switcherTiles += pkg to tile
+            rail.addView(tile)
+        }
+        // Exit (back to the vendor launcher) pinned to the bottom of the rail.
+        rail.addView(View(this), LinearLayout.LayoutParams(MATCH, 0, 1f))
+        rail.addView(glyphTile("✕", "Exit") {
+            app.layoutEngine.resetToVendorState()
+            toast("Returned to the vendor launcher")
         })
-        panel.addView(footer)
+
+        panel.addView(content)
+        panel.addView(rail)
 
         return row
     }
@@ -660,20 +640,20 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     /**
      * A compact app tile: a centred icon over a centred label, in a fixed-width box. The
      * label is full-width and centre-gravity so a longer name stays centred and ellipsises
-     * instead of drifting sideways.
+     * instead of drifting sideways. Stacked vertically in the right-hand rail.
      */
     private fun appIcon(packageName: String, label: String): LinearLayout {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(pad(92), ViewGroup.LayoutParams.WRAP_CONTENT)
-                .apply { rightMargin = pad(8) }
+            layoutParams = LinearLayout.LayoutParams(pad(88), ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { bottomMargin = pad(4) }
             isClickable = true
-            setPadding(pad(8), pad(8), pad(8), pad(8))
+            setPadding(pad(6), pad(8), pad(6), pad(8))
             setOnClickListener { floatApp(packageName, label) }
         }
         box.addView(android.widget.ImageView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(pad(44), pad(44))
+            layoutParams = LinearLayout.LayoutParams(pad(40), pad(40))
                 .apply { gravity = Gravity.CENTER_HORIZONTAL }
             setImageDrawable(
                 runCatching { packageManager.getApplicationIcon(packageName) }.getOrNull()
@@ -686,7 +666,41 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             ellipsize = android.text.TextUtils.TruncateAt.END
             gravity = Gravity.CENTER_HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(MATCH, ViewGroup.LayoutParams.WRAP_CONTENT)
-            setPadding(0, pad(4), 0, 0)
+            setPadding(0, pad(3), 0, 0)
+        })
+        return box
+    }
+
+    /**
+     * A rail tile that mirrors [appIcon] but uses a glyph instead of an app icon — for the
+     * Settings and Exit actions at the ends of the right-hand rail.
+     */
+    private fun glyphTile(glyph: String, label: String, onClick: () -> Unit): LinearLayout {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(pad(88), ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { bottomMargin = pad(4) }
+            isClickable = true
+            setPadding(pad(6), pad(8), pad(6), pad(8))
+            setOnClickListener { onClick() }
+        }
+        box.addView(TextView(this).apply {
+            text = glyph
+            textSize = 22f
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            setTextColor(palette.foreground)
+            layoutParams = LinearLayout.LayoutParams(pad(40), pad(40))
+        })
+        box.addView(TextView(this).apply {
+            text = label
+            textSize = 11f
+            maxLines = 1
+            gravity = Gravity.CENTER_HORIZONTAL
+            setTextColor(palette.muted)
+            layoutParams = LinearLayout.LayoutParams(MATCH, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setPadding(0, pad(3), 0, 0)
         })
         return box
     }
@@ -721,7 +735,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
 
     /**
      * A round transport glyph. The emphasised one (play/pause) is a filled accent circle
-     * with a white glyph; the skips are borderless. A [TextView] rather than a [Button] so
+     * with a white glyph; the skips are borderless. A [TextView] rather than a Button so
      * there is no all-caps wash or default min-size, and the fill can be re-tinted per track.
      */
     private fun transportButton(glyph: String, emphasised: Boolean, onClick: () -> Unit) =
