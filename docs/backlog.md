@@ -239,6 +239,27 @@ unit is platform-signed and uses `resizeTask`.
   car** (freeform tiling there was verified flush and caption-less). Confirm with a glance
   next time in the car; no code change planned for the emulator path.
 
+## Freeform doesn't survive a head-unit reboot — CRITICAL
+
+`[RUNTIME]` 2026-08-05: after the car powered off/on (uptime 18 min), the whole two-tile Cockpit
+collapsed to **fullscreen** — panel and map both `windowingMode=fullscreen`, **zero freeform
+tasks system-wide**. It had worked earlier the same day (post the previous boot). So freeform
+windowing does not reliably come up after a reboot, and the Cockpit depends on it.
+
+- `enable_freeform_support=1` and `force_resizable_activities=1` are both set, yet the display is
+  `mDisplayWindowingMode=fullscreen` and the companion's tile launches come up fullscreen.
+- BUT `am start --windowingMode 5 …` **does** put an app in freeform right now — so freeform is
+  *available*; the companion's `ActivityOptions.setLaunchBounds + setLaunchWindowingMode(FREEFORM)`
+  path just isn't producing it after this boot (the reflective call does not throw — it is logged
+  as `launch_freeform` success — but the task still lands fullscreen).
+- **Why it matters:** the Cockpit breaks on every car restart until this is understood. Needs a
+  robust enable — e.g. the companion (or its boot receiver) re-asserting whatever makes freeform
+  active, or a persistent vendor setting — and to understand the `am` vs `ActivityOptions`
+  discrepancy (does `setLaunchBounds` on a fullscreen-default display force fullscreen? try
+  windowing-mode first, or without bounds then resize).
+- Immediate unblock to test: **reboot the head unit** and see if freeform returns like earlier
+  today; if not, it needs an explicit re-enable step each boot.
+
 ## Layout placement (needs on-car re-test)
 
 - **[FIXED + verified 2026-08-03] Cockpit floating-app switch could not return to Maps; the
