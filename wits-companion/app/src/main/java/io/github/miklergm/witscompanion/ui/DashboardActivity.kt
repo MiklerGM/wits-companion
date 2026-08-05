@@ -364,6 +364,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         super.onStop()
     }
 
+
     private val hotspotListener = HotspotController.Listener { state -> ui.post { renderHotspot(state) } }
 
     private fun renderHotspot(state: HotspotController.State) {

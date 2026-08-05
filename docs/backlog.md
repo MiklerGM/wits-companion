@@ -190,19 +190,27 @@ match exactly and `hiCarDensity=300` exists — verify the panel density when ba
 
 ## Status bar / top strip
 
-- **Hide the top bar — LEVER FOUND: `Settings.System.FORCE_FULLSCREEN`.** `[RUNTIME]` 2026-08-05:
-  `settings put system FORCE_FULLSCREEN 1` **hides the whole vendor top strip** (clock / home /
-  recents / back) — verified on the car: the map fills top-to-bottom and the panel content is no
-  longer tucked under the bar. `0` brings it back. We have `WRITE_SETTINGS`, so the companion can
-  drive it.
-  - **Plan:** the Cockpit sets `FORCE_FULLSCREEN=1` while it is active and **restores the previous
-    value on exit** (Settings / Exit / reset). Auto-restore is important — it is **global** and it
-    also hides the nav (home/back), so leaving it on would strip navigation everywhere.
-  - **Before shipping, test:** (a) that the **reverse camera** is unaffected with it on (it is an
-    OEM layer, likely fine, but confirm — hard safety rule); (b) reveal UX — is a swipe-down enough
-    to peek the bar, or do we only toggle via the setting?
-  - Related: the tiles currently land at `top=0` (under the bar) rather than `top=99` post-boot —
-    hiding the bar makes that moot, but note the inset (`status_bar_height`) may read 0 here.
+- **Hide the top bar — lever is `FORCE_FULLSCREEN`, but the app can't write it.** `[RUNTIME]`
+  2026-08-05: `settings put system FORCE_FULLSCREEN 1` from **shell** hides the whole vendor top
+  strip (clock / home / recents / back) and the map fills top-to-bottom — verified. BUT the
+  companion **cannot** write it:
+  - The vendor added `FORCE_FULLSCREEN` to the framework's `MOVED_TO_SECURE`, so every app-side
+    write into the *system* table is rejected with `IllegalArgumentException: "You cannot keep
+    your settings in the secure settings"` — tried `Settings.System.putInt`, the provider
+    `call("PUT_system")`, and a raw `ContentResolver.insert`; all three throw. Shell's `settings`
+    bypasses it (different UID/path).
+  - Writing `Settings.Secure` **is** allowed (we hold `WRITE_SECURE_SETTINGS`) but does **not**
+    hide the bar — the vendor reads it from the *system* table, not secure.
+  - So: **auto-hide via this setting is not doable from the companion.** The non-working attempt
+    was removed. Alternatives to explore (offline): (a) request signature-level
+    `android.permission.STATUS_BAR` and hide via `IStatusBarService` (but `disable*` hides bar
+    *contents*, not the strip itself — may not be enough); (b) a vendor broadcast (none found so
+    far — `com.wits.systemui.*` only has show_volume / SET_WALLPAPER); (c) accept the bar.
+  - The user wanted to check whether **navigation has no top bar** anyway — worth confirming what
+    the bar looks like over Maps before investing more.
+  - Related: post-boot the tiles land at `top=0` (under the bar) not `top=99` — the `top` inset
+    (`status_bar_height`) may read 0 in the freeform tile; the panel content then tucks under the
+    bar. Fixing that inset is the smaller, doable win if we keep the bar.
 - **Top bar colour.** The vendor's 99 px top strip (home / clock / recents / back) has its
   own colour that does not match the app or the Cockpit. See whether it can be themed
   (status-bar colour is a per-window property; with the platform signature there may be more
