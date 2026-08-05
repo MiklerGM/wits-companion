@@ -190,10 +190,19 @@ match exactly and `hiCarDensity=300` exists — verify the panel density when ba
 
 ## Status bar / top strip
 
-- **Hide / reveal the top bar.** The vendor 99 px top strip can be hidden and pulled back
-  down. Unclear yet whether the Cockpit wants this (more screen for the map) — decide, then
-  see if we can drive it (likely `SYSTEM_UI_FLAG_*` / WindowInsetsController from a
-  full-screen Cockpit, or a vendor call).
+- **Hide the top bar — LEVER FOUND: `Settings.System.FORCE_FULLSCREEN`.** `[RUNTIME]` 2026-08-05:
+  `settings put system FORCE_FULLSCREEN 1` **hides the whole vendor top strip** (clock / home /
+  recents / back) — verified on the car: the map fills top-to-bottom and the panel content is no
+  longer tucked under the bar. `0` brings it back. We have `WRITE_SETTINGS`, so the companion can
+  drive it.
+  - **Plan:** the Cockpit sets `FORCE_FULLSCREEN=1` while it is active and **restores the previous
+    value on exit** (Settings / Exit / reset). Auto-restore is important — it is **global** and it
+    also hides the nav (home/back), so leaving it on would strip navigation everywhere.
+  - **Before shipping, test:** (a) that the **reverse camera** is unaffected with it on (it is an
+    OEM layer, likely fine, but confirm — hard safety rule); (b) reveal UX — is a swipe-down enough
+    to peek the bar, or do we only toggle via the setting?
+  - Related: the tiles currently land at `top=0` (under the bar) rather than `top=99` post-boot —
+    hiding the bar makes that moot, but note the inset (`status_bar_height`) may read 0 here.
 - **Top bar colour.** The vendor's 99 px top strip (home / clock / recents / back) has its
   own colour that does not match the app or the Cockpit. See whether it can be themed
   (status-bar colour is a per-window property; with the platform signature there may be more
@@ -239,26 +248,21 @@ unit is platform-signed and uses `resizeTask`.
   car** (freeform tiling there was verified flush and caption-less). Confirm with a glance
   next time in the car; no code change planned for the emulator path.
 
-## Freeform doesn't survive a head-unit reboot — CRITICAL
+## Freeform isn't ready at autostart (boot) — Cockpit auto-opens fullscreen
 
-`[RUNTIME]` 2026-08-05: after the car powered off/on (uptime 18 min), the whole two-tile Cockpit
-collapsed to **fullscreen** — panel and map both `windowingMode=fullscreen`, **zero freeform
-tasks system-wide**. It had worked earlier the same day (post the previous boot). So freeform
-windowing does not reliably come up after a reboot, and the Cockpit depends on it.
+`[RUNTIME]` 2026-08-05, clarified by the user: freeform windowing is **not up yet when the
+Cockpit auto-starts on boot**, so the auto-started Cockpit comes up **fullscreen** (panel over the
+map, no tiles). The user considers this normal-ish — **after one manual tap on an app tile**
+(floatApp re-applies) freeform establishes and the two tiles appear correctly.
 
-- `enable_freeform_support=1` and `force_resizable_activities=1` are both set, yet the display is
-  `mDisplayWindowingMode=fullscreen` and the companion's tile launches come up fullscreen.
-- BUT `am start --windowingMode 5 …` **does** put an app in freeform right now — so freeform is
-  *available*; the companion's `ActivityOptions.setLaunchBounds + setLaunchWindowingMode(FREEFORM)`
-  path just isn't producing it after this boot (the reflective call does not throw — it is logged
-  as `launch_freeform` success — but the task still lands fullscreen).
-- **Why it matters:** the Cockpit breaks on every car restart until this is understood. Needs a
-  robust enable — e.g. the companion (or its boot receiver) re-asserting whatever makes freeform
-  active, or a persistent vendor setting — and to understand the `am` vs `ActivityOptions`
-  discrepancy (does `setLaunchBounds` on a fullscreen-default display force fullscreen? try
-  windowing-mode first, or without bounds then resize).
-- Immediate unblock to test: **reboot the head unit** and see if freeform returns like earlier
-  today; if not, it needs an explicit re-enable step each boot.
+- So it's an **autostart *timing*** problem, not "freeform doesn't survive a reboot": the engine
+  applies the layout before the platform freeform path is ready, and the launches land fullscreen.
+- `am start --windowingMode 5 …` works even then, so freeform is available — the companion's very
+  first apply is just too early / the display is still `mDisplayWindowingMode=fullscreen`.
+- **Fix ideas:** on autostart, wait for / poll until a freeform launch actually sticks before
+  applying (or retry the anchored apply until the panel task is really `mode=freeform`); or have
+  the autostart do a throwaway freeform "warm-up" launch first. Low urgency (a tap recovers it),
+  but worth smoothing so the auto-open isn't broken-looking.
 
 ## Layout placement (needs on-car re-test)
 
