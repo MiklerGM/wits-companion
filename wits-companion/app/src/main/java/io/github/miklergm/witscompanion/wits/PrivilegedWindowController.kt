@@ -92,6 +92,17 @@ class PrivilegedWindowController(
         // the user never sees — the app "does not open". Such a task must be launched to be
         // brought forward. `[RUNTIME]` 2026-08-01.
         if (existing != null && existing.windowingMode == WitsWindowMode.FREEFORM && existing.visible) {
+            // A FULLSCREEN request means "leave freeform entirely" (reset / exit): resizeTask only
+            // changes bounds and keeps the task freeform, so a full-size *freeform* window still
+            // draws over everything. setTaskWindowingMode actually un-windows it.
+            if (windowMode == WitsWindowMode.FULLSCREEN) {
+                return if (setWindowingMode(existing.taskId, WitsWindowMode.FULLSCREEN)) {
+                    logger?.log("window", "unwindow", packageName, extras = mapOf("taskId" to existing.taskId), result = "fullscreen")
+                    PlaceResult.Resized
+                } else {
+                    PlaceResult.Failed("setTaskWindowingMode returned false")
+                }
+            }
             return if (resizeTask(existing.taskId, bounds)) {
                 logger?.log(
                     "window", "resize_task", packageName,
@@ -165,6 +176,25 @@ class PrivilegedWindowController(
         val names = cls.getField("childTaskNames").get(info) as? Array<*> ?: return null
         names.filterIsInstance<String>().firstOrNull()?.substringBefore('/')
     }.getOrNull()
+
+    /**
+     * Moves a task out of freeform back to fullscreen. `resizeTask` cannot do this — it only sets
+     * bounds within the current mode — so the reset/exit uses this to actually un-window a tile.
+     * Reflective `IActivityTaskManager.setTaskWindowingMode(taskId, mode, toTop)`.
+     */
+    private fun setWindowingMode(taskId: Int, mode: Int): Boolean {
+        val svc = service() ?: return false
+        return runCatching {
+            svc.javaClass.getMethod(
+                "setTaskWindowingMode",
+                Int::class.javaPrimitiveType, Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType,
+            ).invoke(svc, taskId, mode, false)
+            true
+        }.getOrElse {
+            Log.w(TAG, "setTaskWindowingMode failed: ${it.javaClass.simpleName}")
+            false
+        }
+    }
 
     private fun resizeTask(taskId: Int, bounds: Rect): Boolean {
         val svc = service() ?: return false

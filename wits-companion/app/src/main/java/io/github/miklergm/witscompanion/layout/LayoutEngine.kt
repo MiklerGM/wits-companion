@@ -536,17 +536,24 @@ class LayoutEngine(
 
     /**
      * Puts the screen back to a clean vendor state — the one-tap "undo everything", no adb
-     * and no reboot.
-     *
-     * Every freeform tile we placed is sized back to the full display, then the home
-     * launcher is brought to the front so the vendor UI covers whatever is left. Works on
-     * both paths: privileged `resizeTask` fills the tile to the display, the hook re-issues
-     * it as FULLSCREEN. Either way `goHome()` guarantees a clean surface even if a tile
-     * refuses to move.
-     *
-     * Cancels pending work first, so a delayed apply cannot re-tile behind the reset.
+     * and no reboot: un-window every tile and bring the home launcher to the front.
      */
-    fun resetToVendorState() {
+    fun resetToVendorState() = unwindowTiles(thenGoHome = true)
+
+    /**
+     * Takes every freeform tile **out of freeform** (back to fullscreen), so the Cockpit's
+     * windowed apps become ordinary fullscreen apps again — otherwise a full-size *freeform*
+     * window keeps drawing over whatever is shown next (the launcher, Settings, or the next
+     * navigation), which is the "navigation opens in the Cockpit's windowed format" report.
+     *
+     * On the privileged path `setTaskWindowingMode` does the un-windowing (a plain `resizeTask`
+     * only changes bounds and stays freeform); the vendor hook re-issues FULLSCREEN otherwise.
+     *
+     * @param thenGoHome bring the vendor launcher to the front afterwards (Exit); false when the
+     *   caller shows its own screen next (Settings → MainActivity). Cancels pending work first so
+     *   a delayed apply cannot re-tile behind it.
+     */
+    fun unwindowTiles(thenGoHome: Boolean) {
         cancelPending()
         val myGeneration = generation.get()
         val full = windowController.fullDisplayArea(appContext)
@@ -568,12 +575,14 @@ class LayoutEngine(
             }, index * PARK_DELAY_MS)
         }
 
-        handler.postDelayed({
-            if (myGeneration == generation.get()) goHome()
-        }, tiles.size * PARK_DELAY_MS + ANCHOR_SETTLE_MS)
+        if (thenGoHome) {
+            handler.postDelayed({
+                if (myGeneration == generation.get()) goHome()
+            }, tiles.size * PARK_DELAY_MS + ANCHOR_SETTLE_MS)
+        }
 
         lastAppliedPackages = emptySet()
-        logger?.log("layout", "reset_to_vendor", extras = mapOf("tiles" to tiles.size))
+        logger?.log("layout", "unwindow_tiles", extras = mapOf("tiles" to tiles.size, "home" to thenGoHome))
     }
 
     /**

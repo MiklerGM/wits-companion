@@ -272,7 +272,12 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
                 .apply { leftMargin = pad(10) }
         }
         rail.addView(glyphTile("⚙", "Settings") {
+            // Leaving the Cockpit: un-window the tiles (otherwise the freeform map keeps drawing
+            // over MainActivity — the "Settings just flashes" report) and finish the panel, then
+            // show the config UI.
+            app.layoutEngine.unwindowTiles(thenGoHome = false)
             startActivity(android.content.Intent(this@DashboardActivity, MainActivity::class.java))
+            finish()
         })
         // The floating-app switcher, vertical: highlights the active app; a tap switches to it.
         switcherTiles.clear()
@@ -286,7 +291,9 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         // Exit (back to the vendor launcher) pinned to the bottom of the rail.
         rail.addView(View(this), LinearLayout.LayoutParams(MATCH, 0, 1f))
         rail.addView(glyphTile("✕", "Exit") {
+            // Un-window every tile and go home, then finish the panel so nothing is left floating.
             app.layoutEngine.resetToVendorState()
+            finish()
             toast("Returned to the vendor launcher")
         })
 
