@@ -47,8 +47,11 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       **usual width** (decided 2026-08-06: panel does *not* stretch — right side stays "as usual",
       left just goes black). Tapping any tile floats an app again; no tile lit = hidden. On-car:
       confirm the panel actually resizes (privileged `bringAnchorToFront(full)` + `onConfigurationChanged`
-      rebuild) and the reverse camera is untouched. Emulator can't exercise the privileged resize —
-      only the toggle wiring ("App hidden" toast, no crash) was verified there.
+      rebuild). Emulator can't exercise the privileged resize — only the toggle wiring ("App hidden"
+      toast, no crash) was verified there. *(Reverse camera is not a concern for this: it is an
+      MCU/hardware video overlay, independent of the Android app-window layer, so window changes
+      cannot reach it — see [[reverse-camera-mcu-overlay]]. The `reverseGuard` stays as a cheap
+      belt-and-suspenders anyway.)*
 - [ ] **One-line confirmations:** the emulator cascade is absent on the car (§ Emulator-only);
       `SensorManager` has no `TYPE_LIGHT` (§ Brightness).
 
