@@ -233,6 +233,35 @@ match exactly and `hiCarDensity=300` exists — verify the panel density when ba
   - Related: post-boot the tiles land at `top=0` (under the bar) not `top=99` — the `top` inset
     (`status_bar_height`) may read 0 in the freeform tile; the panel content then tucks under the
     bar. Fixing that inset is the smaller, doable win if we keep the bar.
+- **Source study 2026-08-06 (how the vendor dashboard treats the strip).** Read the decompiled
+  vendor apps in `analysis/jadx/` + `research/diff/launcher-263`:
+  - The strip **is a standard AOSP status bar**, just heavily re-skinned:
+    `SystemUI/.../statusbar/phone/PhoneStatusBarView` (inset type `ITYPE_STATUS_BAR`, ~99 px).
+    It observes ~20 `Settings.System` keys (`wits_night_mode`, `wits_skin`,
+    `statusbar_right_bg_hidden`, `wits_hide_status_bar_volume_icon`, …) — those tweak its
+    *contents/skin*, none hides the whole strip.
+  - **The dashboard does NOT dynamically hide it.** Every WitsLauncher activity sets
+    `getDecorView().setSystemUiVisibility(1280)` = `LAYOUT_FULLSCREEN|LAYOUT_STABLE` — i.e. it
+    lays out **edge-to-edge under** the bar, it does **not** hide it. No vendor app (launcher,
+    ZLink, MiniAA) uses `FLAG_FULLSCREEN` / `WindowInsetsController.hide(statusBars())`. So what
+    reads as "the dashboard has no top bar" is the launcher drawing its own background under the
+    strip (it blends in), and/or a per-car `FORCE_FULLSCREEN` factory config — not a trick we can
+    borrow.
+  - **`FORCE_FULLSCREEN` is a system-owned factory/per-car config**, confirmed by the sources:
+    `CenterService` (`ConfigM701` sets it =1 for a car type, `ConfigYA82` reads it), `MiscService`
+    (`App.isFullScreenConfig()` uses it + `PROP_CAR_TYPE` to pick the camera/carinfo layout),
+    `WitsSettings` factory screen writes it. It is applied by system services, not per-app — and
+    a normal app is framework-blocked from writing it (above). **Dead end for the companion.**
+  - **The right lever, if we want it: standard per-window immersive on our OWN activity.** Since
+    the strip is a normal `ITYPE_STATUS_BAR`, calling `setDecorFitsSystemWindows(window, false)`
+    then `WindowInsetsControllerCompat(window, decor).hide(Type.statusBars())` (or the legacy
+    `SYSTEM_UI_FLAG_FULLSCREEN`) hides it for our window — **no permission, no system write.**
+    Caveat: per-window immersive typically only removes the bar when our activity is the *single
+    fullscreen top* window; in the two-tile / freeform Cockpit the bar belongs to the whole
+    display and immersive usually won't drop it. So it fits the **hidden/full-panel state** (the
+    new hide-toggle → panel fullscreen) — request immersive there for a clean look — but not the
+    normal two-tile layout. **On-car:** confirm immersive actually hides the strip in the
+    fullscreen-panel state (freeform-vs-fullscreen bar policy varies by ROM).
 - **Top bar colour.** The vendor's 99 px top strip (home / clock / recents / back) has its
   own colour that does not match the app or the Cockpit. See whether it can be themed
   (status-bar colour is a per-window property; with the platform signature there may be more
