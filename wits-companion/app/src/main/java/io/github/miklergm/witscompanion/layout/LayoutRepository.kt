@@ -92,6 +92,16 @@ class LayoutRepository(context: Context) {
         get() = prefs.getString(KEY_COCKPIT_FLOAT, null)
         set(value) = prefs.edit().putString(KEY_COCKPIT_FLOAT, value).apply()
 
+    /**
+     * True when the user has explicitly hidden the floating app (tapped the active switcher
+     * tile). Distinct from [cockpitFloatingPackage] being null, which just means "unknown,
+     * fall back to the default map": hidden means the panel deliberately fills the display
+     * with no app floating and no tile lit. Cleared as soon as any app is floated again.
+     */
+    var cockpitFloatingHidden: Boolean
+        get() = prefs.getBoolean(KEY_COCKPIT_HIDDEN, false)
+        set(value) = prefs.edit().putBoolean(KEY_COCKPIT_HIDDEN, value).apply()
+
     // ------------------------------------------------------------- preferences
     // All automatic behaviours default to OFF. The user opts in explicitly.
 
@@ -168,6 +178,7 @@ class LayoutRepository(context: Context) {
         const val KEY_CUSTOM_PRESETS = "custom_presets"
         const val KEY_LAST_PRESET = "last_preset"
         const val KEY_COCKPIT_FLOAT = "cockpit_floating_package"
+        const val KEY_COCKPIT_HIDDEN = "cockpit_floating_hidden"
         const val KEY_RESTORE_ON_RESUME = "restore_on_resume"
         const val KEY_RESTORE_ON_ACC = "restore_on_acc"
         const val KEY_RESTORE_ON_SOURCE = "restore_on_android_source"

@@ -354,6 +354,21 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
 
     // --------------------------------------------------------------- lifecycle
 
+    /**
+     * The panel handles `screenSize` itself (see the manifest), so a window resize does not
+     * recreate it. But [reservation] depends on our width — a narrow tile reserves nothing, a
+     * full-screen panel reserves the map strip — so the view must be rebuilt when the window
+     * changes size (tile ↔ full, e.g. hiding/showing the floating app). Re-render the live
+     * state into the fresh views afterwards.
+     */
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        setContentView(buildRoot())
+        renderBrightness()
+        if (hotspotTile != null) renderHotspot(app.hotspotController.state())
+        latestMedia?.let { onMedia(it) }
+    }
+
     override fun onStart() {
         super.onStart()
         app.carStateRepository.addObserver(this)
@@ -627,6 +642,15 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
      * Goes through [LayoutEngine] rather than moving the window directly, so the reverse
      * guard, the rate limiter and the two-phase ordering all still apply.
      */
+    /**
+     * A switcher tile was tapped. Tapping the **active** app toggles it off — the app is
+     * hidden and the panel fills the display (§ [hideFloatingApp]); tapping any other tile
+     * floats that app. From the hidden state no tile is active, so any tap floats.
+     */
+    private fun onSwitcherTap(packageName: String, label: String) {
+        if (packageName == currentFloatingPackage()) hideFloatingApp() else floatApp(packageName, label)
+    }
+
     private fun floatApp(packageName: String, label: String) {
         val preset = DefaultPresets.anchoredFor(packageName, label)
             .withGeometry(app.layoutRepository.split, app.layoutRepository.swapped)
@@ -634,6 +658,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             is LayoutEngine.Result.Applied -> {
                 app.layoutRepository.lastAppliedPresetId = preset.id
                 app.layoutRepository.cockpitFloatingPackage = packageName
+                app.layoutRepository.cockpitFloatingHidden = false  // an app floats again
                 // Move the highlight onto the chosen app, popping the one just tapped.
                 switcherTiles.forEach { (pkg, tile) ->
                     setTileSelected(tile, pkg == packageName, animate = pkg == packageName)
@@ -643,6 +668,20 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             is LayoutEngine.Result.Refused -> toast("Refused: ${r.reason}")
             is LayoutEngine.Result.Invalid -> toast("Invalid: ${r.errors.firstOrNull()}")
         }
+    }
+
+    /**
+     * Hides the currently floating app: the panel grows to fill the display (its reservation
+     * paints the freed strip black and keeps the content at its usual width), and no tile is
+     * left lit. The window resize triggers [onConfigurationChanged], which rebuilds the view.
+     */
+    private fun hideFloatingApp() {
+        val current = currentFloatingPackage()  // resolve before we clear the state
+        app.layoutRepository.cockpitFloatingHidden = true
+        app.layoutRepository.cockpitFloatingPackage = null
+        app.layoutEngine.hideFloatingApp(current)
+        switcherTiles.forEach { (_, tile) -> setTileSelected(tile, selected = false) }
+        toast("App hidden")
     }
 
     private fun toast(message: String) =
@@ -669,11 +708,14 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
      * `anchored_<pkg>` presets, which are not in allPresets); falls back to the last-applied
      * anchored preset, then the default map.
      */
-    private fun currentFloatingPackage(): String? =
-        app.layoutRepository.cockpitFloatingPackage
+    private fun currentFloatingPackage(): String? {
+        // Explicitly hidden: no app floats, so no tile is lit and any tap floats an app.
+        if (app.layoutRepository.cockpitFloatingHidden) return null
+        return app.layoutRepository.cockpitFloatingPackage
             ?: (app.layoutRepository.lastAppliedPreset()?.takeIf { it.kind == PresetKind.ANCHORED }
                 ?: app.layoutRepository.preset(DefaultPresets.ID_MAPS_ANCHORED))
                 ?.windows?.firstOrNull { it.packageName != WitsPackages.SELF }?.packageName
+    }
 
     /**
      * A compact app tile: a centred icon over a centred label, in a fixed-width box. The
@@ -688,7 +730,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
                 .apply { bottomMargin = pad(4) }
             isClickable = true
             setPadding(pad(6), pad(8), pad(6), pad(8))
-            setOnClickListener { floatApp(packageName, label) }
+            setOnClickListener { onSwitcherTap(packageName, label) }
         }
         box.addView(android.widget.ImageView(this).apply {
             layoutParams = LinearLayout.LayoutParams(pad(40), pad(40))

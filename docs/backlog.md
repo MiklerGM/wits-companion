@@ -40,12 +40,15 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
 - [ ] **Top bar** — decide hide/reveal, and whether the colour can be themed (§ Status bar).
 - [ ] **Swap / split model** — settle the propagation behaviour interactively, on the car
       (§ Layout mental model).
-- [ ] **Switcher tiles toggle (hide, not only switch)** — tapping the **active** tile hides the
-      floating app: un-window it via the existing `unwindowTiles`/`setTaskWindowingMode(FULLSCREEN)`
-      path, and the map takes the freed space (panel keeps its width). Tapping any tile shows an
-      app again; no tile lit = nothing floating. Design agreed 2026-08-06 (toggle model). The
-      width behaviour (map expands vs. panel grows) is the same open question as Swap/split —
-      confirm live before committing (§ Layout mental model).
+- [~] **Switcher tiles toggle (hide, not only switch)** — *implemented 2026-08-06* (`LayoutEngine.hideFloatingApp`,
+      `DashboardActivity.onSwitcherTap`). Tapping the **active** tile un-windows the floating app
+      (freeform → fullscreen, drops behind) and grows the panel to fill the display; the panel's
+      own `reservation()` paints the freed strip **black** and keeps the panel content at its
+      **usual width** (decided 2026-08-06: panel does *not* stretch — right side stays "as usual",
+      left just goes black). Tapping any tile floats an app again; no tile lit = hidden. On-car:
+      confirm the panel actually resizes (privileged `bringAnchorToFront(full)` + `onConfigurationChanged`
+      rebuild) and the reverse camera is untouched. Emulator can't exercise the privileged resize —
+      only the toggle wiring ("App hidden" toast, no crash) was verified there.
 - [ ] **One-line confirmations:** the emulator cascade is absent on the car (§ Emulator-only);
       `SensorManager` has no `TYPE_LIGHT` (§ Brightness).
 

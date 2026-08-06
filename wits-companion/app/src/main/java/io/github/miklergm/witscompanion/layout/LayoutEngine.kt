@@ -604,6 +604,45 @@ class LayoutEngine(
         }
     }
 
+    /**
+     * Hides the Cockpit's floating app without leaving the Cockpit: the panel grows to fill
+     * the whole display, and [io.github.miklergm.witscompanion.ui.DashboardActivity]'s own
+     * reservation logic paints the freed strip as its (black) background while keeping the
+     * panel content at its usual proportion — the "tap the active tile to dismiss the app"
+     * toggle. The previously floating app is taken out of freeform so it drops behind the
+     * now full-screen panel; a later [apply] (tapping any switcher tile) floats an app again.
+     *
+     * @param floatingPackage the app that was floating, to un-window; null skips that step.
+     */
+    fun hideFloatingApp(floatingPackage: String?) {
+        cancelPending()
+        val myGeneration = generation.get()
+        val full = windowController.fullDisplayArea(appContext)
+
+        // 1. Un-window the app that was floating (freeform → fullscreen), so it stops drawing
+        //    over the panel and drops behind the full-screen panel below.
+        if (floatingPackage != null && floatingPackage != WitsPackages.SELF &&
+            windowController.isLaunchable(floatingPackage)
+        ) {
+            windowController.applyWindow(
+                WitsWindowController.WindowRequest(floatingPackage, full, WitsWindowMode.FULLSCREEN)
+            )
+        }
+
+        // 2. Grow the panel to the full display. Passing full bounds (not null) keeps it a
+        //    freeform tile that draws over the un-windowed app; the panel then reserves the
+        //    strip itself. A small delay lets the un-window settle first.
+        handler.postDelayed(
+            { if (myGeneration == generation.get()) bringAnchorToFront(full) },
+            PARK_DELAY_MS,
+        )
+        lastAppliedPackages = setOf(WitsPackages.SELF)
+        logger?.log(
+            "layout", "hide_floating",
+            floatingPackage ?: "none", result = "panel_full",
+        )
+    }
+
     companion object {
         /** Gap between two CHANGE_WINDOW sends inside the geometry phase. */
         const val GEOMETRY_DELAY_MS = 250L
