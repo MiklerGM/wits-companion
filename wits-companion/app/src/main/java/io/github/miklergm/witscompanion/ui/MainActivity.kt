@@ -3,6 +3,9 @@ package io.github.miklergm.witscompanion.ui
 import android.os.Bundle
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.tabs.TabLayout
 import io.github.miklergm.witscompanion.R
 import io.github.miklergm.witscompanion.app.WitsCompanionApp
@@ -47,16 +50,16 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
      * even if a later inset pass reports zero. Left/right/bottom pass through for freeform safety.
      */
     private fun keepClearOfTopStrip(root: android.view.View) {
-        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         val floor = resources.getIdentifier("status_bar_height", "dimen", "android")
             .takeIf { it > 0 }
             ?.let { resources.getDimensionPixelSize(it) } ?: 0
-        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
-            val bars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             v.setPadding(bars.left, maxOf(bars.top, floor), bars.right, bars.bottom)
             insets
         }
-        androidx.core.view.ViewCompat.requestApplyInsets(root)
+        ViewCompat.requestApplyInsets(root)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

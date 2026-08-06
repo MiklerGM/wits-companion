@@ -649,12 +649,6 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     }
 
     /**
-     * Floats [packageName] over the panel, replacing whatever was there.
-     *
-     * Goes through [LayoutEngine] rather than moving the window directly, so the reverse
-     * guard, the rate limiter and the two-phase ordering all still apply.
-     */
-    /**
      * A switcher tile was tapped. Tapping the **active** app toggles it off — the app is
      * hidden and the panel fills the display (§ [hideFloatingApp]); tapping any other tile
      * floats that app. From the hidden state no tile is active, so any tap floats.
@@ -663,6 +657,12 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         if (packageName == currentFloatingPackage()) hideFloatingApp() else floatApp(packageName, label)
     }
 
+    /**
+     * Floats [packageName] over the panel, replacing whatever was there.
+     *
+     * Goes through [LayoutEngine] rather than moving the window directly, so the reverse
+     * guard, the rate limiter and the two-phase ordering all still apply.
+     */
     private fun floatApp(packageName: String, label: String) {
         val preset = DefaultPresets.anchoredFor(packageName, label)
             .withGeometry(app.layoutRepository.split, app.layoutRepository.swapped)
