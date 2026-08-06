@@ -32,11 +32,39 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
         fun onPause() {}
     }
 
+    /**
+     * Keep the content clear of the vendor 99 px top strip.
+     *
+     * The strip is a standard status bar (`ITYPE_STATUS_BAR`), but this head unit intermittently
+     * reports a **zero** top inset — the bar is a per-window overlay, and after the Cockpit's
+     * freeform churn the decor comes back without it. With the default decor-fits behaviour that
+     * makes the content tuck under the strip: reproducible as "open the Cockpit, come back to
+     * Settings, and Settings flies under the top bar".
+     *
+     * So we take the insets over and floor the top with the framework `status_bar_height`,
+     * exactly as [io.github.miklergm.witscompanion.wits.WitsWindowController.usableArea] does for
+     * the tile geometry. The padding is a persistent view property, so once floored it stays put
+     * even if a later inset pass reports zero. Left/right/bottom pass through for freeform safety.
+     */
+    private fun keepClearOfTopStrip(root: android.view.View) {
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        val floor = resources.getIdentifier("status_bar_height", "dimen", "android")
+            .takeIf { it > 0 }
+            ?.let { resources.getDimensionPixelSize(it) } ?: 0
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+            val bars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            v.setPadding(bars.left, maxOf(bars.top, floor), bars.right, bars.bottom)
+            insets
+        }
+        androidx.core.view.ViewCompat.requestApplyInsets(root)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         app = application as WitsCompanionApp
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        keepClearOfTopStrip(binding.root)
 
         // Primary tabs first (what you use), diagnostics last (Car / Signals / Debug).
         sections += DashboardSection(app)   // Home
