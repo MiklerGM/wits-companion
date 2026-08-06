@@ -106,6 +106,12 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             setBackgroundColor(palette.background)
         }
 
+        // When the panel fills the display (the hidden / full-screen state) its window spans
+        // under the vendor 99 px top strip, so floor the top with the status-bar height and the
+        // content never tucks under it — the same guard MainActivity uses. In tile mode the
+        // window already sits below the bar (usableArea floors the tile's top), so no padding.
+        if (fillsDisplay()) row.setPadding(0, statusBarHeightPx(), 0, 0)
+
         // Empty spacer where the map floats — on the same side as the map. Nothing may be
         // drawn there. When the map is on the right the spacer follows the panel.
         fun addSpacer() {
@@ -343,6 +349,12 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             else -> null
         }
     }
+
+    /** Framework `status_bar_height` in px (the vendor top strip's height), or 0 if absent. */
+    private fun statusBarHeightPx(): Int =
+        resources.getIdentifier("status_bar_height", "dimen", "android")
+            .takeIf { it > 0 }
+            ?.let { resources.getDimensionPixelSize(it) } ?: 0
 
     /** True when our window is (near enough) as wide as the whole display. */
     private fun fillsDisplay(): Boolean = runCatching {

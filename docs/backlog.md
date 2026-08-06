@@ -233,6 +233,14 @@ match exactly and `hiCarDensity=300` exists — verify the panel density when ba
   - Related: post-boot the tiles land at `top=0` (under the bar) not `top=99` — the `top` inset
     (`status_bar_height`) may read 0 in the freeform tile; the panel content then tucks under the
     bar. Fixing that inset is the smaller, doable win if we keep the bar.
+  - **[FIXED 2026-08-06 — content no longer tucks under the strip] (`0b450cc`, DashboardActivity
+    inset guard).** The intermittent zero top-inset was letting our own content slide under the
+    bar — reproducible as "open the Cockpit, come back to Settings, and Settings flies under the
+    top bar". Both fullscreen windows now floor the top with the framework `status_bar_height`:
+    `MainActivity` (via `setDecorFitsSystemWindows(false)` + an insets listener that maxes the
+    top with the dimen) and the Cockpit panel when `fillsDisplay()` (the hidden/full-screen
+    state — a tile already sits below the bar, so it is left alone). Verify on-car; separate from
+    whether we *hide* the bar (immersive) at all.
 - **Source study 2026-08-06 (how the vendor dashboard treats the strip).** Read the decompiled
   vendor apps in `analysis/jadx/` + `research/diff/launcher-263`:
   - The strip **is a standard AOSP status bar**, just heavily re-skinned:
