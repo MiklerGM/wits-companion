@@ -40,6 +40,12 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
 - [ ] **Top bar** — decide hide/reveal, and whether the colour can be themed (§ Status bar).
 - [ ] **Swap / split model** — settle the propagation behaviour interactively, on the car
       (§ Layout mental model).
+- [ ] **Switcher tiles toggle (hide, not only switch)** — tapping the **active** tile hides the
+      floating app: un-window it via the existing `unwindowTiles`/`setTaskWindowingMode(FULLSCREEN)`
+      path, and the map takes the freed space (panel keeps its width). Tapping any tile shows an
+      app again; no tile lit = nothing floating. Design agreed 2026-08-06 (toggle model). The
+      width behaviour (map expands vs. panel grows) is the same open question as Swap/split —
+      confirm live before committing (§ Layout mental model).
 - [ ] **One-line confirmations:** the emulator cascade is absent on the car (§ Emulator-only);
       `SensorManager` has no `TYPE_LIGHT` (§ Brightness).
 
@@ -59,9 +65,13 @@ Things doable now, without the car.
       the emulator (clipped there by the freeform cascade). **Eyeball on the car** — see On-car
       checklist. Still to do: the "Cockpit" name check (§ UI).
 - [ ] **Volume: read-only probe scaffolding** (verify-first), no active pinning yet (§ Volume).
-- [ ] **Refresh Brightness values** - when android brightness is changed by the system (e.g. day night switch) companion will still show the previously set value
-- [ ] **Play and Pause** button styles: currently they are colored with orange-ish color, make it calmer
-- [ ] **Floating apps** tile style border is not needed, and we can find a better naming, "Apps" or just omit this "category" name
+- [x] **Refresh Brightness values** — *done 2026-08-06* (`faec0ab`): the label refreshes on
+      resume and observes `SCREEN_BRIGHTNESS`, so a system day/night change is reflected live.
+- [x] **Play and Pause** button styles — *done 2026-08-06* (`faec0ab`): fill is a desaturated,
+      mid-tone `calm()` of the album/brand accent instead of the full (loud) colour.
+- [x] **Floating apps** tile style — *done 2026-08-06* (`faec0ab`): dropped the selected-tile
+      outline (soft pill + bold label + dimmed neighbours already mark the active app); the
+      "Floating app" category label was already removed in the rail refactor.
 
 ---
 
