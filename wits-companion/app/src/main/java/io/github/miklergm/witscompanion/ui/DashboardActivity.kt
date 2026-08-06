@@ -60,6 +60,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     private lateinit var mediaCard: LinearLayout
     private var hotspotTile: LinearLayout? = null
     private var hotspotText: TextView? = null
+    private var hotspotIcon: TextView? = null
     private var brightnessTile: LinearLayout? = null
     private var brightnessLabel: TextView? = null
     private lateinit var artView: android.widget.ImageView
@@ -216,19 +217,25 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         // run through the car's amplifier), so a block of numbers on the driving surface
         // was clutter that could be misread. Keeping the panel to what is useful in motion.
 
-        // Hotspot as a coloured tile — green when on — so its state reads at a glance and
-        // it need not be reached through the quick-settings shade (two pulls). Hidden
-        // entirely if the platform cannot even report hotspot state.
+        // Hotspot as a compact pill with an icon — green when on — so its state reads at a
+        // glance and it need not be reached through the quick-settings shade (two pulls). It
+        // sizes to its content rather than spanning the column, so it reads as a button, not a
+        // banner. Hidden entirely if the platform cannot even report hotspot state.
         if (app.hotspotController.isSupported()) {
-            hotspotText = TextView(this).apply { textSize = 15f; setTypeface(typeface, Typeface.BOLD) }
+            hotspotIcon = TextView(this).apply {
+                text = "📶"; textSize = 15f; setPadding(0, 0, pad(8), 0)
+            }
+            hotspotText = TextView(this).apply { textSize = 14f; setTypeface(typeface, Typeface.BOLD) }
             hotspotTile = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(pad(16), pad(12), pad(16), pad(12))
+                setPadding(pad(14), pad(9), pad(16), pad(9))
                 isClickable = true
                 setOnClickListener { toggleHotspot() }
-                layoutParams = LinearLayout.LayoutParams(MATCH, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    .apply { topMargin = pad(4) }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = pad(4) }
+                addView(hotspotIcon)
                 addView(hotspotText)
             }
             content.addView(hotspotTile)
@@ -359,11 +366,23 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             app.hotspotController.observe(hotspotListener)
             renderHotspot(app.hotspotController.state())
         }
+        // Re-read the brightness and follow live changes: the system moves SCREEN_BRIGHTNESS on
+        // a day/night switch, and the label would otherwise keep showing the value we last set.
+        renderBrightness()
+        contentResolver.registerContentObserver(
+            android.provider.Settings.System.getUriFor(android.provider.Settings.System.SCREEN_BRIGHTNESS),
+            false, brightnessObserver,
+        )
         ui.post(clockTick)
         onCarState(app.carStateRepository.state)
     }
 
+    private val brightnessObserver = object : android.database.ContentObserver(ui) {
+        override fun onChange(selfChange: Boolean) = renderBrightness()
+    }
+
     override fun onStop() {
+        runCatching { contentResolver.unregisterContentObserver(brightnessObserver) }
         app.carStateRepository.removeObserver(this)
         app.mediaRepository.removeListener(this)
         if (hotspotTile != null) app.hotspotController.stopObserving()
@@ -388,15 +407,15 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             else -> if (palette.night) Color.parseColor("#2A2A2E") else Color.parseColor("#E4E4EA")
         }
         tile.background = android.graphics.drawable.GradientDrawable().apply {
-            cornerRadius = pad(12).toFloat(); setColor(fill)
+            cornerRadius = pad(20).toFloat(); setColor(fill)
         }
         label.text = when (state) {
-            HotspotController.State.ON -> "Hotspot  ·  ON"
-            HotspotController.State.OFF -> "Hotspot  ·  off"
-            HotspotController.State.TURNING_ON -> "Hotspot  ·  turning on…"
-            HotspotController.State.TURNING_OFF -> "Hotspot  ·  turning off…"
-            HotspotController.State.FAILED -> "Hotspot  ·  failed"
-            HotspotController.State.UNKNOWN -> "Hotspot  ·  —"
+            HotspotController.State.ON -> "Hotspot on"
+            HotspotController.State.OFF -> "Hotspot"
+            HotspotController.State.TURNING_ON -> "Hotspot…"
+            HotspotController.State.TURNING_OFF -> "Hotspot…"
+            HotspotController.State.FAILED -> "Hotspot failed"
+            HotspotController.State.UNKNOWN -> "Hotspot —"
         }
         label.setTextColor(if (on || transitioning) Color.WHITE else palette.foreground)
         tile.isEnabled = app.hotspotController.canToggle() && !transitioning
@@ -527,12 +546,23 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         mediaCard.background = android.graphics.drawable.GradientDrawable().apply {
             cornerRadius = pad(20).toFloat(); setColor(cardFill)
         }
-        val button = a ?: (if (palette.night) Color.parseColor("#3A3A40") else Color.parseColor("#C8C8CE"))
+        // The play button carries the accent but calmed down — a desaturated, moderate tone
+        // rather than the full album/brand colour, which read as too loud (e.g. bright orange).
+        val button = a?.let { calm(it) } ?: (if (palette.night) Color.parseColor("#3A3A40") else Color.parseColor("#C8C8CE"))
         playPauseButton.background = android.graphics.drawable.GradientDrawable().apply {
             shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(button)
         }
         trackView.setTextColor(if (a == null) palette.foreground else a)
         progressBar.progressTintList = android.content.res.ColorStateList.valueOf(a ?: palette.muted)
+    }
+
+    /** Desaturates and moderates a colour so it reads calm rather than loud (for the play button). */
+    private fun calm(color: Int): Int {
+        val hsv = FloatArray(3)
+        Color.colorToHSV(color, hsv)
+        hsv[1] *= 0.55f                        // roughly half the saturation
+        hsv[2] = hsv[2].coerceIn(0.42f, 0.70f) // keep it mid-tone, never glaring
+        return Color.HSVToColor(hsv)
     }
 
     /** Blends [color] over [base] at [alpha] — a soft tint without needing alpha compositing. */
@@ -714,17 +744,16 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     }
 
     /**
-     * Marks a switcher tile as the active floating app. The selected tile gets a filled pill
-     * with an outline and a bold label; the others are dimmed so the active one is obvious at
-     * a glance. When [animate] is set, the tile pops in — a small motion so a tap visibly
-     * *moves the focus* onto the app just chosen.
+     * Marks a switcher tile as the active floating app. The selected tile gets a soft filled
+     * pill and a bold label; the others are dimmed so the active one is obvious at a glance —
+     * no outline, which read as too heavy. When [animate] is set, the tile pops in — a small
+     * motion so a tap visibly *moves the focus* onto the app just chosen.
      */
     private fun setTileSelected(tile: LinearLayout, selected: Boolean, animate: Boolean = false) {
         tile.background = if (selected) {
             android.graphics.drawable.GradientDrawable().apply {
                 cornerRadius = pad(16).toFloat()
                 setColor(if (palette.night) Color.parseColor("#33FFFFFF") else Color.parseColor("#1F000000"))
-                setStroke(pad(2), palette.foreground)
             }
         } else null
         tile.alpha = if (selected) 1f else 0.55f
