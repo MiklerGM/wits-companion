@@ -110,11 +110,13 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             setBackgroundColor(palette.background)
         }
 
-        // When the panel fills the display (the hidden / full-screen state) its window spans
-        // under the vendor 99 px top strip, so floor the top with the status-bar height and the
-        // content never tucks under it — the same guard MainActivity uses. In tile mode the
-        // window already sits below the bar (usableArea floors the tile's top), so no padding.
-        if (fillsDisplay()) row.setPadding(0, statusBarHeightPx(), 0, 0)
+        // Floor the top with the status-bar height only when the panel fills the display AND the
+        // strip is actually there — i.e. the autostart full-screen state (bar visible). In the
+        // *hidden* state we hide the strip ([applyImmersive]) so the content uses full height (no
+        // gap), and in tile mode the window already sits below the bar (usableArea floors it).
+        if (fillsDisplay() && !app.layoutRepository.cockpitFloatingHidden) {
+            row.setPadding(0, statusBarHeightPx(), 0, 0)
+        }
 
         // Empty spacer where the map floats — on the same side as the map. Nothing may be
         // drawn there. When the map is on the right the spacer follows the panel.
@@ -388,15 +390,34 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         renderBrightness()
         if (hotspotTile != null) renderHotspot(app.hotspotController.state())
         latestMedia?.let { onMedia(it) }
+        applyImmersive()
         ui.post { ensurePanelBounds() }
     }
 
     override fun onResume() {
         super.onResume()
+        applyImmersive()
         // The panel is brought to the front as a freeform window, but a relaunch's setLaunchBounds
         // is ignored once the task exists, so it can arrive full-screen. Correct its own bounds to
         // the intended tile (or full, when hidden). Posted so the window metrics are settled first.
         ui.post { ensurePanelBounds() }
+    }
+
+    /**
+     * Hides the vendor top strip only in the hidden / full-screen state, so a dismissed-app panel
+     * is a clean full-screen surface — exactly what the vendor speedometer dashboard does (its
+     * `BaseThemeActivity.setActivityFull()` sets `FLAG_FULLSCREEN`; here the modern
+     * `WindowInsetsControllerCompat` equivalent, which the framework renders the same way). A swipe
+     * from the top reveals it transiently, then it auto-hides (BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE).
+     * In the two-tile state the bar is left visible (the map beside us shares it).
+     */
+    private fun applyImmersive() {
+        val controller = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+        controller.systemBarsBehavior =
+            androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        val statusBars = androidx.core.view.WindowInsetsCompat.Type.statusBars()
+        if (app.layoutRepository.cockpitFloatingHidden) controller.hide(statusBars)
+        else controller.show(statusBars)
     }
 
     /**
