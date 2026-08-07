@@ -474,6 +474,22 @@ class LayoutEngine(
     }
 
     /**
+     * The pixel bounds the Cockpit panel window should occupy: the complement tile beside the
+     * floating app when one is showing, or the whole display when the app is hidden. The panel
+     * uses this to resize **its own** task ([DashboardActivity.ensurePanelBounds]) because a
+     * relaunch's `setLaunchBounds` is ignored once the task exists, so it would otherwise stay
+     * full-screen. Same geometry the anchored [apply] places the app with.
+     */
+    fun cockpitPanelBounds(split: Float, swapped: Boolean, hidden: Boolean): android.graphics.Rect {
+        val full = windowController.fullDisplayArea(appContext)
+        if (hidden) return full
+        val area = windowController.usableArea(appContext)
+        val f = split.coerceIn(LayoutPreset.MIN_SPLIT, LayoutPreset.MAX_SPLIT)
+        val appBounds = if (swapped) NormalizedBounds(1f - f, 0f, 1f, 1f) else NormalizedBounds(0f, 0f, f, 1f)
+        return panelComplement(appBounds, area) ?: full
+    }
+
+    /**
      * Gate every delayed send: the generation must still be current **and** the vehicle
      * must still be safe *at fire time*, not merely when the layout was requested.
      */

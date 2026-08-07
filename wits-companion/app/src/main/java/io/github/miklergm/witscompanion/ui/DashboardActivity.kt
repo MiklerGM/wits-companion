@@ -388,6 +388,37 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         renderBrightness()
         if (hotspotTile != null) renderHotspot(app.hotspotController.state())
         latestMedia?.let { onMedia(it) }
+        ui.post { ensurePanelBounds() }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // The panel is brought to the front as a freeform window, but a relaunch's setLaunchBounds
+        // is ignored once the task exists, so it can arrive full-screen. Correct its own bounds to
+        // the intended tile (or full, when hidden). Posted so the window metrics are settled first.
+        ui.post { ensurePanelBounds() }
+    }
+
+    /**
+     * Resizes our **own** task (by [getTaskId]) to the bounds the Cockpit wants — the complement
+     * tile beside the floating app, or the whole display when hidden. This is what actually makes
+     * the panel a right-hand tile instead of a full-screen window drawing over the map (privileged
+     * path only; on the emulator the launch bounds already take). A small threshold avoids a
+     * resize↔config-change churn on sub-pixel differences.
+     */
+    private fun ensurePanelBounds() {
+        if (!app.windowController.isPrivileged) return
+        val target = app.layoutEngine.cockpitPanelBounds(
+            app.layoutRepository.split,
+            app.layoutRepository.swapped,
+            app.layoutRepository.cockpitFloatingHidden,
+        )
+        val current = runCatching { windowManager.currentWindowMetrics.bounds }.getOrNull() ?: return
+        val off = kotlin.math.abs(current.left - target.left) > 4 ||
+            kotlin.math.abs(current.top - target.top) > 4 ||
+            kotlin.math.abs(current.width() - target.width()) > 4 ||
+            kotlin.math.abs(current.height() - target.height()) > 4
+        if (off) app.windowController.resizeTaskTo(taskId, target)
     }
 
     override fun onStart() {

@@ -50,6 +50,10 @@ class WitsWindowController(
      */
     fun removeFreeformTasks(): Boolean = isPrivileged && privileged.removeFreeformTasks()
 
+    /** Resizes a task (typically the caller's own, by taskId) in place. Privileged path only. */
+    fun resizeTaskTo(taskId: Int, bounds: Rect): Boolean =
+        isPrivileged && privileged.resizeTaskTo(taskId, bounds)
+
     /**
      * The usable display area in pixels: full display minus system bar insets.
      *

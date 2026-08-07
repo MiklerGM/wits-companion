@@ -225,6 +225,14 @@ class PrivilegedWindowController(
         }
     }
 
+    /**
+     * Resizes a known task in place (bounds only, stays freeform). Public so an activity can
+     * correct **its own** task's bounds by [android.app.Activity.getTaskId] — no package/class
+     * disambiguation needed. Used by the Cockpit panel to shrink from full-screen to its tile,
+     * because `ActivityOptions.setLaunchBounds` is ignored when the task already exists.
+     */
+    fun resizeTaskTo(taskId: Int, bounds: Rect): Boolean = resizeTask(taskId, bounds)
+
     private fun resizeTask(taskId: Int, bounds: Rect): Boolean {
         val svc = service() ?: return false
         return runCatching {
