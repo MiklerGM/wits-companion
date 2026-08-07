@@ -292,11 +292,13 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
                 .apply { leftMargin = pad(10) }
         }
         rail.addView(glyphTile("⚙", "Settings") {
-            // Leaving the Cockpit: un-window the tiles (otherwise the freeform map keeps drawing
-            // over MainActivity — the "Settings just flashes" report) and finish the panel, then
-            // show the config UI.
-            app.layoutEngine.unwindowTiles(thenGoHome = false)
+            // Leaving the Cockpit for the config UI. Start MainActivity FIRST: un-windowing now
+            // *removes* the freeform tiles (incl. this cockpit task — `setTaskWindowingMode` is
+            // absent on this ROM), so MainActivity must already exist as its own fullscreen task
+            // to survive and come to the front. Clearing the tiles then stops them drawing over it
+            // (the "Settings just flashes / never opens" report). finish() is belt-and-suspenders.
             startActivity(android.content.Intent(this@DashboardActivity, MainActivity::class.java))
+            app.layoutEngine.unwindowTiles(thenGoHome = false)
             finish()
         })
         // The floating-app switcher, vertical: highlights the active app; a tap switches to it.

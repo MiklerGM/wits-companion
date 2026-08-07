@@ -179,8 +179,14 @@ class PrivilegedWindowController(
 
     /**
      * Moves a task out of freeform back to fullscreen. `resizeTask` cannot do this — it only sets
-     * bounds within the current mode — so the reset/exit uses this to actually un-window a tile.
-     * Reflective `IActivityTaskManager.setTaskWindowingMode(taskId, mode, toTop)`.
+     * bounds within the current mode.
+     *
+     * NOTE `[RUNTIME]` 2026-08-07: `IActivityTaskManager.setTaskWindowingMode` **does not exist on
+     * this ROM** — the reflective call throws `NoSuchMethodException` (confirmed in the decompiled
+     * `IActivityTaskManager`, whose task verbs are `moveTaskToRootTask`,
+     * `removeRootTasksInWindowingModes`, …). So un-windowing tiles goes through
+     * [removeFreeformTasks] instead. This method is kept only as a best-effort for ROMs that do
+     * expose it; every caller must tolerate `false`.
      */
     private fun setWindowingMode(taskId: Int, mode: Int): Boolean {
         val svc = service() ?: return false
@@ -192,6 +198,29 @@ class PrivilegedWindowController(
             true
         }.getOrElse {
             Log.w(TAG, "setTaskWindowingMode failed: ${it.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /**
+     * Removes every freeform root task — the Cockpit's tiles — in one call. This is the reliable
+     * un-window primitive on this ROM (where [setWindowingMode] is absent): the tiles stop being
+     * freeform windows that draw over fullscreen apps, so the vendor launcher / our config screen /
+     * the next navigation come up clean. Reflective
+     * `IActivityTaskManager.removeRootTasksInWindowingModes(int[])`.
+     *
+     * It closes the windowed apps (they are relaunched when a layout is next applied) — an
+     * acceptable trade for Exit (a deliberate reset) and Settings (a config visit), and the only
+     * verb available here that actually clears the windowing.
+     */
+    fun removeFreeformTasks(): Boolean {
+        val svc = service() ?: return false
+        return runCatching {
+            svc.javaClass.getMethod("removeRootTasksInWindowingModes", IntArray::class.java)
+                .invoke(svc, intArrayOf(WitsWindowMode.FREEFORM))
+            true
+        }.getOrElse {
+            Log.w(TAG, "removeRootTasksInWindowingModes failed: ${it.javaClass.simpleName}")
             false
         }
     }

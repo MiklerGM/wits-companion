@@ -541,13 +541,15 @@ class LayoutEngine(
     fun resetToVendorState() = unwindowTiles(thenGoHome = true)
 
     /**
-     * Takes every freeform tile **out of freeform** (back to fullscreen), so the Cockpit's
-     * windowed apps become ordinary fullscreen apps again — otherwise a full-size *freeform*
-     * window keeps drawing over whatever is shown next (the launcher, Settings, or the next
-     * navigation), which is the "navigation opens in the Cockpit's windowed format" report.
+     * Clears the Cockpit's freeform tiles so nothing keeps drawing over whatever is shown next
+     * (the launcher, our config screen, or the next navigation) — the fix for both "Exit does not
+     * reset the windows" and "Settings just flashes and never opens".
      *
-     * On the privileged path `setTaskWindowingMode` does the un-windowing (a plain `resizeTask`
-     * only changes bounds and stays freeform); the vendor hook re-issues FULLSCREEN otherwise.
+     * On the privileged path this is a single `removeRootTasksInWindowingModes([FREEFORM])`
+     * (`[RUNTIME]` 2026-08-07: `setTaskWindowingMode` throws `NoSuchMethodException` on this ROM,
+     * so we cannot un-freeze a task in place — we remove the freeform tasks outright; the apps are
+     * relaunched when a layout is next applied). On the unprivileged path (emulator) we fall back
+     * to the per-tile CHANGE_WINDOW hook, which re-issues FULLSCREEN.
      *
      * @param thenGoHome bring the vendor launcher to the front afterwards (Exit); false when the
      *   caller shows its own screen next (Settings → MainActivity). Cancels pending work first so
@@ -556,10 +558,19 @@ class LayoutEngine(
     fun unwindowTiles(thenGoHome: Boolean) {
         cancelPending()
         val myGeneration = generation.get()
-        val full = windowController.fullDisplayArea(appContext)
 
-        // Prefer the real freeform task list when privileged; fall back to what we last
-        // placed. The union covers tiles left over from an earlier session.
+        if (windowController.isPrivileged) {
+            val removed = windowController.removeFreeformTasks()
+            if (thenGoHome) {
+                handler.postDelayed({ if (myGeneration == generation.get()) goHome() }, ANCHOR_SETTLE_MS)
+            }
+            lastAppliedPackages = emptySet()
+            logger?.log("layout", "unwindow_tiles", extras = mapOf("removed" to removed, "home" to thenGoHome))
+            return
+        }
+
+        // Unprivileged (emulator): no removeRootTasks reach — un-window each tile via the hook.
+        val full = windowController.fullDisplayArea(appContext)
         val liveTiles = windowController.rootTasks()
             .filter { it.windowingMode == WitsWindowMode.FREEFORM }
             .mapNotNull { it.packageName }

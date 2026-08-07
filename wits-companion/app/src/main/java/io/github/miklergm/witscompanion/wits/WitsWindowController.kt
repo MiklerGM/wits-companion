@@ -44,6 +44,13 @@ class WitsWindowController(
         if (isPrivileged) privileged.rootTasks() else emptyList()
 
     /**
+     * Removes every freeform tile in one privileged call — the reliable un-window on this ROM
+     * (`setTaskWindowingMode` is absent here). Returns false on the unprivileged path, where the
+     * caller falls back to the per-tile CHANGE_WINDOW hook.
+     */
+    fun removeFreeformTasks(): Boolean = isPrivileged && privileged.removeFreeformTasks()
+
+    /**
      * The usable display area in pixels: full display minus system bar insets.
      *
      * Uses [WindowManager.getMaximumWindowMetrics], **never**
