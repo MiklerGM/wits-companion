@@ -270,6 +270,21 @@ match exactly and `hiCarDensity=300` exists — verify the panel density when ba
     new hide-toggle → panel fullscreen) — request immersive there for a clean look — but not the
     normal two-tile layout. **On-car:** confirm immersive actually hides the strip in the
     fullscreen-panel state (freeform-vs-fullscreen bar policy varies by ROM).
+- **[CONFIRMED on-car 2026-08-07 — the vendor car-dashboard proves the lever works.]** The
+  speedometer/odometer "dashboard" the user meant is `com.wits.launcher/.launcher.view.DashboardActivity`
+  (a `BaseThemeActivity` subclass — same package I studied before, but a different activity than the
+  home fragments). It runs **with the top strip hidden**, full-screen. Mechanism, from the decompiled
+  `BaseThemeActivity`: home screens call `setStatusBarTranslucent()` → `setSystemUiVisibility(1280)`
+  (draw under, bar visible); the dashboard calls `setActivityFull()`/`setFullActivity(true)` →
+  **`getWindow().setFlags(FLAG_FULLSCREEN, FLAG_FULLSCREEN)`** (the `1024` flag). Same base class,
+  different method — that is why home shows the bar and the dashboard hides it. At runtime the
+  `StatusBar` window carries an `insets_animation` leash and a top-swipe reveals it transiently then
+  it auto-hides (transient-by-swipe) — i.e. modern Android renders `FLAG_FULLSCREEN` via the insets
+  controller. **So the per-window immersive lever is confirmed to work on this exact unit.** For our
+  panel: apply `FLAG_FULLSCREEN` (or `WindowInsetsControllerCompat.hide(statusBars())` +
+  `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`) **only in the hidden/full-screen state** (single top
+  window). Depends on the panel-resize fix landing first so the hidden state is genuinely one
+  full-screen window.
 - **Top bar colour.** The vendor's 99 px top strip (home / clock / recents / back) has its
   own colour that does not match the app or the Cockpit. See whether it can be themed
   (status-bar colour is a per-window property; with the platform signature there may be more
