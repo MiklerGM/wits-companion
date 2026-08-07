@@ -333,6 +333,25 @@ map, no tiles). The user considers this normal-ish — **after one manual tap on
 
 ## Layout placement (needs on-car re-test)
 
+- **[ROOT CAUSE found 2026-08-07 — the big one] The Cockpit panel stays a FULL-screen window
+  instead of shrinking to the right complement tile.** On the head unit (`dumpsys`): the panel
+  task is `bounds=[0,0][2400,900]` while the floating app (Maps) is `[0,99][1560,900]`. The panel
+  only lands at the complement (`1560–2400`) on a **fresh** launch (task does not exist yet →
+  `ActivityOptions.setLaunchBounds` places it). Once the panel task already exists — after the
+  autostart-fullscreen open, or after the hide-toggle grows it to full — `bringAnchorToFront`
+  re-launches `DashboardActivity` with `setLaunchBounds`, but **launch bounds are ignored for an
+  existing (singleTask) task**, so it keeps its previous (full) size. It still *renders* two-tile
+  (the panel reserves its left strip, the app shows through), which is why it looked fine — but the
+  full transparent-left panel drawing over everything is almost certainly the cause of:
+  - **"apps switch strangely" (map/Spotify flicker)** — z-order/focus churn under the full panel;
+  - **"Settings just flashes the map"** — the full panel + task-ambiguous un-window (two
+    `witscompanion` tasks: MainActivity and the cockpit; `findTask(pkg)` can't tell them apart).
+  **Fix (offline, careful):** reposition the panel via the privileged `resizeTask` path, not a
+  relaunch — i.e. find the cockpit task specifically (add the top-activity *class* to
+  `TaskSnapshot` so `DashboardActivity` can be told apart from `MainActivity`) and
+  `setTaskWindowingMode(FREEFORM)` + `resizeTask(panelBounds)` it. Then the panel becomes a real
+  `1560–2400` tile and the switch/flicker jank should go. Verify Settings/Exit again after.
+  *(Inset + content-offset were fixed on-car 2026-08-07, `8dfa705`; those were separate.)*
 - **[FIXED + verified 2026-08-03] Cockpit floating-app switch could not return to Maps; the
   previous app covered the screen full-size.** A consequence of the panel-as-tile change:
   `parkStaleWindows` parked the previous floating app by resizing it to the *full display*
