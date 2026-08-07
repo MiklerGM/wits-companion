@@ -16,17 +16,23 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
 - [x] **Cockpit floating-app switch returns to Maps** — *fixed + verified 2026-08-03.* Two-tile
       mode had broken it: parking to fullscreen made the previous app cover the screen and the
       new one couldn't reach the front (§ Layout placement → floating-app switch).
-- [ ] **Eyeball the right-hand control rail** — Settings/switcher/Exit column: proportions on the
-      real ~28 % panel, tap targets, that Exit sits at the bottom and Settings at the top (built
-      2026-08-03, only seen clipped on the emulator).
-- [ ] **Settings button opens the config UI cleanly** — was just flashing (the freeform map drew
-      over MainActivity); now un-windows the tiles + finishes the panel first. Verify
-      `setTaskWindowingMode` actually un-freezes on the head unit.
-- [ ] **Exit un-windows the apps** — after Exit, navigation should open **fullscreen**, not in
-      the Cockpit's windowed format (the bug: `resizeTask` kept tiles freeform; now
-      `setTaskWindowingMode(FULLSCREEN)`).
-- [ ] **Top bar hide/reveal** — how to hide the vendor 99 px strip and pull it back (§ Status bar);
-      the panel content sometimes tucked under it.
+- [x] **Eyeball the right-hand control rail** — *verified 2026-08-07: proportions/tap-targets look
+      right on the real panel; Settings top, Exit bottom.*
+- [x] **Cockpit hide-toggle** — *verified 2026-08-07: two-tile → tap the active tile → app hidden
+      (black left, panel right, no tile lit) → tap any tile → app back. No crash.*
+- [ ] **Settings button opens the config UI cleanly** — *`b494087` (verify).* Was flashing +
+      launching apps because `setTaskWindowingMode` throws on this ROM; now `removeRootTasksInWindowingModes([FREEFORM])`
+      clears the tiles and MainActivity is started first. Check Settings actually opens.
+- [ ] **Exit un-windows the apps** — *`b494087` (verify).* Same root cause; Exit now clears freeform
+      tiles then goes home. After Exit, re-opening navigation should be **fullscreen**, not windowed.
+- [ ] **Panel is a real right-hand tile, not full-screen** — *`a1858d5` (verify).* `dumpsys`: cockpit
+      task should now be `~[1560,99][2400,900]`, not `[0,0][2400,900]`; app-switching should stop
+      being janky and the content offset should vanish.
+- [ ] **Hidden state hides the top strip** — *`9855ade` (verify).* In the hidden/full-screen panel
+      the vendor strip should be gone (like the speedometer dashboard), swipe-from-top reveals it
+      transiently; in two-tile the strip stays.
+- [ ] **Top bar hide/reveal (general)** — mechanism now known: `FLAG_FULLSCREEN` / immersive
+      (§ Status bar). Only applied in the hidden state above; the two-tile bar is intentionally kept.
 - [~] **zlink resolution** — *root cause found 2026-08-03:* AA res = `panel × aaDensity/hiCarDensity`
       = `2400×900 × 160/300 = 1280×480`. **Lever: `persist.zj.dpi.aaDensity`** (unset→160); set
       240 → 1920×720. (`rw.zlink.resize=true` blanks the mirror — ruled out.) Next time: set it,
@@ -348,8 +354,8 @@ map, no tiles). The user considers this normal-ish — **after one manual tap on
 
 ## Layout placement (needs on-car re-test)
 
-- **[ROOT CAUSE found on-car 2026-08-07 — breaks BOTH Settings and Exit] `setTaskWindowingMode`
-  does not exist on this ROM.** Logcat on the head unit: `PrivWindowController: setTaskWindowingMode
+- **[FIX IMPLEMENTED 2026-08-07 `b494087` — verify on car] `setTaskWindowingMode` does not exist
+  on this ROM (broke BOTH Settings and Exit).** Logcat on the head unit: `PrivWindowController: setTaskWindowingMode
   failed: NoSuchMethodException` → `privileged place failed ... setTaskWindowingMode returned false`
   for every tile. Confirmed in the decompiled framework: `android/app/IActivityTaskManager.java`
   has **no** `setTaskWindowingMode` — its task/windowing verbs are `moveTaskToRootTask(taskId,
@@ -368,8 +374,11 @@ map, no tiles). The user considers this normal-ish — **after one manual tap on
   `place()`'s "not visible" branch **not** fall through to a launch when the intent was to un-window
   (pass the intent through, or guard the fallback). Re-verify Settings + Exit after. Same privileged
   layer as the panel-resize fix — do them together.
-- **[ROOT CAUSE found 2026-08-07 — the big one] The Cockpit panel stays a FULL-screen window
-  instead of shrinking to the right complement tile.** On the head unit (`dumpsys`): the panel
+- **[FIX IMPLEMENTED 2026-08-07 `a1858d5` — verify on car] The Cockpit panel stayed a FULL-screen
+  window instead of shrinking to the right complement tile.** Fix: `DashboardActivity` resizes its
+  own task (`getTaskId()` + `resizeTaskTo` → `LayoutEngine.cockpitPanelBounds`) in `onResume` /
+  `onConfigurationChanged`, since a relaunch's `setLaunchBounds` is ignored once the task exists.
+  Original analysis: On the head unit (`dumpsys`): the panel
   task is `bounds=[0,0][2400,900]` while the floating app (Maps) is `[0,99][1560,900]`. The panel
   only lands at the complement (`1560–2400`) on a **fresh** launch (task does not exist yet →
   `ActivityOptions.setLaunchBounds` places it). Once the panel task already exists — after the
