@@ -85,6 +85,10 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         app = application as WitsCompanionApp
+        // Take the insets over so the decor does not *also* pad for the top strip: buildRoot()
+        // floors the top itself when the panel fills the display, and a second automatic inset
+        // would double it (the "everything slid too far down" report in the full-screen state).
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(buildRoot())
     }
 
@@ -123,9 +127,12 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         // (Settings on top, the floating-app switcher, Exit pinned to the bottom). Moving the
         // switcher and the two actions into the rail frees the media block's height, so the
         // panel no longer has to scroll under the vendor top bar.
+        // Top padding is small: the row already clears the vendor strip (tile placed below it,
+        // or floored when full-screen), so the panel content lines up with the edge-to-edge app
+        // on the left instead of sitting ~20 px lower (its own top padding was the visible gap).
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(pad(16), pad(14), pad(12), pad(14))
+            setPadding(pad(16), pad(4), pad(12), pad(14))
         }
         row.addView(panel, LinearLayout.LayoutParams(0, MATCH, 1f - reserved))
         if (reservation?.side == MapSide.RIGHT) addSpacer()
