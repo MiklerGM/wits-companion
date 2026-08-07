@@ -348,6 +348,26 @@ map, no tiles). The user considers this normal-ish — **after one manual tap on
 
 ## Layout placement (needs on-car re-test)
 
+- **[ROOT CAUSE found on-car 2026-08-07 — breaks BOTH Settings and Exit] `setTaskWindowingMode`
+  does not exist on this ROM.** Logcat on the head unit: `PrivWindowController: setTaskWindowingMode
+  failed: NoSuchMethodException` → `privileged place failed ... setTaskWindowingMode returned false`
+  for every tile. Confirmed in the decompiled framework: `android/app/IActivityTaskManager.java`
+  has **no** `setTaskWindowingMode` — its task/windowing verbs are `moveTaskToRootTask(taskId,
+  rootTaskId, toTop)`, `moveRootTaskToDisplay`, `removeRootTasksInWindowingModes(int[])`,
+  `getRootTaskInfo(windowingMode, activityType)`, `getAllRootTaskInfos`. (`resizeTask(int,Rect,int)`
+  *does* resolve — that is why placement works but un-freeform never did.) Consequences:
+  - **Exit** (`unwindowTiles`) can't take tiles out of freeform → "window positions not reset";
+    next app launch is still windowed.
+  - **Settings** — the failed un-window leaves the freeform tiles drawing over `MainActivity`, and
+    `place()`'s fallback (task exists but not visible → `launchIntoFreeform`) actually **launches an
+    app** (observed: Spotify came to the front) → "everything flashes, apps change, Settings never
+    opens".
+  **Fix (offline):** replace the `setTaskWindowingMode` reflection with a verb that exists here.
+  Candidate: `moveTaskToRootTask(taskId, <fullscreen rootTaskId>, toTop=true)` — get a fullscreen
+  root task from `getAllRootTaskInfos()`/`getRootTaskInfo(WINDOWING_MODE_FULLSCREEN, …)`. Also make
+  `place()`'s "not visible" branch **not** fall through to a launch when the intent was to un-window
+  (pass the intent through, or guard the fallback). Re-verify Settings + Exit after. Same privileged
+  layer as the panel-resize fix — do them together.
 - **[ROOT CAUSE found 2026-08-07 — the big one] The Cockpit panel stays a FULL-screen window
   instead of shrinking to the right complement tile.** On the head unit (`dumpsys`): the panel
   task is `bounds=[0,0][2400,900]` while the floating app (Maps) is `[0,99][1560,900]`. The panel
