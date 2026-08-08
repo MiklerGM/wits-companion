@@ -54,6 +54,9 @@ class WitsWindowController(
     fun resizeTaskTo(taskId: Int, bounds: Rect): Boolean =
         isPrivileged && privileged.resizeTaskTo(taskId, bounds)
 
+    /** Removes a single task by id — clears one stale window. Privileged path only. */
+    fun removeTask(taskId: Int): Boolean = isPrivileged && privileged.removeTask(taskId)
+
     /**
      * The usable display area in pixels: full display minus system bar insets.
      *

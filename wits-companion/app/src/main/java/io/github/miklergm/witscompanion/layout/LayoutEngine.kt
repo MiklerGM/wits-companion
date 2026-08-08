@@ -388,12 +388,31 @@ class LayoutEngine(
         // taps can leave freeform tasks we never recorded in lastAppliedPackages; without
         // this they float over the new layout (e.g. a leftover fullscreen Spotify when the
         // Cockpit is opened). SELF is never parked: the companion is the anchor/panel.
-        val liveFreeform = windowController.rootTasks()
+        val liveTasks = windowController.rootTasks()
             .filter { it.windowingMode == WitsWindowMode.FREEFORM }
-            .mapNotNull { it.packageName }
+        val liveFreeform = liveTasks.mapNotNull { it.packageName }
         val stale = (lastAppliedPackages + liveFreeform - keep) - WitsPackages.SELF
         if (stale.isEmpty()) return 0
 
+        // Tiled layouts (parkMode = FULLSCREEN) have no floating tile to hide a stale app behind,
+        // so the old path tried to un-freeform it — but `setTaskWindowingMode` is absent on this
+        // ROM, so `place()` fell through and *re-launched* the app as yet another freeform tile.
+        // Switching presets then piled up windows (`[RUNTIME]` 2026-08-08: 5 freeform tasks). On
+        // the privileged path, REMOVE the stale tasks outright instead (they are not in the new
+        // layout); the app is relaunched clean when a preset that includes it is next applied.
+        if (parkMode == WitsWindowMode.FULLSCREEN && windowController.isPrivileged) {
+            val staleTasks = liveTasks.filter { it.packageName in stale }
+            staleTasks.forEachIndexed { index, task ->
+                handler.postDelayed({ windowController.removeTask(task.taskId) }, index * PARK_DELAY_MS)
+            }
+            logger?.log(
+                "layout", "remove_stale",
+                extras = mapOf("packages" to stale.joinToString(","), "count" to staleTasks.size),
+            )
+            return staleTasks.size
+        }
+
+        // Anchored (freeform park to the floating tile) / unprivileged: move stale apps in place.
         stale.forEachIndexed { index, pkg ->
             if (!windowController.isLaunchable(pkg)) return@forEachIndexed
             handler.postDelayed({

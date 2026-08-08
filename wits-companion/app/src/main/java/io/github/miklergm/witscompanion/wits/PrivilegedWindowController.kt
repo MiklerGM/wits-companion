@@ -226,6 +226,23 @@ class PrivilegedWindowController(
     }
 
     /**
+     * Removes a single task by id — the way to clear ONE stale window on this ROM (where
+     * [setWindowingMode] is absent, so a stale freeform task cannot be un-frozen; the old
+     * park-to-fullscreen path re-*launched* it instead, piling up windows). Reflective
+     * `IActivityTaskManager.removeTask(int)`.
+     */
+    fun removeTask(taskId: Int): Boolean {
+        val svc = service() ?: return false
+        return runCatching {
+            svc.javaClass.getMethod("removeTask", Int::class.javaPrimitiveType).invoke(svc, taskId)
+            true
+        }.getOrElse {
+            Log.w(TAG, "removeTask failed: ${it.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /**
      * Resizes a known task in place (bounds only, stays freeform). Public so an activity can
      * correct **its own** task's bounds by [android.app.Activity.getTaskId] — no package/class
      * disambiguation needed. Used by the Cockpit panel to shrink from full-screen to its tile,
