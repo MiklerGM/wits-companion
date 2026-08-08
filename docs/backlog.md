@@ -20,9 +20,14 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       right on the real panel; Settings top, Exit bottom.*
 - [x] **Cockpit hide-toggle** — *verified 2026-08-07: two-tile → tap the active tile → app hidden
       (black left, panel right, no tile lit) → tap any tile → app back. No crash.*
-- [ ] **Settings button opens the config UI cleanly** — *`b494087` (verify).* Was flashing +
-      launching apps because `setTaskWindowingMode` throws on this ROM; now `removeRootTasksInWindowingModes([FREEFORM])`
-      clears the tiles and MainActivity is started first. Check Settings actually opens.
+- [ ] **Settings opens as the Cockpit's LEFT TILE** — *`9ccc10c` (verify).* Redesign: instead of
+      leaving the Cockpit for a full-screen config (which raced with the ROM window handling +
+      autostart and closed the app to the vendor launcher — confirmed on-car 2026-08-08), the gear
+      now launches MainActivity **freeform into the app/left tile** (over the map), panel stays
+      right; nothing un-windowed/finished. Check: gear → config appears in the left tile, panel
+      intact; tap Maps → map returns; no bounce, no app-close. *(On-car root cause of the old bug:
+      `setTaskWindowingMode` missing → un-window removed MainActivity too / autostart `reassert`
+      re-opened the Cockpit over it.)*
 - [ ] **Exit un-windows the apps** — *`b494087` (verify).* Same root cause; Exit now clears freeform
       tiles then goes home. After Exit, re-opening navigation should be **fullscreen**, not windowed.
 - [ ] **Panel is a real right-hand tile, not full-screen** — *`a1858d5` (verify).* `dumpsys`: cockpit
