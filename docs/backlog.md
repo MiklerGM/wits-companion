@@ -20,14 +20,14 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       right on the real panel; Settings top, Exit bottom.*
 - [x] **Cockpit hide-toggle** — *verified 2026-08-07: two-tile → tap the active tile → app hidden
       (black left, panel right, no tile lit) → tap any tile → app back. No crash.*
-- [ ] **Settings opens as the Cockpit's LEFT TILE** — *`9ccc10c` (verify).* Redesign: instead of
-      leaving the Cockpit for a full-screen config (which raced with the ROM window handling +
-      autostart and closed the app to the vendor launcher — confirmed on-car 2026-08-08), the gear
-      now launches MainActivity **freeform into the app/left tile** (over the map), panel stays
-      right; nothing un-windowed/finished. Check: gear → config appears in the left tile, panel
-      intact; tap Maps → map returns; no bounce, no app-close. *(On-car root cause of the old bug:
-      `setTaskWindowingMode` missing → un-window removed MainActivity too / autostart `reassert`
-      re-opened the Cockpit over it.)*
+- [x] **Settings opens as the Cockpit's LEFT TILE** — *verified on-car 2026-08-08* (`9ccc10c` +
+      `98f6769`). The gear launches MainActivity freeform into the app/left tile (self-resizing its
+      own task via `ensureConfigTileBounds`), panel stays right, top bar present, nothing
+      un-windowed/finished. Open app → Cockpit; gear → config left + panel right; tap Maps → map
+      returns. *(Replaced the full-screen-config approach, which raced with the ROM's missing
+      `setTaskWindowingMode` + autostart `reassert` and closed the app to the vendor launcher.)*
+      Minor: switching Maps back sometimes needs a second tap (the pre-existing autostart placement
+      timing, not Settings-specific).
 - [ ] **Exit un-windows the apps** — *`b494087` (verify).* Same root cause; Exit now clears freeform
       tiles then goes home. After Exit, re-opening navigation should be **fullscreen**, not windowed.
 - [ ] **Panel is a real right-hand tile, not full-screen** — *`a1858d5` (verify).* `dumpsys`: cockpit
