@@ -293,19 +293,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, MATCH)
                 .apply { leftMargin = pad(10) }
         }
-        rail.addView(glyphTile("⚙", "Settings") {
-            // Leaving the Cockpit for the config UI. Suppress the autostart panel first, so
-            // clearing the tiles below (which changes the top app and can trigger a restore)
-            // cannot immediately re-open the Cockpit over MainActivity — the "Settings never
-            // opens" bug. Then start MainActivity FIRST: un-windowing *removes* the freeform tiles
-            // (incl. this cockpit task — `setTaskWindowingMode` is absent on this ROM), so
-            // MainActivity must already exist as its own fullscreen task to survive and come to
-            // the front. finish() is belt-and-suspenders.
-            app.recoveryCoordinator.configUiVisible = true
-            startActivity(android.content.Intent(this@DashboardActivity, MainActivity::class.java))
-            app.layoutEngine.unwindowTiles(thenGoHome = false)
-            finish()
-        })
+        rail.addView(glyphTile("⚙", "Settings") { openConfigInLeftTile() })
         // The floating-app switcher, vertical: highlights the active app; a tap switches to it.
         switcherTiles.clear()
         val current = currentFloatingPackage()
@@ -758,6 +746,32 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         app.layoutEngine.hideFloatingApp(current)
         switcherTiles.forEach { (_, tile) -> setTileSelected(tile, selected = false) }
         toast("App hidden")
+    }
+
+    /**
+     * Shows the config UI ([MainActivity]) in the Cockpit's **left tile** — the slot the map lives
+     * in — instead of leaving the Cockpit for a full-screen screen. The old approach un-windowed
+     * the tiles and finished the panel, which raced with the ROM's window handling and the
+     * autostart panel ("Settings flashes / closes the app to the vendor launcher"). Here nothing
+     * is un-windowed or finished: MainActivity is launched freeform at the app-tile bounds and
+     * reordered to the front, so it covers the map while the panel stays on the right. There is no
+     * race and nothing to bounce.
+     */
+    private fun openConfigInLeftTile() {
+        val bounds = app.layoutEngine.cockpitAppBounds(
+            app.layoutRepository.split, app.layoutRepository.swapped,
+        )
+        val intent = android.content.Intent(this, MainActivity::class.java).addFlags(
+            android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
+        ).putExtra(MainActivity.EXTRA_COCKPIT_TILE, true)
+        val opts = android.app.ActivityOptions.makeBasic().setLaunchBounds(bounds)
+        runCatching {
+            android.app.ActivityOptions::class.java
+                .getMethod("setLaunchWindowingMode", Int::class.javaPrimitiveType)
+                .invoke(opts, 5) // WitsWindowMode.FREEFORM
+        }
+        startActivity(intent, opts.toBundle())
     }
 
     private fun toast(message: String) =

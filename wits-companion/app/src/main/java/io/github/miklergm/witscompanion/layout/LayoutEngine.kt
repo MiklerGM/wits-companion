@@ -490,6 +490,19 @@ class LayoutEngine(
     }
 
     /**
+     * The pixel bounds of the Cockpit's **floating-app (left) tile** — the slot the map lives in.
+     * The Settings gear launches our config ([MainActivity]) into these bounds so it sits in the
+     * left tile beside the panel, instead of leaving the Cockpit for a full-screen screen (which
+     * fought the un-window / autostart machinery). Complement of [cockpitPanelBounds].
+     */
+    fun cockpitAppBounds(split: Float, swapped: Boolean): android.graphics.Rect {
+        val area = windowController.usableArea(appContext)
+        val f = split.coerceIn(LayoutPreset.MIN_SPLIT, LayoutPreset.MAX_SPLIT)
+        val appBounds = if (swapped) NormalizedBounds(1f - f, 0f, 1f, 1f) else NormalizedBounds(0f, 0f, f, 1f)
+        return appBounds.toPixels(area)
+    }
+
+    /**
      * Gate every delayed send: the generation must still be current **and** the vehicle
      * must still be safe *at fire time*, not merely when the layout was requested.
      */

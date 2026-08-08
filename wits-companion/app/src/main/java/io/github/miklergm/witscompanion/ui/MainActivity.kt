@@ -56,11 +56,23 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
             ?.let { resources.getDimensionPixelSize(it) } ?: 0
         ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(bars.left, maxOf(bars.top, floor), bars.right, bars.bottom)
+            // Floor the top with the strip height only when we FILL the display (standalone). In
+            // the Cockpit's left tile the window already sits below the bar, so flooring would
+            // double-inset and leave a big empty gap at the top of the config.
+            val top = if (fillsDisplay()) maxOf(bars.top, floor) else bars.top
+            v.setPadding(bars.left, top, bars.right, bars.bottom)
             insets
         }
         ViewCompat.requestApplyInsets(root)
     }
+
+    /** True when our window is (near enough) as wide as the whole display — i.e. not a tile. */
+    private fun fillsDisplay(): Boolean = runCatching {
+        val wm = getSystemService(android.view.WindowManager::class.java)
+        val own = wm.currentWindowMetrics.bounds.width()
+        val display = wm.maximumWindowMetrics.bounds.width()
+        display > 0 && own * 100 >= display * 90
+    }.getOrDefault(true)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -191,5 +203,14 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
 
     fun toast(message: String) {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    }
+
+    companion object {
+        /**
+         * Set by the Cockpit's Settings gear when it opens this activity as the **left tile** of
+         * the Cockpit (freeform, beside the panel) rather than a standalone full-screen screen.
+         * Reserved for tile-specific behaviour (e.g. self-resizing the task to the app-tile bounds).
+         */
+        const val EXTRA_COCKPIT_TILE = "cockpit_tile"
     }
 }

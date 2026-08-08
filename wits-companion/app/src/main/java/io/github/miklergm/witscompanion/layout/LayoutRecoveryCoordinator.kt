@@ -116,6 +116,13 @@ class LayoutRecoveryCoordinator(
     }
 
     private fun attempt(reason: String, state: CarState) {
+        // The config UI is up (e.g. the user just tapped Settings): do NOT auto-restore over it.
+        // The bounce was `reassert` here, not only `startPanelIfEnabled` — re-applying the last
+        // anchored preset brings the Cockpit panel back to the front, so Settings "never opened".
+        if (configUiVisible) {
+            logger?.log("layout", "auto_restore_skipped", extras = mapOf("reason" to reason), result = "config_visible")
+            return
+        }
         val since = nowMs() - lastApplyAt
         if (since < DEBOUNCE_MS) {
             logger?.log(
