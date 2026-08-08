@@ -422,6 +422,18 @@ map, no tiles). The user considers this normal-ish — **after one manual tap on
   taps, opening the Cockpit first showed a leftover fullscreen Spotify; second try was
   correct. Needs extra stale-task cleanup before/while applying an anchored preset (park or
   fullscreen any freeform task not in the new layout, not just the last-applied set).
+- **[ROOT CAUSE found on-car 2026-08-08 — "two-app tiled presets work very strangely"] Stale
+  freeform tasks pile up when switching presets.** `dumpsys` after a few Maps+Spotify / Maps+Chrome
+  switches: FIVE freeform tasks coexisting (maps, spotify, chrome, MainActivity, cockpit panel);
+  logcat over ~40 s showed maps launched 4×, spotify 5×, chrome 2×. `parkStaleWindows` parks stale
+  apps to **FULLSCREEN** for a tiled layout, but `setTaskWindowingMode` is absent on this ROM (and
+  the stale task is often `visible=false`, so `place()` skips even trying) → the fallback
+  `launchIntoFreeform` **re-launches** the app as yet another freeform tile instead of clearing it.
+  Every switch accumulates windows → z-order/focus chaos. **Fix (offline):** on a tiled/preset
+  apply, **remove** the freeform tasks not in the new layout — add `PrivilegedWindowController.removeTask(taskId)`
+  (`IActivityTaskManager.removeTask(int)` exists here) and call it for stale tasks, instead of the
+  park-to-fullscreen path that relaunches. Same ROM limitation as the Settings/Exit un-freeform.
+  Logs saved to scratch `x-twoapps.log`.
 
 ## Layout mental model (design discussion — pick up interactively)
 
