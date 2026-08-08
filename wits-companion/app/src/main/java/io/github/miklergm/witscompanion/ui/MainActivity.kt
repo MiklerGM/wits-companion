@@ -131,12 +131,17 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
 
     override fun onResume() {
         super.onResume()
+        // While the config UI is up, suppress the autostart panel — set BEFORE onActivityResumed
+        // (which itself may try to restore) so tapping Settings can't be bounced back to the
+        // Cockpit. Cleared in onPause.
+        app.recoveryCoordinator.configUiVisible = true
         current?.onResume()
         // Opt-in only; disabled by default. Never switches the source.
         app.recoveryCoordinator.onActivityResumed(app.carStateRepository.state)
     }
 
     override fun onPause() {
+        app.recoveryCoordinator.configUiVisible = false
         current?.onPause()
         super.onPause()
     }

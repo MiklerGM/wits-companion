@@ -159,8 +159,23 @@ class LayoutRecoveryCoordinator(
      * activity is always safe — it disturbs no foreign app — so this is gated only by the
      * toggle and by reverse (never pull the panel up over the reverse camera).
      */
+    /**
+     * True while the config UI ([MainActivity]) is in the foreground. Set by MainActivity's
+     * resume/pause (and pre-set by the Cockpit's Settings button to cover the launch race). While
+     * it holds, the autostart panel must NOT re-launch the Cockpit — otherwise tapping Settings
+     * un-windows the tiles and then the autostart immediately re-opens the panel over MainActivity,
+     * so the config screen "never opens" (`[RUNTIME]` 2026-08-08: START MainActivity → 88 ms later
+     * START DashboardActivity from our own uid).
+     */
+    @Volatile
+    var configUiVisible: Boolean = false
+
     fun startPanelIfEnabled(reason: String, state: CarState) {
         if (!repository.autostartPanel) return
+        if (configUiVisible) {
+            logger?.log("layout", "autostart_panel", result = "skipped:config_visible", extras = mapOf("reason" to reason))
+            return
+        }
         if (state.reverseActive != false) {
             logger?.log("layout", "autostart_panel", result = "skipped:reverse", extras = mapOf("reason" to reason))
             return
