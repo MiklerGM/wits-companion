@@ -74,9 +74,13 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
         display > 0 && own * 100 >= display * 90
     }.getOrDefault(true)
 
+    /** True when opened as the Cockpit's left tile (freeform beside the panel), not standalone. */
+    private var isCockpitTile = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         app = application as WitsCompanionApp
+        isCockpitTile = intent?.getBooleanExtra(EXTRA_COCKPIT_TILE, false) ?: false
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         keepClearOfTopStrip(binding.root)
@@ -141,21 +145,48 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
         }
     }
 
+    override fun onNewIntent(intent: android.content.Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        isCockpitTile = intent?.getBooleanExtra(EXTRA_COCKPIT_TILE, false) ?: false
+        window.decorView.post { ensureConfigTileBounds() }
+    }
+
     override fun onResume() {
         super.onResume()
-        // While the config UI is up, suppress the autostart panel — set BEFORE onActivityResumed
-        // (which itself may try to restore) so tapping Settings can't be bounced back to the
-        // Cockpit. Cleared in onPause.
-        app.recoveryCoordinator.configUiVisible = true
+        // Suppress the auto-restore ONLY when we are the Cockpit's config tile — otherwise a
+        // reassert would re-float the map over us. A standalone open (from the launcher) must NOT
+        // suppress it, or the normal "open the app → Cockpit" autostart would never fire.
+        app.recoveryCoordinator.configUiVisible = isCockpitTile
         current?.onResume()
         // Opt-in only; disabled by default. Never switches the source.
         app.recoveryCoordinator.onActivityResumed(app.carStateRepository.state)
+        // A relaunch's setLaunchBounds is ignored once our task exists, so correct our own bounds
+        // to the app (left) tile. Posted so the window metrics have settled.
+        if (isCockpitTile) window.decorView.post { ensureConfigTileBounds() }
     }
 
     override fun onPause() {
         app.recoveryCoordinator.configUiVisible = false
         current?.onPause()
         super.onPause()
+    }
+
+    /**
+     * When shown as the Cockpit's left tile, resize our OWN task (by [getTaskId]) to the app-tile
+     * bounds — mirrors [DashboardActivity]'s panel self-resize. Privileged path only.
+     */
+    private fun ensureConfigTileBounds() {
+        if (!isCockpitTile || !app.windowController.isPrivileged) return
+        val target = app.layoutEngine.cockpitAppBounds(
+            app.layoutRepository.split, app.layoutRepository.swapped,
+        )
+        val current = runCatching { windowManager.currentWindowMetrics.bounds }.getOrNull() ?: return
+        val off = kotlin.math.abs(current.left - target.left) > 4 ||
+            kotlin.math.abs(current.top - target.top) > 4 ||
+            kotlin.math.abs(current.width() - target.width()) > 4 ||
+            kotlin.math.abs(current.height() - target.height()) > 4
+        if (off) app.windowController.resizeTaskTo(taskId, target)
     }
 
     override fun onDestroy() {
