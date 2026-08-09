@@ -401,15 +401,24 @@ class LayoutEngine(
         // the privileged path, REMOVE the stale tasks outright instead (they are not in the new
         // layout); the app is relaunched clean when a preset that includes it is next applied.
         if (parkMode == WitsWindowMode.FULLSCREEN && windowController.isPrivileged) {
-            val staleTasks = liveTasks.filter { it.packageName in stale }
-            staleTasks.forEachIndexed { index, task ->
+            // A tiled layout has NO companion window, so also clear our own leftover Cockpit tiles
+            // (the config + the panel), not just stale foreign apps — otherwise they stay on top
+            // and cover the two tiles ("Maps and Chrome didn't open because it was Cockpit before",
+            // `[RUNTIME]` 2026-08-08). Remove every live freeform task that is not in the new layout,
+            // SELF included. The config task that triggered this apply is torn down after its call
+            // returns (the removal is posted), like the Settings button.
+            val toRemove = liveTasks.filter { it.packageName !in keep }
+            toRemove.forEachIndexed { index, task ->
                 handler.postDelayed({ windowController.removeTask(task.taskId) }, index * PARK_DELAY_MS)
             }
             logger?.log(
                 "layout", "remove_stale",
-                extras = mapOf("packages" to stale.joinToString(","), "count" to staleTasks.size),
+                extras = mapOf(
+                    "packages" to toRemove.mapNotNull { it.packageName }.joinToString(","),
+                    "count" to toRemove.size,
+                ),
             )
-            return staleTasks.size
+            return toRemove.size
         }
 
         // Anchored (freeform park to the floating tile) / unprivileged: move stale apps in place.

@@ -26,6 +26,14 @@
         android:name="android.permission.MANAGE_ACTIVITY_TASKS"
         tools:ignore="ProtectedPermissions" />
 
+    <!-- Signature-level. Granted only on the platform build. Lets the privileged window path
+         remove a single stale task (IActivityTaskManager.removeTask) — MANAGE_ACTIVITY_TASKS is
+         not enough, removeTask() specifically requires this. Used to clear stale freeform tiles
+         when switching tiled presets (this ROM has no setTaskWindowingMode to un-freeform them). -->
+    <uses-permission
+        android:name="android.permission.REMOVE_TASKS"
+        tools:ignore="ProtectedPermissions" />
+
     <!-- Signature-level. Granted only on the platform build. Used solely to self-grant the
          media notification-listener access, because the vendor's system menu for it is
          unreachable on this head unit and the grant is lost on every reinstall. On a debug

@@ -266,11 +266,20 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
             app.layoutRepository.lastAppliedPresetId = anchored.id
             app.layoutRepository.cockpitFloatingPackage =
                 anchored.windows.firstOrNull { it.packageName != WitsPackages.SELF }?.packageName
+            dismissConfig(activity)
         } else {
             // No anchored preset to place the map with — still open the panel.
             activity.startActivity(android.content.Intent(activity, DashboardActivity::class.java))
         }
     }
+
+    /**
+     * Gets this config screen out of the way after a layout is applied, so it does not cover the
+     * windows just placed. `removeTask` cannot clear the very task that triggered the apply (it is
+     * the resumed activity — `[RUNTIME]` 2026-08-08: the config lingered over a fresh Maps+Chrome),
+     * so MainActivity finishes itself; the gear reopens it when needed.
+     */
+    private fun dismissConfig(activity: MainActivity) = activity.finish()
 
     private fun applyFromHome(activity: MainActivity, preset: LayoutPreset) {
         lockWhilePlacing()
@@ -278,6 +287,7 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
             is LayoutEngine.Result.Applied -> {
                 app.layoutRepository.lastAppliedPresetId = preset.id
                 activity.toast("Applied ${preset.title}")
+                dismissConfig(activity)
             }
             is LayoutEngine.Result.Refused -> activity.toast("Refused: ${r.reason}")
             is LayoutEngine.Result.Invalid -> activity.toast("Invalid: ${r.errors.firstOrNull()}")
@@ -459,6 +469,9 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
                     "Applied ${result.windows} window(s)" +
                         if (result.warnings.isEmpty()) "" else "; ${result.warnings.size} warning(s)"
                 )
+                // Get the config out of the way so it does not cover the windows just placed
+                // (removeTask can't clear the resumed activity that triggered the apply).
+                activity.finish()
             }
             is LayoutEngine.Result.Refused -> activity.toast("Refused: ${result.reason}")
             is LayoutEngine.Result.Invalid -> activity.toast("Invalid: ${result.errors.joinToString()}")
