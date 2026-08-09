@@ -102,6 +102,17 @@ class LayoutRepository(context: Context) {
         get() = prefs.getBoolean(KEY_COCKPIT_HIDDEN, false)
         set(value) = prefs.edit().putBoolean(KEY_COCKPIT_HIDDEN, value).apply()
 
+    /**
+     * True when the config UI occupies the Cockpit's left tile (the Settings gear was tapped),
+     * so the rail can light the gear like an active switcher tile. Cleared when an app is floated
+     * or the app is hidden. Mutually exclusive with a lit app tile.
+     *
+     * In-memory (not persisted): the config is not re-opened on a fresh app start, so the gear
+     * must not come up lit after a restart — a stale `true` in prefs would do exactly that.
+     */
+    @Volatile
+    var cockpitLeftIsConfig: Boolean = false
+
     // ------------------------------------------------------------- preferences
     // All automatic behaviours default to OFF. The user opts in explicitly.
 

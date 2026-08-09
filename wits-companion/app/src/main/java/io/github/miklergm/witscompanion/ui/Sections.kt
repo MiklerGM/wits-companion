@@ -266,6 +266,8 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
             app.layoutRepository.lastAppliedPresetId = anchored.id
             app.layoutRepository.cockpitFloatingPackage =
                 anchored.windows.firstOrNull { it.packageName != WitsPackages.SELF }?.packageName
+            app.layoutRepository.cockpitLeftIsConfig = false
+            app.layoutRepository.cockpitFloatingHidden = false
             dismissConfig(activity)
         } else {
             // No anchored preset to place the map with — still open the panel.
@@ -286,6 +288,7 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
         when (val r = app.layoutEngine.apply(preset, app.carStateRepository.state, Trigger.USER)) {
             is LayoutEngine.Result.Applied -> {
                 app.layoutRepository.lastAppliedPresetId = preset.id
+                app.layoutRepository.cockpitLeftIsConfig = false
                 activity.toast("Applied ${preset.title}")
                 dismissConfig(activity)
             }
