@@ -71,8 +71,7 @@ Things doable now, without the car.
       strips (§ Cockpit: play hides the map — follow-ups).
 - [ ] **Study the vendor "Car Device" source and the vendor dashboard** — what they switch to /
       which properties they read (§ Vendor integration).
-- [ ] **Spotify top-left flicker** — is it a suppressible freeform caption/handle? (§ Cockpit /
-      panel polish).
+- [x] **Spotify top-left flicker** — *dropped 2026-08-09: no longer observed by the user, closing.*
 - [x] **Cockpit right-hand control column** — *implemented 2026-08-03* (`f3c6b3c`): main column
       (media + hotspot + brightness) + narrow rail with Settings (gear) top, the app switcher
       vertical, Exit (reset) pinned bottom; no more ScrollView/footer. Verified structurally on
