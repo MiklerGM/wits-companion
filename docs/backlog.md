@@ -30,20 +30,17 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       timing, not Settings-specific).
 - [ ] **Exit un-windows the apps** — *`b494087` (verify).* Same root cause; Exit now clears freeform
       tiles then goes home. After Exit, re-opening navigation should be **fullscreen**, not windowed.
-- [ ] **Panel is a real right-hand tile, not full-screen** — *`a1858d5` (verify).* `dumpsys`: cockpit
-      task should now be `~[1560,99][2400,900]`, not `[0,0][2400,900]`; app-switching should stop
-      being janky and the content offset should vanish.
-- [ ] **Hidden state hides the top strip** — *`9855ade` (verify).* In the hidden/full-screen panel
-      the vendor strip should be gone (like the speedometer dashboard), swipe-from-top reveals it
-      transiently; in two-tile the strip stays.
+- [x] **Panel is a real right-hand tile, not full-screen** — *verified 2026-08-08* (`a1858d5`):
+      cockpit task is `~[1560,99][2400,900]`, not `[0,0][2400,900]`; app-switching is smooth, offset gone.
+- [x] **Hidden state hides the top strip** — *verified 2026-08-08* (`9855ade`): in the hidden/full-screen
+      panel the vendor strip is gone (like the speedometer dashboard), swipe-from-top reveals it; two-tile keeps it.
 - [ ] **Top bar hide/reveal (general)** — mechanism now known: `FLAG_FULLSCREEN` / immersive
       (§ Status bar). Only applied in the hidden state above; the two-tile bar is intentionally kept.
 - [~] **zlink resolution** — *root cause found 2026-08-03:* AA res = `panel × aaDensity/hiCarDensity`
       = `2400×900 × 160/300 = 1280×480`. **Lever: `persist.zj.dpi.aaDensity`** (unset→160); set
       240 → 1920×720. (`rw.zlink.resize=true` blanks the mirror — ruled out.) Next time: set it,
       reconnect AA, check `hu_AA_width` (§ zlink). Experiment only when a dropped mirror is OK.
-- [ ] **Volume: read the live `STREAM_MUSIC` level** (`dumpsys audio`) before deciding whether
-      any pinning is even needed (§ Volume).
+- [x] **Volume: read the live `STREAM_MUSIC` level** — *done 2026-08-08:* at max (15/15), unmuted; no pinning needed (§ Volume).
 - [ ] **Spotify no longer stretches to full width** after tiling (§ Layout placement).
 - [ ] **No stale fullscreen app** on the first Cockpit open after churn (§ Layout placement).
 - [x] **Media album art** — *verified 2026-08-03: cover art + progress + transport for a
@@ -51,7 +48,7 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
 - [ ] **Top bar** — decide hide/reveal, and whether the colour can be themed (§ Status bar).
 - [ ] **Swap / split model** — settle the propagation behaviour interactively, on the car
       (§ Layout mental model).
-- [~] **Switcher tiles toggle (hide, not only switch)** — *implemented 2026-08-06* (`LayoutEngine.hideFloatingApp`,
+- [x] **Switcher tiles toggle (hide, not only switch)** — *verified 2026-08-07; implemented 2026-08-06* (`LayoutEngine.hideFloatingApp`,
       `DashboardActivity.onSwitcherTap`). Tapping the **active** tile un-windows the floating app
       (freeform → fullscreen, drops behind) and grows the panel to fill the display; the panel's
       own `reservation()` paints the freed strip **black** and keeps the panel content at its
