@@ -502,6 +502,17 @@ class LayoutEngine(
     }
 
     /**
+     * The Cockpit's **floating-app (left) tile** in normalized bounds: `[0,0,split,1]`, mirrored to
+     * `[1-split,0,1,1]` when [swapped]. The single split→geometry primitive both cockpit-bounds
+     * helpers (and, via the panel's [DashboardActivity.reservation], the black-strip reservation)
+     * derive from, so the app tile, the panel complement and the reserved strip can never disagree.
+     */
+    private fun appTileNormalized(split: Float, swapped: Boolean): NormalizedBounds {
+        val f = split.coerceIn(LayoutPreset.MIN_SPLIT, LayoutPreset.MAX_SPLIT)
+        return if (swapped) NormalizedBounds(1f - f, 0f, 1f, 1f) else NormalizedBounds(0f, 0f, f, 1f)
+    }
+
+    /**
      * The pixel bounds the Cockpit panel window should occupy: the complement tile beside the
      * floating app when one is showing, or the whole display when the app is hidden. The panel
      * uses this to resize **its own** task ([DashboardActivity.ensurePanelBounds]) because a
@@ -512,9 +523,7 @@ class LayoutEngine(
         val full = windowController.fullDisplayArea(appContext)
         if (hidden) return full
         val area = windowController.usableArea(appContext)
-        val f = split.coerceIn(LayoutPreset.MIN_SPLIT, LayoutPreset.MAX_SPLIT)
-        val appBounds = if (swapped) NormalizedBounds(1f - f, 0f, 1f, 1f) else NormalizedBounds(0f, 0f, f, 1f)
-        return panelComplement(appBounds, area) ?: full
+        return panelComplement(appTileNormalized(split, swapped), area) ?: full
     }
 
     /**
@@ -525,9 +534,7 @@ class LayoutEngine(
      */
     fun cockpitAppBounds(split: Float, swapped: Boolean): android.graphics.Rect {
         val area = windowController.usableArea(appContext)
-        val f = split.coerceIn(LayoutPreset.MIN_SPLIT, LayoutPreset.MAX_SPLIT)
-        val appBounds = if (swapped) NormalizedBounds(1f - f, 0f, 1f, 1f) else NormalizedBounds(0f, 0f, f, 1f)
-        return appBounds.toPixels(area)
+        return appTileNormalized(split, swapped).toPixels(area)
     }
 
     /**

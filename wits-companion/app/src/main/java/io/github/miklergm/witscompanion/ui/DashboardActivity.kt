@@ -343,25 +343,20 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     private data class Reservation(val side: MapSide, val fraction: Float)
 
     /**
-     * Where the floating map sits and how much width it covers, so the panel leaves that
-     * strip empty on the correct side. The map can be anchored left or right (the split's
-     * swap); a window that is neither edge-flush reserves nothing (full-width panel).
-     * Only reserved when this activity actually fills the display (§ fillsDisplay).
+     * Where the floating app sits and how much width it covers, so the panel leaves that strip
+     * empty on the correct side. This is exactly the app-tile geometry the panel is the complement
+     * of ([LayoutEngine.cockpitAppBounds]): the left tile is `split` wide on the left, mirrored to
+     * the right when swapped. Deriving it from split/swap — rather than re-parsing the preset —
+     * keeps the reserved strip in lockstep with the actual tile bounds for *any* floated app, and
+     * it is what paints the black strip in the hidden state (the panel content keeps its width).
+     *
+     * Only reserved when this activity actually fills the display (a narrow tile reserves nothing).
+     * `repository.split` is already coerced to `[MIN_SPLIT, MAX_SPLIT]` (≤ 0.8).
      */
     private fun reservation(): Reservation? {
         if (!fillsDisplay()) return null
-        val preset = app.layoutRepository.lastAppliedPreset()
-            ?.takeIf { it.kind == PresetKind.ANCHORED }
-            ?: app.layoutRepository.preset(DefaultPresets.ID_MAPS_ANCHORED)
-            ?: return null
-        val window = preset.windows.firstOrNull { it.packageName != WitsPackages.SELF } ?: return null
-        val b = window.bounds
-        val cap = 0.8f
-        return when {
-            b.left <= 0.01f && b.right < 0.99f -> Reservation(MapSide.LEFT, b.right.coerceAtMost(cap))
-            b.right >= 0.99f && b.left > 0.01f -> Reservation(MapSide.RIGHT, (1f - b.left).coerceAtMost(cap))
-            else -> null
-        }
+        val side = if (app.layoutRepository.swapped) MapSide.RIGHT else MapSide.LEFT
+        return Reservation(side, app.layoutRepository.split)
     }
 
     // `statusBarHeightPx()` (vendor strip height) and `fillsDisplay()` (are we a tile or full-screen)
