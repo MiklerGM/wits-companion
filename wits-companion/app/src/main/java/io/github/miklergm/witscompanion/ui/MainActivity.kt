@@ -12,6 +12,7 @@ import io.github.miklergm.witscompanion.app.WitsCompanionApp
 import io.github.miklergm.witscompanion.carstate.CarState
 import io.github.miklergm.witscompanion.carstate.CarStateRepository
 import io.github.miklergm.witscompanion.databinding.ActivityMainBinding
+import io.github.miklergm.witscompanion.wits.statusBarHeightPx
 
 /**
  * Single-activity host. Each tab swaps a section view into the content frame.
@@ -51,9 +52,7 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
      */
     private fun keepClearOfTopStrip(root: android.view.View) {
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        val floor = resources.getIdentifier("status_bar_height", "dimen", "android")
-            .takeIf { it > 0 }
-            ?.let { resources.getDimensionPixelSize(it) } ?: 0
+        val floor = statusBarHeightPx()
         ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             // Floor the top with the strip height only when we FILL the display (standalone). In
@@ -66,13 +65,7 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
         ViewCompat.requestApplyInsets(root)
     }
 
-    /** True when our window is (near enough) as wide as the whole display — i.e. not a tile. */
-    private fun fillsDisplay(): Boolean = runCatching {
-        val wm = getSystemService(android.view.WindowManager::class.java)
-        val own = wm.currentWindowMetrics.bounds.width()
-        val display = wm.maximumWindowMetrics.bounds.width()
-        display > 0 && own * 100 >= display * 90
-    }.getOrDefault(true)
+    // `fillsDisplay()` is shared with DashboardActivity — see ui/TileWindow.kt.
 
     /** True when opened as the Cockpit's left tile (freeform beside the panel), not standalone. */
     private var isCockpitTile = false
@@ -177,16 +170,11 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
      * bounds — mirrors [DashboardActivity]'s panel self-resize. Privileged path only.
      */
     private fun ensureConfigTileBounds() {
-        if (!isCockpitTile || !app.windowController.isPrivileged) return
+        if (!isCockpitTile) return
         val target = app.layoutEngine.cockpitAppBounds(
             app.layoutRepository.split, app.layoutRepository.swapped,
         )
-        val current = runCatching { windowManager.currentWindowMetrics.bounds }.getOrNull() ?: return
-        val off = kotlin.math.abs(current.left - target.left) > 4 ||
-            kotlin.math.abs(current.top - target.top) > 4 ||
-            kotlin.math.abs(current.width() - target.width()) > 4 ||
-            kotlin.math.abs(current.height() - target.height()) > 4
-        if (off) app.windowController.resizeTaskTo(taskId, target)
+        matchOwnTaskBounds(app.windowController, target)
     }
 
     override fun onDestroy() {

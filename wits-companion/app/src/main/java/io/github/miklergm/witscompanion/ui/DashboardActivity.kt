@@ -22,6 +22,7 @@ import io.github.miklergm.witscompanion.safety.Trigger
 import io.github.miklergm.witscompanion.wits.BrightnessController
 import io.github.miklergm.witscompanion.wits.HotspotController
 import io.github.miklergm.witscompanion.wits.WitsPackages
+import io.github.miklergm.witscompanion.wits.statusBarHeightPx
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -363,19 +364,8 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         }
     }
 
-    /** Framework `status_bar_height` in px (the vendor top strip's height), or 0 if absent. */
-    private fun statusBarHeightPx(): Int =
-        resources.getIdentifier("status_bar_height", "dimen", "android")
-            .takeIf { it > 0 }
-            ?.let { resources.getDimensionPixelSize(it) } ?: 0
-
-    /** True when our window is (near enough) as wide as the whole display. */
-    private fun fillsDisplay(): Boolean = runCatching {
-        val wm = getSystemService(android.view.WindowManager::class.java)
-        val own = wm.currentWindowMetrics.bounds.width()
-        val display = wm.maximumWindowMetrics.bounds.width()
-        display > 0 && own * 100 >= display * FULL_WIDTH_PERCENT
-    }.getOrDefault(true)
+    // `statusBarHeightPx()` (vendor strip height) and `fillsDisplay()` (are we a tile or full-screen)
+    // are shared with MainActivity — see ui/TileWindow.kt and wits/WindowMetrics.kt.
 
     // --------------------------------------------------------------- lifecycle
 
@@ -430,18 +420,12 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
      * resize↔config-change churn on sub-pixel differences.
      */
     private fun ensurePanelBounds() {
-        if (!app.windowController.isPrivileged) return
         val target = app.layoutEngine.cockpitPanelBounds(
             app.layoutRepository.split,
             app.layoutRepository.swapped,
             hidden = app.layoutRepository.cockpitLeft is CockpitLeft.Hidden,
         )
-        val current = runCatching { windowManager.currentWindowMetrics.bounds }.getOrNull() ?: return
-        val off = kotlin.math.abs(current.left - target.left) > 4 ||
-            kotlin.math.abs(current.top - target.top) > 4 ||
-            kotlin.math.abs(current.width() - target.width()) > 4 ||
-            kotlin.math.abs(current.height() - target.height()) > 4
-        if (off) app.windowController.resizeTaskTo(taskId, target)
+        matchOwnTaskBounds(app.windowController, target)
     }
 
     override fun onStart() {
@@ -985,9 +969,6 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         /** Clock and track position share one tick. */
         const val TICK_MS = 1_000L
         const val PROGRESS_MAX = 1_000
-
-        /** How wide our window must be, as a percentage of the display, to count as the anchor. */
-        const val FULL_WIDTH_PERCENT = 90
 
         val HOTSPOT_ON = Color.parseColor("#2E7D32")   // green
         val HOTSPOT_BUSY = Color.parseColor("#F9A825") // amber, transitioning
