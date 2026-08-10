@@ -14,6 +14,7 @@ import android.widget.TextView
 import io.github.miklergm.witscompanion.app.WitsCompanionApp
 import io.github.miklergm.witscompanion.carstate.CarState
 import io.github.miklergm.witscompanion.carstate.PropertyReader
+import io.github.miklergm.witscompanion.layout.CockpitLeft
 import io.github.miklergm.witscompanion.layout.DefaultPresets
 import io.github.miklergm.witscompanion.layout.LayoutEngine
 import io.github.miklergm.witscompanion.layout.LayoutPreset
@@ -264,10 +265,8 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
             // leaving the panel overlapping (and hiding) the map on the first control tap.
             app.layoutEngine.apply(anchored, app.carStateRepository.state, Trigger.USER)
             app.layoutRepository.lastAppliedPresetId = anchored.id
-            app.layoutRepository.cockpitFloatingPackage =
-                anchored.windows.firstOrNull { it.packageName != WitsPackages.SELF }?.packageName
-            app.layoutRepository.cockpitLeftIsConfig = false
-            app.layoutRepository.cockpitFloatingHidden = false
+            val mapPkg = anchored.windows.firstOrNull { it.packageName != WitsPackages.SELF }?.packageName
+            app.layoutRepository.cockpitLeft = mapPkg?.let { CockpitLeft.App(it) } ?: CockpitLeft.Default
             dismissConfig(activity)
         } else {
             // No anchored preset to place the map with — still open the panel.
@@ -288,7 +287,9 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
         when (val r = app.layoutEngine.apply(preset, app.carStateRepository.state, Trigger.USER)) {
             is LayoutEngine.Result.Applied -> {
                 app.layoutRepository.lastAppliedPresetId = preset.id
-                app.layoutRepository.cockpitLeftIsConfig = false
+                // A tiled layout leaves the Cockpit surface: reset the left-tile state so a later
+                // autostart panel does not come up still "hidden" from a previous Cockpit session.
+                app.layoutRepository.cockpitLeft = CockpitLeft.Default
                 activity.toast("Applied ${preset.title}")
                 dismissConfig(activity)
             }
@@ -468,6 +469,9 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
         )) {
             is LayoutEngine.Result.Applied -> {
                 app.layoutRepository.lastAppliedPresetId = preset.id
+                // A tiled layout leaves the Cockpit surface: reset the left-tile state so a later
+                // autostart panel does not come up still "hidden" from a previous Cockpit session.
+                app.layoutRepository.cockpitLeft = CockpitLeft.Default
                 activity.toast(
                     "Applied ${result.windows} window(s)" +
                         if (result.warnings.isEmpty()) "" else "; ${result.warnings.size} warning(s)"

@@ -12,6 +12,7 @@ import android.widget.TextView
 import io.github.miklergm.witscompanion.app.WitsCompanionApp
 import io.github.miklergm.witscompanion.carstate.CarState
 import io.github.miklergm.witscompanion.carstate.CarStateRepository
+import io.github.miklergm.witscompanion.layout.CockpitLeft
 import io.github.miklergm.witscompanion.layout.DefaultPresets
 import io.github.miklergm.witscompanion.layout.LayoutEngine
 import io.github.miklergm.witscompanion.layout.PresetKind
@@ -117,7 +118,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         // strip is actually there — i.e. the autostart full-screen state (bar visible). In the
         // *hidden* state we hide the strip ([applyImmersive]) so the content uses full height (no
         // gap), and in tile mode the window already sits below the bar (usableArea floors it).
-        if (fillsDisplay() && !app.layoutRepository.cockpitFloatingHidden) {
+        if (fillsDisplay() && app.layoutRepository.cockpitLeft !is CockpitLeft.Hidden) {
             row.setPadding(0, statusBarHeightPx(), 0, 0)
         }
 
@@ -299,7 +300,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         // Settings behaves like a switcher entry: lit when the config occupies the left tile.
         val settingsTile = glyphTile("⚙", "Settings") { onSettingsTap() }
         this.settingsTile = settingsTile
-        setTileSelected(settingsTile, app.layoutRepository.cockpitLeftIsConfig)
+        setTileSelected(settingsTile, app.layoutRepository.cockpitLeft is CockpitLeft.Config)
         rail.addView(settingsTile)
         // The floating-app switcher, vertical: highlights the active app; a tap switches to it.
         switcherTiles.clear()
@@ -314,6 +315,9 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         rail.addView(View(this), LinearLayout.LayoutParams(MATCH, 0, 1f))
         rail.addView(glyphTile("✕", "Exit") {
             // Un-window every tile and go home, then finish the panel so nothing is left floating.
+            // Reset the left-tile state so a later Cockpit re-entry (or autostart) starts clean —
+            // not still "hidden" from before the exit.
+            app.layoutRepository.cockpitLeft = CockpitLeft.Default
             app.layoutEngine.resetToVendorState()
             finish()
             toast("Returned to the vendor launcher")
@@ -414,7 +418,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         controller.systemBarsBehavior =
             androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         val statusBars = androidx.core.view.WindowInsetsCompat.Type.statusBars()
-        if (app.layoutRepository.cockpitFloatingHidden) controller.hide(statusBars)
+        if (app.layoutRepository.cockpitLeft is CockpitLeft.Hidden) controller.hide(statusBars)
         else controller.show(statusBars)
     }
 
@@ -430,7 +434,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         val target = app.layoutEngine.cockpitPanelBounds(
             app.layoutRepository.split,
             app.layoutRepository.swapped,
-            app.layoutRepository.cockpitFloatingHidden,
+            hidden = app.layoutRepository.cockpitLeft is CockpitLeft.Hidden,
         )
         val current = runCatching { windowManager.currentWindowMetrics.bounds }.getOrNull() ?: return
         val off = kotlin.math.abs(current.left - target.left) > 4 ||
@@ -728,9 +732,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         when (val r = app.layoutEngine.apply(preset, app.carStateRepository.state, Trigger.USER)) {
             is LayoutEngine.Result.Applied -> {
                 app.layoutRepository.lastAppliedPresetId = preset.id
-                app.layoutRepository.cockpitFloatingPackage = packageName
-                app.layoutRepository.cockpitFloatingHidden = false  // an app floats again
-                app.layoutRepository.cockpitLeftIsConfig = false    // …not the config
+                app.layoutRepository.cockpitLeft = CockpitLeft.App(packageName)
                 // Move the highlight onto the chosen app, popping the one just tapped.
                 settingsTile?.let { setTileSelected(it, selected = false) }
                 switcherTiles.forEach { (pkg, tile) ->
@@ -750,9 +752,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
      */
     private fun hideFloatingApp() {
         val current = currentFloatingPackage()  // resolve before we clear the state
-        app.layoutRepository.cockpitFloatingHidden = true
-        app.layoutRepository.cockpitFloatingPackage = null
-        app.layoutRepository.cockpitLeftIsConfig = false
+        app.layoutRepository.cockpitLeft = CockpitLeft.Hidden
         app.layoutEngine.hideFloatingApp(current)
         settingsTile?.let { setTileSelected(it, selected = false) }
         switcherTiles.forEach { (_, tile) -> setTileSelected(tile, selected = false) }
@@ -770,8 +770,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
      */
     /** The Settings gear was tapped: show the config in the left tile and light the gear. */
     private fun onSettingsTap() {
-        app.layoutRepository.cockpitLeftIsConfig = true
-        app.layoutRepository.cockpitFloatingHidden = false
+        app.layoutRepository.cockpitLeft = CockpitLeft.Config
         // Move the highlight onto the gear, dropping any app tile.
         settingsTile?.let { setTileSelected(it, selected = true, animate = true) }
         switcherTiles.forEach { (_, tile) -> setTileSelected(tile, selected = false) }
@@ -819,16 +818,19 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
      * `anchored_<pkg>` presets, which are not in allPresets); falls back to the last-applied
      * anchored preset, then the default map.
      */
-    private fun currentFloatingPackage(): String? {
-        // The config or an explicit hide occupies the left tile: no app floats, so no app tile
-        // lights (the gear lights instead / nothing) and any app tap floats that app.
-        if (app.layoutRepository.cockpitLeftIsConfig) return null
-        if (app.layoutRepository.cockpitFloatingHidden) return null
-        return app.layoutRepository.cockpitFloatingPackage
-            ?: (app.layoutRepository.lastAppliedPreset()?.takeIf { it.kind == PresetKind.ANCHORED }
-                ?: app.layoutRepository.preset(DefaultPresets.ID_MAPS_ANCHORED))
-                ?.windows?.firstOrNull { it.packageName != WitsPackages.SELF }?.packageName
+    private fun currentFloatingPackage(): String? = when (val left = app.layoutRepository.cockpitLeft) {
+        // A named app floats; the config or an explicit hide means no app tile lights (the gear
+        // lights instead / nothing) and any app tap floats that app; Default falls back to the map.
+        is CockpitLeft.App -> left.packageName
+        CockpitLeft.Hidden, CockpitLeft.Config -> null
+        CockpitLeft.Default -> defaultFloatingPackage()
     }
+
+    /** The package the default map anchored preset floats over the panel, or null. */
+    private fun defaultFloatingPackage(): String? =
+        (app.layoutRepository.lastAppliedPreset()?.takeIf { it.kind == PresetKind.ANCHORED }
+            ?: app.layoutRepository.preset(DefaultPresets.ID_MAPS_ANCHORED))
+            ?.windows?.firstOrNull { it.packageName != WitsPackages.SELF }?.packageName
 
     /**
      * A compact app tile: a centred icon over a centred label, in a fixed-width box. The

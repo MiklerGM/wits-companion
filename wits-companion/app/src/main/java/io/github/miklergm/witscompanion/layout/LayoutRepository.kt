@@ -81,37 +81,45 @@ class LayoutRepository(context: Context) {
     fun lastAppliedPreset(): LayoutPreset? = lastAppliedPresetId?.let { preset(it) }
 
     /**
-     * The package currently floating over the Cockpit panel, remembered directly.
+     * What the Cockpit's left tile shows — the single source of truth for the floating app / the
+     * hidden state / the config overlay / the default map. **One setter for every transition**, so
+     * the old partial-write bugs cannot recur: an autostart panel coming up still "hidden" from a
+     * previous session, a package left dangling behind the config. See [CockpitLeft] and
+     * docs/window-management.md § 6.5.
      *
-     * The switcher's on-the-fly presets have ids like `anchored_<pkg>` that are not stored
-     * in [allPresets], so [lastAppliedPreset] cannot resolve them back to a package. This
-     * survives an activity recreation (e.g. a day/night flip) so the switcher keeps the right
-     * tile highlighted instead of falling back to the map.
+     * Persistence, preserved from the earlier three-flag design:
+     *  - [CockpitLeft.App] / [CockpitLeft.Hidden] are **persisted** — the user's last real choice
+     *    is restored on the next start (and survives a day/night activity recreation).
+     *  - [CockpitLeft.Config] is an in-memory **overlay**: never persisted (so the gear does not
+     *    come up lit after a restart) and it does not erase the content underneath, so dismissing
+     *    the config — or a restart — restores the app/hidden/default that was there before.
+     *  - [CockpitLeft.Default] clears the persisted content (map fallback).
      */
-    var cockpitFloatingPackage: String?
-        get() = prefs.getString(KEY_COCKPIT_FLOAT, null)
-        set(value) = prefs.edit().putString(KEY_COCKPIT_FLOAT, value).apply()
+    var cockpitLeft: CockpitLeft
+        get() = if (configOverlay) CockpitLeft.Config else persistedLeft()
+        set(value) {
+            configOverlay = value is CockpitLeft.Config
+            if (value !is CockpitLeft.Config) persistLeft(value)
+        }
 
-    /**
-     * True when the user has explicitly hidden the floating app (tapped the active switcher
-     * tile). Distinct from [cockpitFloatingPackage] being null, which just means "unknown,
-     * fall back to the default map": hidden means the panel deliberately fills the display
-     * with no app floating and no tile lit. Cleared as soon as any app is floated again.
-     */
-    var cockpitFloatingHidden: Boolean
-        get() = prefs.getBoolean(KEY_COCKPIT_HIDDEN, false)
-        set(value) = prefs.edit().putBoolean(KEY_COCKPIT_HIDDEN, value).apply()
-
-    /**
-     * True when the config UI occupies the Cockpit's left tile (the Settings gear was tapped),
-     * so the rail can light the gear like an active switcher tile. Cleared when an app is floated
-     * or the app is hidden. Mutually exclusive with a lit app tile.
-     *
-     * In-memory (not persisted): the config is not re-opened on a fresh app start, so the gear
-     * must not come up lit after a restart — a stale `true` in prefs would do exactly that.
-     */
+    /** In-memory half of [cockpitLeft]: is the config overlaid on the left tile right now? */
     @Volatile
-    var cockpitLeftIsConfig: Boolean = false
+    private var configOverlay: Boolean = false
+
+    /** The persisted (App / Hidden / Default) content of the left tile, ignoring the config overlay. */
+    private fun persistedLeft(): CockpitLeft = when {
+        prefs.getBoolean(KEY_COCKPIT_HIDDEN, false) -> CockpitLeft.Hidden
+        else -> prefs.getString(KEY_COCKPIT_FLOAT, null)?.let { CockpitLeft.App(it) } ?: CockpitLeft.Default
+    }
+
+    private fun persistLeft(value: CockpitLeft) = prefs.edit().apply {
+        when (value) {
+            is CockpitLeft.App -> { putString(KEY_COCKPIT_FLOAT, value.packageName); putBoolean(KEY_COCKPIT_HIDDEN, false) }
+            CockpitLeft.Hidden -> { remove(KEY_COCKPIT_FLOAT); putBoolean(KEY_COCKPIT_HIDDEN, true) }
+            CockpitLeft.Default -> { remove(KEY_COCKPIT_FLOAT); putBoolean(KEY_COCKPIT_HIDDEN, false) }
+            CockpitLeft.Config -> Unit // never persisted; handled by the setter
+        }
+    }.apply()
 
     // ------------------------------------------------------------- preferences
     // All automatic behaviours default to OFF. The user opts in explicitly.
