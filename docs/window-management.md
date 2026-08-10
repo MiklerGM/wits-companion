@@ -370,10 +370,19 @@ The Layouts tab exposes a **⇄ swap sides** button and 50/60/65/70 split button
 
 ## 6.4 Mode B — the anchor panel
 
-In Mode B the companion is fullscreen and exactly **one** foreign window (the map) floats
-over it. Everything else — media, volume readouts, vehicle state — is drawn by the
-companion itself rather than given a window, so the vendor hook only has to place a single
-tile.
+> **Evolved to a two-tile Cockpit (2026-08).** The panel is now a freeform **tile beside**
+> the map, not a fullscreen surface the map floats *over*. A fullscreen panel re-raised
+> itself over the map whenever a panel control was tapped (focus pulled the panel task to
+> the front), hiding the map — `[RUNTIME]` 2026-08-02. Two non-overlapping tiles never
+> occlude each other on focus, so the bug is gone at the root. The **left tile** is a small
+> state machine (§ 6.5); the **window layering and self-resize** are in § 6.6; the
+> **Settings-in-the-left-tile** flow is in § 6.7. The rest of this section still describes
+> what the panel *draws*.
+
+In Mode B the companion draws the right-hand tile and exactly **one** foreign window (the
+map, or a switcher app) fills the left tile. Everything else — media, brightness, hotspot,
+vehicle state — is drawn by the companion itself rather than given a window, so the vendor
+hook only has to place a single foreign tile.
 
 ### It is a separate activity, not a tab `[CODE]`
 
@@ -391,16 +400,24 @@ our own package** — that matters, because the hook can only launch a package's
 activity (§4.2), so an anchor reachable only through `CHANGE_WINDOW` would have forced the
 dashboard to become the launcher activity.
 
-### The panel leaves the map's strip empty
+### The panel leaves the floating app's strip empty
 
-`LayoutPreset.anchorReservedLeftFraction()` returns the fraction the floating window
-covers, and the panel lays out an empty spacer of exactly that width. Changing the
-preset's split moves the panel with it instead of leaving content hidden underneath.
+When the panel window itself fills the display (the autostart full-screen state, and the
+**hidden** state), it lays out an empty spacer where the floating app sits so its own
+content is not drawn under the app. `DashboardActivity.reservation()` derives that strip
+**directly from `split` / `swapped`** — the same geometry `LayoutEngine.cockpitAppBounds()`
+places the app tile with — so the reserved strip and the real tile can never disagree, for
+*any* floated app (not just the map). In the hidden state the strip is simply painted black
+and the panel content keeps its usual width (the user's "don't stretch the panel" rule).
 
-Guards: a non-anchored preset reserves nothing; a window that is not flush to the left
-edge reserves nothing (the panel stays full width rather than putting the gap in the wrong
-place); the reservation is clamped to `MAX_ANCHOR_RESERVED` = 0.8 so the panel cannot be
-starved.
+`split` is already clamped to `[MIN_SPLIT, MAX_SPLIT]` = `[0.25, 0.80]`, so the panel can
+never be starved. (The pure-model query `LayoutPreset.anchorReservedLeftFraction()`, clamped
+to `MAX_ANCHOR_RESERVED` = 0.8, still exists and is unit-tested, but the panel no longer
+routes through it — split/swap is the one source.)
+
+When the panel is a **narrow tile** (an app or the config is beside it) it reserves nothing:
+the app sits in its own tile, so a strip carved out of the panel's tile would squeeze the
+content into a sliver. `fillsDisplay()` gates this.
 
 ### What the panel does and does not do
 
@@ -416,18 +433,166 @@ HUD, and engaging reverse hands the screen to the OEM source anyway.
 Enforced by `the anchor panel never writes to the vendor stack` and
 `the anchor panel shows no PDC or door state`.
 
-### Three assumptions still unverified `[HYP]`
+### Three assumptions — now verified on the vehicle `[RUNTIME]` 2026-08
 
-Mode B rests on three things that have not been tested on the vehicle:
+Mode B rested on three things; all three have since been checked on the head unit:
 
-1. **Parking works** — `CHANGE_WINDOW` with `FULLSCREEN` really removes a stale tile from
-   view instead of leaving it floating over the panel.
-2. **The anchor stays alive and visible** underneath the floating window, rather than being
-   stopped or occluded once the map is placed.
-3. **The vendor stack does not interfere** — WitsLauncher or `com.wits.pms` does not
-   re-arrange or re-focus windows when it notices a non-launcher package fullscreen.
+1. **Clearing stale tiles works** — but *not* the way originally guessed. `CHANGE_WINDOW`
+   with `FULLSCREEN` does **not** un-window a task here (`setTaskWindowingMode` is absent —
+   § 6.6); the privileged path removes stale freeform tasks outright
+   (`removeTask` / `removeRootTasksInWindowingModes`). Switching presets no longer piles up
+   windows (`[RUNTIME]` 2026-08-08, was 5 freeform tasks before the fix).
+2. **The panel stays alive and visible** as a freeform tile beside the map — verified
+   through the full hide/show and app-switch cycle.
+3. **The vendor stack does not fight us** — no re-arrangement observed. The panel is a
+   freeform tile, not a fullscreen non-launcher window, which sidesteps the scenario this
+   assumption worried about; the vendor only hides the freeform caption.
 
-Until these are checked, Mode B is built but unproven.
+## 6.5 The Cockpit left tile — one state machine (`CockpitLeft`)
+
+The left tile can show four things: a floating **app** (the map or a switcher pick), a
+deliberate **hidden** state (panel fills the display, black strip), the **config**
+(`MainActivity` in the tile), or nothing chosen yet — the **default** map.
+
+This used to be three independent flags — `cockpitFloatingPackage` (String?),
+`cockpitFloatingHidden` (Bool), `cockpitLeftIsConfig` (Bool) — with an implicit "at most one
+is active" invariant maintained **by hand at seven write sites** across two files. Several
+sites wrote only a subset, which produced two real defects:
+
+- **Hidden leaked across sessions.** Applying a *tiled* preset cleared only
+  `cockpitLeftIsConfig`, so a `hidden = true` left over from a previous Cockpit session
+  survived; a later autostart panel then came up full-screen and blank.
+- **A stale package sat behind the config.** Tapping the gear set `cockpitLeftIsConfig` but
+  never cleared `cockpitFloatingPackage`; the value was masked only because the reader
+  happened to check the config flag first.
+
+It is now **one** sealed type (`layout/CockpitLeft.kt`) behind **one** setter
+(`LayoutRepository.cockpitLeft`). Every transition is a single total assignment, so the
+illegal combinations are unrepresentable and no site can forget a companion flag. Both
+defects disappear by construction.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Default: fresh install
+    Default --> App: float an app
+    Default --> Config: tap ⚙
+    App --> App: switch app
+    App --> Hidden: tap the active tile
+    App --> Config: tap ⚙
+    App --> Default: Exit / apply tiled preset
+    Hidden --> App: tap any app tile
+    Hidden --> Config: tap ⚙
+    Hidden --> Default: Exit / apply tiled preset
+    Config --> App: app tile / open Cockpit
+    Config --> Default: apply tiled preset
+
+    note right of Config
+        transient overlay — never persisted;
+        does not erase the App/Hidden/Default underneath
+    end note
+```
+
+**Persistence** (unchanged from the old design, now enforced in one place):
+
+| State | Persisted? | Keys written |
+|---|---|---|
+| `App(pkg)` | yes | `KEY_COCKPIT_FLOAT = pkg`, `KEY_COCKPIT_HIDDEN = false` |
+| `Hidden` | yes | `KEY_COCKPIT_HIDDEN = true`, float cleared |
+| `Default` | yes (clears) | both cleared |
+| `Config` | **no** (in-memory) | none — an overlay flag; restart resolves to the App/Hidden/Default underneath |
+
+`Config` is an in-memory overlay so the gear never comes up lit after a restart, and so the
+underlying content is restored when the config is dismissed. Every writer:
+
+| Where | Site | Assignment |
+|-------|------|------------|
+| `DashboardActivity` | `floatApp` | `App(pkg)` |
+| `DashboardActivity` | `hideFloatingApp` | `Hidden` |
+| `DashboardActivity` | `onSettingsTap` | `Config` |
+| `DashboardActivity` | Exit (✕) | `Default` |
+| `Sections` | `openCockpit` | `App(mapPkg)` / `Default` |
+| `Sections` | `applyFromHome` (tiled) | `Default` |
+| `Sections` | `applyPreset` (tiled) | `Default` |
+
+## 6.6 Window layers and self-resizing tiles
+
+Back to front, the screen is: the **vendor launcher** (fullscreen) at the back; the two
+**freeform Cockpit tiles** over it (a freeform task always draws over a fullscreen one); and
+— entirely outside the Android window layer — the **MCU reverse-camera overlay**, a hardware
+video plane the head unit composits on top of everything when reverse engages.
+
+```mermaid
+graph BT
+    launcher["🪟 Vendor launcher — fullscreen · BACK<br/>(peeks through any uncovered strip)"]
+    left["◧ LEFT freeform tile<br/>App(map) · Config · Hidden(black)"]
+    right["▦ RIGHT freeform tile<br/>DashboardActivity panel"]
+    reverse["🎥 MCU reverse camera — hardware overlay<br/>independent of the Android app layer"]
+    launcher -->|freeform draws over fullscreen| left
+    launcher --> right
+    left -. wins on reverse, not an Android window .-> reverse
+    right -.-> reverse
+```
+
+Because the reverse overlay is an MCU/hardware plane, **nothing the app does to windows can
+reach it** — it switches reliably regardless of tile state, so no windowing work needs to
+guard for it. (When the tiles do not cover the whole display, the launcher shows through the
+gaps — a cosmetic "peek", § backlog.)
+
+**Self-resizing tiles.** `ActivityOptions.setLaunchBounds` is honoured only when a task is
+*created*; once the task exists, a re-order to front (or a relaunch) arrives at the old
+bounds — typically full-screen. So an activity brought up as a tile must correct **its own**
+task by id. Both the panel (`DashboardActivity.ensurePanelBounds`) and the config
+(`MainActivity.ensureConfigTileBounds`) do this through the shared `Activity.matchOwnTaskBounds`
+(`ui/TileWindow.kt`): read `currentWindowMetrics`, and if off by > 4 px, `resizeTask(taskId,
+target)`. Privileged path only.
+
+**Teardown verbs** — the ROM shapes which one is used:
+
+| Verb | Reflective call | Used for |
+|------|-----------------|----------|
+| resize in place | `resizeTask(taskId, bounds, SYSTEM)` | move a live freeform tile — no flicker |
+| remove one task | `removeTask(taskId)` | clear one stale tile (tiled-preset switch) |
+| remove all freeform | `removeRootTasksInWindowingModes([FREEFORM])` | Exit / Settings — drop every Cockpit tile |
+| *(cover)* | grow the panel over the app | hide the floating app (privileged) |
+
+There is deliberately **no** `setTaskWindowingMode` wrapper: that verb is absent on this ROM
+(`NoSuchMethodException`, `[RUNTIME]` 2026-08-07), so a task cannot be un-windowed *in place*.
+Un-windowing is always a *remove*. The hide-app path reflects this: on the emulator it
+un-windows the app (freeform → fullscreen); on the head unit it just lets the full-screen
+panel cover the app, which stays alive behind until the next apply parks or removes it.
+
+## 6.7 Settings in the left tile — the sequence
+
+Tapping the gear does **not** leave the Cockpit for a fullscreen config screen (the old
+approach raced the un-window / autostart machinery — "Settings just flashes"). It launches
+`MainActivity` as the **left tile**, freeform at the app-tile bounds, beside the panel.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant P as DashboardActivity (panel)
+    participant R as LayoutRepository
+    participant M as MainActivity (config tile)
+    participant C as RecoveryCoordinator
+    U->>P: tap ⚙
+    P->>R: cockpitLeft = Config
+    P->>M: startActivity(EXTRA_COCKPIT_TILE, freeform @ cockpitAppBounds)
+    activate M
+    M->>C: configUiVisible = true (onResume, isCockpitTile)
+    M->>M: matchOwnTaskBounds → resize own task to the left tile
+    Note over C: autostart panel & reassert now suppressed —<br/>they would re-float the map over the config
+    U->>M: apply a preset / open the Cockpit
+    M->>R: cockpitLeft = App / Default
+    M->>C: configUiVisible = false (onPause)
+    M->>M: finish()
+    deactivate M
+```
+
+The `configUiVisible` guard (set only by `MainActivity`, keyed on `isCockpitTile`) is what
+stops an auto-restore from re-floating the map into the tile and replacing the config the
+user just opened. A **standalone** open from the launcher does not set it, so the normal
+"open the app → autostart Cockpit" path still fires.
 
 ## 7. Restore strategy
 
