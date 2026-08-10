@@ -167,12 +167,17 @@ class LayoutRecoveryCoordinator(
      * toggle and by reverse (never pull the panel up over the reverse camera).
      */
     /**
-     * True while the config UI ([MainActivity]) is in the foreground. Set by MainActivity's
-     * resume/pause (and pre-set by the Cockpit's Settings button to cover the launch race). While
-     * it holds, the autostart panel must NOT re-launch the Cockpit — otherwise tapping Settings
-     * un-windows the tiles and then the autostart immediately re-opens the panel over MainActivity,
-     * so the config screen "never opens" (`[RUNTIME]` 2026-08-08: START MainActivity → 88 ms later
-     * START DashboardActivity from our own uid).
+     * True while the config ([MainActivity]) occupies the Cockpit's **left tile**. Set solely from
+     * MainActivity's resume/pause, keyed on its `isCockpitTile` flag — a standalone open (from the
+     * launcher) does NOT set it, so the normal "open the app → autostart Cockpit" path still fires.
+     *
+     * While it holds, an auto-restore ([attempt]) and the autostart panel ([startPanelIfEnabled])
+     * must NOT re-apply the last layout: a `reassert` would re-float the map into the left tile and
+     * replace the config the user just opened, so Settings would "never open". (Historically — before
+     * the left-tile redesign — Settings un-windowed the tiles and the autostart raced to re-open the
+     * panel over MainActivity; `[RUNTIME]` 2026-08-08: START MainActivity → 88 ms later START
+     * DashboardActivity from our own uid. The redesign removed the un-window; this guard covers the
+     * remaining reassert race.)
      */
     @Volatile
     var configUiVisible: Boolean = false

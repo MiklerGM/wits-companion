@@ -694,9 +694,15 @@ class LayoutEngine(
         val myGeneration = generation.get()
         val full = windowController.fullDisplayArea(appContext)
 
-        // 1. Un-window the app that was floating (freeform → fullscreen), so it stops drawing
-        //    over the panel and drops behind the full-screen panel below.
-        if (floatingPackage != null && floatingPackage != WitsPackages.SELF &&
+        // 1. Get the floating app out from over the panel.
+        //  - Unprivileged (emulator): un-window it (freeform → fullscreen) so it drops behind.
+        //  - Privileged (this ROM): `setTaskWindowingMode` is absent, so a freeform task cannot be
+        //    un-windowed in place (see PrivilegedWindowController). We do NOT try — the full-screen
+        //    panel in step 2 simply covers it (it stays alive behind; the next apply parks/removes
+        //    it). This is the honest version of what already happened: the old un-window call just
+        //    logged a failure on this ROM.
+        if (!windowController.isPrivileged &&
+            floatingPackage != null && floatingPackage != WitsPackages.SELF &&
             windowController.isLaunchable(floatingPackage)
         ) {
             windowController.applyWindow(
@@ -705,8 +711,7 @@ class LayoutEngine(
         }
 
         // 2. Grow the panel to the full display. Passing full bounds (not null) keeps it a
-        //    freeform tile that draws over the un-windowed app; the panel then reserves the
-        //    strip itself. A small delay lets the un-window settle first.
+        //    freeform tile that draws over the app below; the panel then reserves the strip itself.
         handler.postDelayed(
             { if (myGeneration == generation.get()) bringAnchorToFront(full) },
             PARK_DELAY_MS,

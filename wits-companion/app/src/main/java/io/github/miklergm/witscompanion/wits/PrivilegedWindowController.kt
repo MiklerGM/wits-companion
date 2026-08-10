@@ -92,17 +92,10 @@ class PrivilegedWindowController(
         // the user never sees — the app "does not open". Such a task must be launched to be
         // brought forward. `[RUNTIME]` 2026-08-01.
         if (existing != null && existing.windowingMode == WitsWindowMode.FREEFORM && existing.visible) {
-            // A FULLSCREEN request means "leave freeform entirely" (reset / exit): resizeTask only
-            // changes bounds and keeps the task freeform, so a full-size *freeform* window still
-            // draws over everything. setTaskWindowingMode actually un-windows it.
-            if (windowMode == WitsWindowMode.FULLSCREEN) {
-                return if (setWindowingMode(existing.taskId, WitsWindowMode.FULLSCREEN)) {
-                    logger?.log("window", "unwindow", packageName, extras = mapOf("taskId" to existing.taskId), result = "fullscreen")
-                    PlaceResult.Resized
-                } else {
-                    PlaceResult.Failed("setTaskWindowingMode returned false")
-                }
-            }
+            // Leaving freeform entirely (reset / exit) is NOT handled here: `setTaskWindowingMode`
+            // is absent on this ROM, so a freeform task cannot be un-windowed in place. The engine
+            // removes freeform tasks outright instead (removeFreeformTasks / removeTask), so every
+            // request that reaches this fast path is a reposition — resizeTask, no flicker.
             return if (resizeTask(existing.taskId, bounds)) {
                 logger?.log(
                     "window", "resize_task", packageName,
@@ -177,34 +170,16 @@ class PrivilegedWindowController(
         names.filterIsInstance<String>().firstOrNull()?.substringBefore('/')
     }.getOrNull()
 
-    /**
-     * Moves a task out of freeform back to fullscreen. `resizeTask` cannot do this — it only sets
-     * bounds within the current mode.
-     *
-     * NOTE `[RUNTIME]` 2026-08-07: `IActivityTaskManager.setTaskWindowingMode` **does not exist on
-     * this ROM** — the reflective call throws `NoSuchMethodException` (confirmed in the decompiled
-     * `IActivityTaskManager`, whose task verbs are `moveTaskToRootTask`,
-     * `removeRootTasksInWindowingModes`, …). So un-windowing tiles goes through
-     * [removeFreeformTasks] instead. This method is kept only as a best-effort for ROMs that do
-     * expose it; every caller must tolerate `false`.
-     */
-    private fun setWindowingMode(taskId: Int, mode: Int): Boolean {
-        val svc = service() ?: return false
-        return runCatching {
-            svc.javaClass.getMethod(
-                "setTaskWindowingMode",
-                Int::class.javaPrimitiveType, Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType,
-            ).invoke(svc, taskId, mode, false)
-            true
-        }.getOrElse {
-            Log.w(TAG, "setTaskWindowingMode failed: ${it.javaClass.simpleName}")
-            false
-        }
-    }
+    // NOTE `[RUNTIME]` 2026-08-07: there is deliberately no `setTaskWindowingMode` wrapper —
+    // `IActivityTaskManager.setTaskWindowingMode` **does not exist on this ROM** (the reflective
+    // call throws `NoSuchMethodException`; confirmed in the decompiled `IActivityTaskManager`,
+    // whose task verbs are `moveTaskToRootTask`, `removeRootTasksInWindowingModes`, …). A task
+    // therefore cannot be un-windowed *in place*; un-windowing goes through [removeFreeformTasks]
+    // / [removeTask], which remove the task outright.
 
     /**
      * Removes every freeform root task — the Cockpit's tiles — in one call. This is the reliable
-     * un-window primitive on this ROM (where [setWindowingMode] is absent): the tiles stop being
+     * un-window primitive on this ROM (where `setTaskWindowingMode` is absent): the tiles stop being
      * freeform windows that draw over fullscreen apps, so the vendor launcher / our config screen /
      * the next navigation come up clean. Reflective
      * `IActivityTaskManager.removeRootTasksInWindowingModes(int[])`.
@@ -227,7 +202,7 @@ class PrivilegedWindowController(
 
     /**
      * Removes a single task by id — the way to clear ONE stale window on this ROM (where
-     * [setWindowingMode] is absent, so a stale freeform task cannot be un-frozen; the old
+     * `setTaskWindowingMode` is absent, so a stale freeform task cannot be un-frozen; the old
      * park-to-fullscreen path re-*launched* it instead, piling up windows). Reflective
      * `IActivityTaskManager.removeTask(int)`.
      */

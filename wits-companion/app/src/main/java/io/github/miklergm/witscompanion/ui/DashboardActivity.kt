@@ -22,6 +22,7 @@ import io.github.miklergm.witscompanion.safety.Trigger
 import io.github.miklergm.witscompanion.wits.BrightnessController
 import io.github.miklergm.witscompanion.wits.HotspotController
 import io.github.miklergm.witscompanion.wits.WitsPackages
+import io.github.miklergm.witscompanion.wits.WitsWindowMode
 import io.github.miklergm.witscompanion.wits.statusBarHeightPx
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -768,7 +769,7 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         runCatching {
             android.app.ActivityOptions::class.java
                 .getMethod("setLaunchWindowingMode", Int::class.javaPrimitiveType)
-                .invoke(opts, 5) // WitsWindowMode.FREEFORM
+                .invoke(opts, WitsWindowMode.FREEFORM)
         }
         startActivity(intent, opts.toBundle())
     }
