@@ -152,11 +152,26 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
         // suppress it, or the normal "open the app → Cockpit" autostart would never fire.
         app.recoveryCoordinator.configUiVisible = isCockpitTile
         current?.onResume()
-        // Opt-in only; disabled by default. Never switches the source.
-        app.recoveryCoordinator.onActivityResumed(app.carStateRepository.state)
-        // A relaunch's setLaunchBounds is ignored once our task exists, so correct our own bounds
-        // to the app (left) tile. Posted so the window metrics have settled.
-        if (isCockpitTile) window.decorView.post { ensureConfigTileBounds() }
+        if (isCockpitTile) {
+            // A relaunch's setLaunchBounds is ignored once our task exists, so correct our own
+            // bounds to the app (left) tile. Posted so the window metrics have settled.
+            window.decorView.post { ensureConfigTileBounds() }
+        } else {
+            // Standalone open. If the user opted into "open last layout", the coordinator brings the
+            // Cockpit up over us; yield our full-screen config to the back so it does not peek behind
+            // the freeform tiles (the "fullscreen settings + panel" overlap, `[RUNTIME]` 2026-08-11).
+            // Opt-in only, never switches the source. Reachable again via the panel's gear.
+            val restoring = app.recoveryCoordinator.onActivityResumed(app.carStateRepository.state)
+            if (restoring) window.decorView.postDelayed({ yieldToCockpit() }, YIELD_TO_COCKPIT_MS)
+        }
+    }
+
+    /**
+     * Push our full-screen config task to the back so the freeform Cockpit tiles the coordinator
+     * just brought up own the screen. Guarded so a finishing or already-tiled activity is left alone.
+     */
+    private fun yieldToCockpit() {
+        if (!isFinishing && !isCockpitTile) moveTaskToBack(true)
     }
 
     override fun onPause() {
@@ -231,5 +246,8 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
          * Reserved for tile-specific behaviour (e.g. self-resizing the task to the app-tile bounds).
          */
         const val EXTRA_COCKPIT_TILE = "cockpit_tile"
+
+        /** Delay before a standalone config yields to an auto-restored Cockpit — lets the tiles start. */
+        private const val YIELD_TO_COCKPIT_MS = 800L
     }
 }
