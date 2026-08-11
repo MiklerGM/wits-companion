@@ -26,9 +26,9 @@ class BootRestoreReceiver : BroadcastReceiver() {
         ) return
 
         val app = context.applicationContext as? WitsCompanionApp ?: return
-        // Fire if either restore-on-boot or panel autostart is enabled; onBootCompleted
-        // decides which of the two to actually do.
-        if (!app.layoutRepository.restoreOnBoot && !app.layoutRepository.autostartPanel) return
+        // Fire only if restore-on-boot (half of the "autostart on power-up" switch) is enabled;
+        // onBootCompleted then reasserts the last layout, or opens the Cockpit if there is none.
+        if (!app.layoutRepository.restoreOnBoot) return
 
         app.eventLogger.log("layout", "boot_received", result = "scheduled")
 

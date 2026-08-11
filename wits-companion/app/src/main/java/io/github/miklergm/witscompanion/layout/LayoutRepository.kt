@@ -150,6 +150,17 @@ class LayoutRepository(context: Context) {
         set(v) = prefs.edit().putBoolean(KEY_AUTOSTART_PANEL, v).apply()
 
     /**
+     * One user-facing switch for "bring the Cockpit up when the unit powers up" — folds the former
+     * separate boot / ACC / autostart-panel flags. Boot and ACC-on are effectively the same event in
+     * practice (turn the key → the unit powers → Android boots → ACC line goes high), so they share a
+     * single control. Backed by [restoreOnBoot] + [restoreOnAcc] so existing installs migrate with no
+     * data change.
+     */
+    var autostartOnPower: Boolean
+        get() = restoreOnBoot || restoreOnAcc
+        set(v) { restoreOnBoot = v; restoreOnAcc = v }
+
+    /**
      * The hotspot state the user last chose, remembered so it can be restored after a
      * short stop turns it off. null = never set, so nothing to restore.
      */

@@ -207,11 +207,15 @@ class ReceiverAndGenerationTest {
 
     /** Auto-starting our own panel is safe; doing it over the reverse camera is not. */
     @Test
-    fun `panel autostart is refused while reversing`() {
+    fun `cockpit autostart is opt-in and refused while reversing`() {
         val src = sourceOf("layout/LayoutRecoveryCoordinator.kt")
-        val body = src.substringAfter("fun startPanelIfEnabled(").substringBefore("\n    }")
-        assertTrue("gated on the opt-in toggle", body.contains("autostartPanel"))
+        // Bringing our own panel up (the no-last-layout fallback) never runs over the reverse camera.
+        val body = src.substringAfter("fun openCockpitPanel(").substringBefore("\n    }")
         assertTrue("never over the reverse camera", body.contains("reverseActive"))
+        // Autostart is opt-in: each trigger only fires when its toggle is on.
+        assertTrue("boot gated on restoreOnBoot", src.contains("if (repository.restoreOnBoot) attempt"))
+        assertTrue("ACC gated on restoreOnAcc", src.contains("if (repository.restoreOnAcc) attempt"))
+        assertTrue("resume gated on restoreOnResume", src.contains("if (!repository.restoreOnResume) return false"))
     }
 
     /**

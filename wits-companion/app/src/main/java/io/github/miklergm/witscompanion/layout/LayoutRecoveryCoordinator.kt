@@ -1,6 +1,7 @@
 package io.github.miklergm.witscompanion.layout
 
 import android.content.Context
+import android.util.Log
 import io.github.miklergm.witscompanion.carstate.CarState
 import io.github.miklergm.witscompanion.carstate.CarStateRepository
 import io.github.miklergm.witscompanion.carstate.PropertyReader
@@ -53,10 +54,11 @@ class LayoutRecoveryCoordinator(
         val android = state.androidSourceActive
         val reverse = state.reverseActive
 
-        // ACC OFF -> ON
+        // ACC OFF -> ON (ignition). The single "autostart on power-up" switch is backed by
+        // restoreOnAcc (+ restoreOnBoot); attempt() itself brings the Cockpit up, so there is no
+        // longer a separate panel-autostart to fire here.
         if (lastAcc == false && acc == true) {
             if (repository.restoreOnAcc) attempt("acc_on", state)
-            else startPanelIfEnabled("acc_on", state)
             restoreHotspotIfEnabled("acc_on")
         }
 
@@ -75,16 +77,19 @@ class LayoutRecoveryCoordinator(
         lastReverse = reverse
     }
 
-    /** Called from MainActivity.onResume when the preference is enabled. */
-    fun onActivityResumed(state: CarState) {
-        if (!repository.restoreOnResume) return
-        attempt("activity_resume", state)
+    /**
+     * Called from MainActivity.onResume. Returns true if it actually brought a layout / the Cockpit
+     * up, so a standalone MainActivity can yield ([android.app.Activity.moveTaskToBack]) instead of
+     * leaving its full-screen config peeking behind the tiles.
+     */
+    fun onActivityResumed(state: CarState): Boolean {
+        if (!repository.restoreOnResume) return false
+        return attempt("activity_resume", state)
     }
 
     /** Called from the boot receiver, after a deliberate delay. */
     fun onBootCompleted(state: CarState) {
         if (repository.restoreOnBoot) attempt("boot_completed", state)
-        else startPanelIfEnabled("boot_completed", state)
         restoreHotspotIfEnabled("boot_completed")
     }
 
@@ -115,13 +120,18 @@ class LayoutRecoveryCoordinator(
         return engine.apply(preset, state, Trigger.USER)
     }
 
-    private fun attempt(reason: String, state: CarState) {
-        // The config UI is up (e.g. the user just tapped Settings): do NOT auto-restore over it.
-        // The bounce was `reassert` here, not only `startPanelIfEnabled` — re-applying the last
-        // anchored preset brings the Cockpit panel back to the front, so Settings "never opened".
+    /**
+     * Re-apply the last layout for an automatic trigger. Returns true if a layout / the Cockpit was
+     * actually brought up (so a standalone MainActivity can yield to it). No longer fires a second
+     * panel-autostart after the reassert — reasserting an anchored preset already brings the panel
+     * up (that double-start put a full-screen config behind the tiles, `[RUNTIME]` 2026-08-11).
+     */
+    private fun attempt(reason: String, state: CarState): Boolean {
+        // The config UI is up (e.g. the user just tapped Settings): do NOT auto-restore over it —
+        // re-applying the last anchored preset would re-float the map into the config's tile.
         if (configUiVisible) {
             logger?.log("layout", "auto_restore_skipped", extras = mapOf("reason" to reason), result = "config_visible")
-            return
+            return false
         }
         val since = nowMs() - lastApplyAt
         if (since < DEBOUNCE_MS) {
@@ -129,13 +139,13 @@ class LayoutRecoveryCoordinator(
                 "layout", "auto_restore_skipped",
                 extras = mapOf("reason" to reason, "since_ms" to since), result = "debounced",
             )
-            return
+            return false
         }
         val preset = repository.lastAppliedPreset()
         if (preset == null) {
-            // Nothing to restore, but the panel autostart is independent of that.
-            startPanelIfEnabled(reason, state)
-            return
+            // Fresh unit, nothing to reassert: bring the Cockpit up as the soft launcher.
+            Log.i(TAG, "autostart: reason=$reason -> open Cockpit (no last layout)")
+            return openCockpitPanel(reason, state)
         }
 
         // Route-safe: reassert repositions live apps instead of relaunching them, so an
@@ -144,6 +154,14 @@ class LayoutRecoveryCoordinator(
         val liveCount = engine.livePackages().size
         val result = engine.reassert(preset, state)
         lastApplyAt = nowMs()
+        val resultStr = when (result) {
+            is LayoutEngine.Result.Applied -> "applied"
+            is LayoutEngine.Result.Refused -> "refused:${result.reason}"
+            is LayoutEngine.Result.Invalid -> "invalid"
+        }
+        // Visible in logcat so "what triggered the autostart, and did it apply?" is answerable
+        // without opening the in-app event log.
+        Log.i(TAG, "autostart: reason=$reason preset=${preset.id} boot=${memoryBoot() ?: "?"} live=$liveCount -> $resultStr")
         logger?.log(
             category = "layout", action = "auto_restore",
             extras = mapOf(
@@ -152,47 +170,42 @@ class LayoutRecoveryCoordinator(
                 "memoryBoot" to (memoryBoot()?.toString() ?: "unknown"),
                 "live" to liveCount,
             ),
-            result = when (result) {
-                is LayoutEngine.Result.Applied -> "applied"
-                is LayoutEngine.Result.Refused -> "refused:${result.reason}"
-                is LayoutEngine.Result.Invalid -> "invalid"
-            },
+            result = resultStr,
         )
-        startPanelIfEnabled(reason, state)
+        return result is LayoutEngine.Result.Applied
     }
 
-    /**
-     * Brings the Mode B panel to the front, if the user opted in. Launching our own
-     * activity is always safe — it disturbs no foreign app — so this is gated only by the
-     * toggle and by reverse (never pull the panel up over the reverse camera).
-     */
     /**
      * True while the config ([MainActivity]) occupies the Cockpit's **left tile**. Set solely from
      * MainActivity's resume/pause, keyed on its `isCockpitTile` flag — a standalone open (from the
      * launcher) does NOT set it, so the normal "open the app → autostart Cockpit" path still fires.
      *
-     * While it holds, an auto-restore ([attempt]) and the autostart panel ([startPanelIfEnabled])
-     * must NOT re-apply the last layout: a `reassert` would re-float the map into the left tile and
-     * replace the config the user just opened, so Settings would "never open". (Historically — before
-     * the left-tile redesign — Settings un-windowed the tiles and the autostart raced to re-open the
-     * panel over MainActivity; `[RUNTIME]` 2026-08-08: START MainActivity → 88 ms later START
-     * DashboardActivity from our own uid. The redesign removed the un-window; this guard covers the
-     * remaining reassert race.)
+     * While it holds, an auto-restore ([attempt]) and [openCockpitPanel] must NOT re-apply the last
+     * layout: a `reassert` would re-float the map into the left tile and replace the config the user
+     * just opened, so Settings would "never open". (Historically — before the left-tile redesign —
+     * Settings un-windowed the tiles and the autostart raced to re-open the panel over MainActivity;
+     * `[RUNTIME]` 2026-08-08: START MainActivity → 88 ms later START DashboardActivity from our own
+     * uid. The redesign removed the un-window; this guard covers the remaining reassert race.)
      */
     @Volatile
     var configUiVisible: Boolean = false
 
-    fun startPanelIfEnabled(reason: String, state: CarState) {
-        if (!repository.autostartPanel) return
+    /**
+     * Brings the Cockpit panel ([DashboardActivity]) to the front — used when there is no last layout
+     * to reassert (a fresh unit). Launching our own activity disturbs no foreign app, so it is gated
+     * only by the config-visible guard and by reverse (never pull the panel up over the reverse
+     * camera). Returns true if the launch was issued.
+     */
+    private fun openCockpitPanel(reason: String, state: CarState): Boolean {
         if (configUiVisible) {
             logger?.log("layout", "autostart_panel", result = "skipped:config_visible", extras = mapOf("reason" to reason))
-            return
+            return false
         }
         if (state.reverseActive != false) {
             logger?.log("layout", "autostart_panel", result = "skipped:reverse", extras = mapOf("reason" to reason))
-            return
+            return false
         }
-        runCatching {
+        return runCatching {
             appContext.startActivity(
                 android.content.Intent(
                     appContext,
@@ -203,8 +216,10 @@ class LayoutRecoveryCoordinator(
                 )
             )
             logger?.log("layout", "autostart_panel", result = "started", extras = mapOf("reason" to reason))
-        }.onFailure {
+            true
+        }.getOrElse {
             logger?.log("layout", "autostart_panel", result = "error:${it.javaClass.simpleName}")
+            false
         }
     }
 
@@ -213,6 +228,7 @@ class LayoutRecoveryCoordinator(
         propertyReader?.get(WitsProperties.MEMORY_BOOT)?.trim()?.toIntOrNull()
 
     private companion object {
+        const val TAG = "LayoutRecovery"
         const val DEBOUNCE_MS = 3_000L
     }
 }

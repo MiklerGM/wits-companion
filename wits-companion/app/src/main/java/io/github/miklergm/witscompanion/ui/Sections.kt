@@ -585,32 +585,22 @@ class SettingsSection(private val app: WitsCompanionApp) : MainActivity.Section 
         val c = activity.column()
         val repo = app.layoutRepository
 
-        // -------------------------------------------------- automatic restore
-        c.addView(activity.heading("Automatic restore (opt-in)"))
-        c.addView(activity.check("Re-apply the last layout when the app resumes", repo.restoreOnResume) {
+        // ----------------------------------------------------------- autostart
+        c.addView(activity.heading("Autostart (opt-in)"))
+        c.addView(activity.check("Auto-start the Cockpit on power-up (ignition / boot)", repo.autostartOnPower) {
+            repo.autostartOnPower = it
+        })
+        c.addView(activity.check("Open the last layout when the app is opened", repo.restoreOnResume) {
             repo.restoreOnResume = it
         })
-        c.addView(activity.check("Re-apply on ACC on", repo.restoreOnAcc) { repo.restoreOnAcc = it })
-        c.addView(activity.check("Re-apply when Android source is confirmed", repo.restoreOnAndroidSource) {
-            repo.restoreOnAndroidSource = it
-        })
-        c.addView(activity.check("Re-apply after reverse ends", repo.restoreAfterReverse) {
-            repo.restoreAfterReverse = it
-        })
-        c.addView(activity.check("Re-apply after boot (30 s delay)", repo.restoreOnBoot) {
-            repo.restoreOnBoot = it
-        })
-        c.addView(activity.check("Auto-start the Cockpit on boot & ACC", repo.autostartPanel) {
-            repo.autostartPanel = it
-        })
-        c.addView(activity.check("Re-enable the hotspot when it was on before", repo.restoreHotspot) {
+        c.addView(activity.check("Re-enable the hotspot if it was on before", repo.restoreHotspot) {
             repo.restoreHotspot = it
         })
         c.addView(activity.body(
-            "Automatic triggers are refused while reverse is active or unknown, and never " +
-                "switch the video source. Restore reasserts the last layout without " +
-                "relaunching apps that are still running, so an active Maps route survives a " +
-                "deep-sleep wake."
+            "On power-up (ignition, or a cold boot) the last layout is re-applied — the Cockpit if " +
+                "that is what you last used. Autostart is refused while reverse is active (the head " +
+                "unit shows the camera itself) and never switches the video source. An active Maps " +
+                "route survives a deep-sleep wake: running apps are repositioned, not relaunched."
         ))
 
         // ------------------------------------------------------------- media
