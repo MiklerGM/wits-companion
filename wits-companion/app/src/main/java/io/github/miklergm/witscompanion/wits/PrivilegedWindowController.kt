@@ -74,28 +74,15 @@ class PrivilegedWindowController(
         bringToFront: Boolean = false,
     ): PlaceResult {
         val existing = findTask(packageName)
-        // Switching the Cockpit's floating app: the chosen app may already be a freeform task
-        // hidden *behind* another at the same tile bounds (the previous floating app). resizeTask
-        // moves it in place but never reorders, so it would stay hidden. A launch brings the task
-        // to the front; the retry pass then re-asserts the exact bounds with resizeTask.
-        if (bringToFront) {
-            return if (launchIntoFreeform(packageName, bounds, windowMode)) {
-                logger?.log("window", "launch_freeform", packageName, result = "front")
-                PlaceResult.Launched
-            } else {
-                PlaceResult.Failed("bring-to-front launch failed")
-            }
-        }
-        // Fast, flicker-free path — but ONLY for a tile that is already visible. resizeTask
-        // moves bounds without changing visibility or z-order, so on an existing-but-hidden
-        // freeform task (a leftover tile behind the launcher) it would reposition something
-        // the user never sees — the app "does not open". Such a task must be launched to be
-        // brought forward. `[RUNTIME]` 2026-08-01.
-        if (existing != null && existing.windowingMode == WitsWindowMode.FREEFORM && existing.visible) {
-            // Leaving freeform entirely (reset / exit) is NOT handled here: `setTaskWindowingMode`
-            // is absent on this ROM, so a freeform task cannot be un-windowed in place. The engine
-            // removes freeform tasks outright instead (removeFreeformTasks / removeTask), so every
-            // request that reaches this fast path is a reposition — resizeTask, no flicker.
+
+        // Fast, flicker-free reposition — ONLY a tile that is already visible and that we are NOT
+        // being told to raise. resizeTask moves bounds without touching visibility or z-order, so on
+        // a hidden task it would reposition something the user never sees. `[RUNTIME]` 2026-08-01.
+        // (Un-windowing a freeform task in place is impossible here — `setTaskWindowingMode` is
+        // absent — so the engine removes freeform tasks outright; every request here is a reposition.)
+        if (!bringToFront && existing != null &&
+            existing.windowingMode == WitsWindowMode.FREEFORM && existing.visible
+        ) {
             return if (resizeTask(existing.taskId, bounds)) {
                 logger?.log(
                     "window", "resize_task", packageName,
@@ -108,12 +95,9 @@ class PrivilegedWindowController(
             }
         }
         // A live task the user is actually looking at must not be reset on an automatic restore:
-        // leave it as-is rather than sending it a MAIN intent. Only a VISIBLE task counts — a
-        // hidden one (e.g. Maps backgrounded by the vendor Home button) is not being viewed, so it
-        // must fall through and be brought forward; otherwise the Cockpit comes up with the map tile
-        // still behind the launcher (`[RUNTIME]` 2026-08-11, exposed once the config stopped masking
-        // it). A fresh user apply does not preserve, so it also falls through.
-        if (existing != null && preserve && existing.visible) {
+        // leave it as-is rather than sending it a MAIN intent. Only a VISIBLE, non-raised task
+        // counts; a hidden one falls through and is raised below. `[RUNTIME]` 2026-08-11.
+        if (!bringToFront && existing != null && preserve && existing.visible) {
             logger?.log(
                 "window", "preserve_in_place", packageName,
                 extras = mapOf("taskId" to existing.taskId, "mode" to WitsWindowMode.name(existing.windowingMode)),
@@ -121,10 +105,29 @@ class PrivilegedWindowController(
             )
             return PlaceResult.PreservedInPlace
         }
+        // Raise an EXISTING freeform task — the Cockpit's floating app being switched to (it may sit
+        // hidden behind the previous one), or one left behind the launcher by the vendor Home button
+        // (visible=true but z-ordered behind, so resizeTask alone keeps it hidden). Move the already
+        // rendered task to the front by id: startActivityFromRecents sends no MAIN intent, so there
+        // is no redraw flash and no route reset (the "launcher peeks while Maps redraws" transient).
+        // resizeTask then re-asserts the exact bounds. Falls back to a relaunch when the primitive is
+        // unavailable, so behaviour never regresses. `[RUNTIME]` 2026-08-11.
+        if (existing != null && existing.windowingMode == WitsWindowMode.FREEFORM) {
+            if (moveToFront(existing.taskId, bounds)) {
+                resizeTask(existing.taskId, bounds)
+                logger?.log(
+                    "window", "move_to_front", packageName,
+                    extras = mapOf("taskId" to existing.taskId, "bounds" to bounds.flattenToString()),
+                    result = "fronted",
+                )
+                return PlaceResult.Resized
+            }
+        }
+        // No task, a non-freeform task, or the front primitive was unavailable: launch into freeform.
         return if (launchIntoFreeform(packageName, bounds, windowMode)) {
             logger?.log(
                 "window", "launch_freeform", packageName,
-                extras = mapOf("bounds" to bounds.flattenToString()),
+                extras = mapOf("bounds" to bounds.flattenToString(), "front" to bringToFront),
                 result = "launched",
             )
             PlaceResult.Launched
@@ -257,6 +260,33 @@ class PrivilegedWindowController(
             Log.w(TAG, "launchIntoFreeform failed: ${it.javaClass.simpleName}")
             false
         }
+
+    /**
+     * Brings an existing task to the front by id WITHOUT relaunching it — reflective
+     * `IActivityTaskManager.startActivityFromRecents(taskId, options)`, the same primitive the vendor
+     * CHANGE_WINDOW hook uses (getFreeformTaskId → startActivityFromRecents). No MAIN intent is sent,
+     * so the app keeps its state (an active Maps route) and its already-rendered frame, avoiding the
+     * redraw flash a relaunch causes. [bounds] land it in freeform at that rect. Returns false when
+     * the call is unavailable, so [place] falls back to a relaunch and behaviour never regresses.
+     */
+    private fun moveToFront(taskId: Int, bounds: Rect): Boolean {
+        val svc = service() ?: return false
+        return runCatching {
+            val options = android.app.ActivityOptions.makeBasic().setLaunchBounds(bounds)
+            runCatching {
+                android.app.ActivityOptions::class.java
+                    .getMethod("setLaunchWindowingMode", Int::class.javaPrimitiveType)
+                    .invoke(options, WitsWindowMode.FREEFORM)
+            }
+            svc.javaClass.getMethod(
+                "startActivityFromRecents", Int::class.javaPrimitiveType, android.os.Bundle::class.java
+            ).invoke(svc, taskId, options.toBundle())
+            true
+        }.getOrElse {
+            Log.w(TAG, "startActivityFromRecents failed: ${it.javaClass.simpleName}")
+            false
+        }
+    }
 
     /** `ActivityTaskManager.getService()` → IActivityTaskManager, or null if unreachable. */
     private fun service(): Any? = cachedService ?: runCatching {
