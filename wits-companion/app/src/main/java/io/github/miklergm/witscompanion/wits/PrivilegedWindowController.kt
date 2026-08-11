@@ -107,10 +107,13 @@ class PrivilegedWindowController(
                 PlaceResult.Failed("resizeTask returned false")
             }
         }
-        // A live task the user is still in must not be reset on an automatic restore: leave
-        // it as-is rather than sending it a MAIN intent. (A fresh user apply does not
-        // preserve, so it falls through and is brought forward.)
-        if (existing != null && preserve) {
+        // A live task the user is actually looking at must not be reset on an automatic restore:
+        // leave it as-is rather than sending it a MAIN intent. Only a VISIBLE task counts — a
+        // hidden one (e.g. Maps backgrounded by the vendor Home button) is not being viewed, so it
+        // must fall through and be brought forward; otherwise the Cockpit comes up with the map tile
+        // still behind the launcher (`[RUNTIME]` 2026-08-11, exposed once the config stopped masking
+        // it). A fresh user apply does not preserve, so it also falls through.
+        if (existing != null && preserve && existing.visible) {
             logger?.log(
                 "window", "preserve_in_place", packageName,
                 extras = mapOf("taskId" to existing.taskId, "mode" to WitsWindowMode.name(existing.windowingMode)),
