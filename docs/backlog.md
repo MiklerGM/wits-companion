@@ -8,6 +8,22 @@ further down (linked by name).
 
 Things whose next step needs the car — verify a fix, or run a probe that only works there.
 
+- [ ] **N1 — the Cockpit's floating app (map) doesn't reach the front of its left tile** — the
+      panel (our own activity) tiles fine, but the foreign app stays behind the launcher. Two modes,
+      one root: *freeform placement / raise is unreliable*. Surfaced once the config stopped masking
+      it (`ba821ee`, 2026-08-11).
+  - **(a) Raise after the vendor Home button / an app switch** — the map was `visible=true` but
+    z-ordered behind, so `resizeTask` (no reorder) left it hidden; a relaunch would redraw/reset.
+    *Fixed `732c089`* with `moveToFront` (`IActivityTaskManager.startActivityFromRecents`, no MAIN
+    intent → no redraw flash, route survives), used for every "raise an existing freeform task"
+    case, launch fallback if absent. **Verify on-car**: `startActivityFromRecents` resolves on this
+    ROM, and home→app / hide→show bring the map to the front with no launcher peek.
+  - **(b) Cold boot** — autostart fires at ~12 s **before freeform is ready**, so the panel comes
+    up **fullscreen** (not a right tile) and the map isn't placed → black full panel, no map
+    (`[RUNTIME]` 2026-08-11, dumpsys: cockpit task `mode=fullscreen`, no Maps task; `resizeTask not
+    allowed` on the fullscreen task). *Not yet fixed.* Approaches to try on-car: after the autostart
+    apply, check the panel actually landed **freeform** and retry the apply until it does (bounded);
+    or lengthen the boot delay for freeform-readiness (tune against the 12 s the user preferred).
 - [x] **Cockpit panel-as-tile looks clean** — *verified 2026-08-03: seamless on the head unit,
       no caption, exact placement (panel `1560–2400`, map `0–1560`).* The map no longer
       disappears on control taps.
