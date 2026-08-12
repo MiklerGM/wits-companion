@@ -201,12 +201,17 @@ class LayoutEngine(
             // preserved-live tile is repositioned only if it can be moved in place; a live
             // task in another mode is left untouched rather than relaunched.
             val preserve = window.packageName in preserveLive
-            // The Cockpit's floating app must come to the FRONT of its tile — switching to an
-            // app that is already a hidden freeform task (behind the previous one) would
-            // otherwise just resize it in place and leave it hidden. Only when not preserving
-            // a live task (a restore leaves running apps as they are).
+            // The Cockpit's floating app must come to the FRONT of its tile — otherwise one that is
+            // hidden (behind the previous app, or behind the launcher after the vendor Home button)
+            // just gets resized in place and stays hidden. This holds on a route-safe reassert too:
+            // place()'s bring-to-front is a plain startActivity (launchIntoFreeform), which brings the
+            // EXISTING task forward — "brought to the front", NO relaunch, so a live Maps route
+            // survives — and is NON-exclusive, so the panel tile stays visible. `[RUNTIME]`
+            // 2026-08-12: probed on the head unit — `am start` fronts the map over the launcher
+            // without hiding the panel; `startActivityFromRecents` (tried in 732c089) is exclusive
+            // and hid the panel, so it was reverted.
             val bringToFront = preset.kind == PresetKind.ANCHORED &&
-                window.packageName != WitsPackages.SELF && !preserve
+                window.packageName != WitsPackages.SELF
             handler.postDelayed(
                 {
                     if (stillValid(myGeneration, "geometry", window.packageName)) {
