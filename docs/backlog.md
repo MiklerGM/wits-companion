@@ -12,12 +12,15 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       panel (our own activity) tiles fine, but the foreign app stays behind the launcher. Two modes,
       one root: *freeform placement / raise is unreliable*. Surfaced once the config stopped masking
       it (`ba821ee`, 2026-08-11).
-  - **(a) Raise after the vendor Home button / an app switch** — the map was `visible=true` but
-    z-ordered behind, so `resizeTask` (no reorder) left it hidden; a relaunch would redraw/reset.
-    *Fixed `732c089`* with `moveToFront` (`IActivityTaskManager.startActivityFromRecents`, no MAIN
-    intent → no redraw flash, route survives), used for every "raise an existing freeform task"
-    case, launch fallback if absent. **Verify on-car**: `startActivityFromRecents` resolves on this
-    ROM, and home→app / hide→show bring the map to the front with no launcher peek.
+  - **(a) Raise after the vendor Home button / an app switch** — the map is `visible=true` but
+    z-ordered behind, so `resizeTask` (no reorder) leaves it hidden; a relaunch would redraw/reset.
+    *Attempted + reverted (`732c089` → `e457c96`, 2026-08-12):* `moveToFront` via
+    `startActivityFromRecents` — **dead end**. With `START_TASKS_FROM_RECENTS` granted it resolves,
+    but it is **EXCLUSIVE** (same as the vendor CHANGE_WINDOW hook it mirrors): raising the map
+    **hid the panel tile** (dumpsys: panel `visible=false`). So the primitive that fronts one tile
+    without disturbing the others does *not* exist via recents. **Need a different lever** — e.g.
+    `moveTaskToFront` (REORDER_TASKS) if it is non-exclusive, or reordering the map's task without a
+    visibility broadcast. Until then the resize/launch path stands and the minor peek remains.
   - **(b) Cold boot** — autostart fires at ~12 s **before freeform is ready**, so the panel comes
     up **fullscreen** (not a right tile) and the map isn't placed → black full panel, no map
     (`[RUNTIME]` 2026-08-11, dumpsys: cockpit task `mode=fullscreen`, no Maps task; `resizeTask not
