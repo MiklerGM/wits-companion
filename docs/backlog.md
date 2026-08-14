@@ -12,8 +12,10 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       panel (our own activity) tiles fine, but the foreign app stays behind the launcher. Two modes,
       one root: *freeform placement / raise is unreliable*. Surfaced once the config stopped masking
       it (`ba821ee`, 2026-08-11).
-  - **(a) Raise after the vendor Home button / an app switch** — *root cause found + fixed
-    (`21e565f`, 2026-08-12; deploy + verify on-car).* On a route-safe reassert the anchored app was
+  - **(a) Raise after the vendor Home button / an app switch** — ✅ *FIXED + verified on-car
+    2026-08-14 (`21e565f`): home→app fronts the map (logcat `START …apps.maps from uid 10163`).
+    Gotcha: an earlier deploy showed no change because the build was **stale** — force a clean
+    rebuild after this kind of one-line engine change.* On a route-safe reassert the anchored app was
     preserved/resized in place (no reorder) and never fronted, so the map stayed behind the launcher.
     **Probed on the head unit** (cockpit up, map z-behind the launcher, `visible=false`):
     - `am stack move-task <t> <ownRoot> true` → **no-op** (moving a task into its own root does not
