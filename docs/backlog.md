@@ -538,6 +538,17 @@ activity recreation (e.g. a day/night flip). Now the floating package is remembe
 - **[DONE]** Panel reservation is now side-aware (was: only a left-anchored map). With the map swapped to the right,
   the reserve-left logic returns 0 and the panel goes full-width (content then risks sitting
   under the map). Make the reservation side-aware, or fix the map to one side.
+- **Media widget sometimes doesn't attach to Spotify** (`[RUNTIME]`, intermittent) — the panel's
+  play/pause won't start playback until Spotify itself is opened once. There is a MediaSession to
+  *control*, but nothing to command until the app has been foregrounded / has an active session.
+  Options: nudge the session (a transport that wakes it), or detect "no controllable session" and
+  show an "open Spotify" hint instead of a dead button.
+- **Surface the car's own Settings next to the Hotspot tile** — a shortcut to the vendor car
+  settings from the Cockpit panel (like the Hotspot pill), and consider an Android-settings
+  shortcut in the same row (earlier note). One quick-access row: Hotspot · Car settings · Android
+  settings.
+- **Tone down the play/pause colour** — the accent play/pause reads too orange; mute it toward a
+  more neutral tint (raised more than once). Part of a media-card palette pass.
 
 ## UI
 
