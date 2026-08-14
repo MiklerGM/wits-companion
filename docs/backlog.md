@@ -28,11 +28,24 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       `place()`'s bring-to-front is already that same plain `startActivity` (`launchIntoFreeform`).
       One line. Verify on-car: home→app / hide→show front the map with no launcher peek, route intact.
   - **(b) Cold boot** — autostart fires at ~12 s **before freeform is ready**, so the panel comes
-    up **fullscreen** (not a right tile) and the map isn't placed → black full panel, no map
-    (`[RUNTIME]` 2026-08-11, dumpsys: cockpit task `mode=fullscreen`, no Maps task; `resizeTask not
-    allowed` on the fullscreen task). *Not yet fixed.* Approaches to try on-car: after the autostart
-    apply, check the panel actually landed **freeform** and retry the apply until it does (bounded);
-    or lengthen the boot delay for freeform-readiness (tune against the 12 s the user preferred).
+    up **fullscreen** (not a right tile) and the floating app isn't placed → panel content on the
+    right with a **black left strip** (its reservation), no map. Reproduced on 2 of 2 cold boots
+    (`[RUNTIME]` 2026-08-11 + 2026-08-14; 2nd: Spotify session came up but no map, panel right / black
+    left — milder than the earlier launcher-peek). **Decision (user, 2026-08-14): build a watchdog.**
+    Design (agreed):
+    - **Event-triggered, not a free poll** — check ~1–1.5 s after the Cockpit is shown
+      (`DashboardActivity.onResume`), and again a couple of times with backoff.
+    - **Detect** via `getAllRootTaskInfos`: the intended floating app should be a *visible freeform*
+      task at ~the left tile and the panel a *freeform* right tile. Panel `fullscreen`, or the app
+      missing / behind / fullscreen → mismatch.
+    - **Correct** by re-running the whole Cockpit apply (same as the "2nd tap", which is known to
+      work) — not a single front primitive (those all dead-ended: recents is exclusive, move-task a
+      no-op).
+    - **Guards** (this is why it's not race-hell): only when the Cockpit is the intended foreground
+      (`cockpitLeft` App/Default), never while reversing, and generation-gated + debounced so it
+      can't fight an in-flight apply.
+    - **Bounded**: 2–3 attempts then stop — each re-apply relaunches the app, so an unbounded loop
+      would reset the Maps route and fight the vendor. Stop as soon as the state matches.
 - [x] **Cockpit panel-as-tile looks clean** — *verified 2026-08-03: seamless on the head unit,
       no caption, exact placement (panel `1560–2400`, map `0–1560`).* The map no longer
       disappears on control taps.
@@ -227,6 +240,11 @@ match exactly and `hiCarDensity=300` exists — verify the panel density when ba
   (black screen). Only experiment when a dropped mirror is acceptable, and revert promptly.
 
 ### Next steps (when we return to zlink, carefully)
+
+> **User note 2026-08-14:** tested informally, **unconvincing** — zlink seems to just **upscale**
+> rather than negotiate a higher AA resolution. Verify the `aaDensity` lever *actually* changes
+> `hu_AA_width` in the log before investing; if it doesn't move, the resolution is fixed elsewhere
+> and this is a dead end. Low priority.
 
 1. **Set `persist.zj.dpi.aaDensity=240`** (the lever above → 1920×720), restart zlink, reconnect
    AA, and read `hu_AA_width` from the log — expect ~1920, and judge sharpness. It is a `persist`
