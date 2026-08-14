@@ -31,8 +31,12 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
     up **fullscreen** (not a right tile) and the floating app isn't placed → panel content on the
     right with a **black left strip** (its reservation), no map. Reproduced on 2 of 2 cold boots
     (`[RUNTIME]` 2026-08-11 + 2026-08-14; 2nd: Spotify session came up but no map, panel right / black
-    left — milder than the earlier launcher-peek). **Decision (user, 2026-08-14): build a watchdog.**
-    Design (agreed):
+    left — milder than the earlier launcher-peek). ⏳ **IMPLEMENTED `70ad569` — verify on-car** (two
+    cold boots in a row should come up map + panel; watch logcat `LayoutEngine: verify:`).
+    Built as a **post-apply verification**, not a standing watchdog: each apply captures what it
+    intended to place and re-checks at +3 s / +8 s, correcting only on a real mismatch. The yardstick
+    comes from the apply itself, so the `Hidden` state (panel legitimately full-screen) and the
+    panel-in-a-tiled-preset case need no special casing. Design (agreed):
     - **Event-triggered, not a free poll** — check ~1–1.5 s after the Cockpit is shown
       (`DashboardActivity.onResume`), and again a couple of times with backoff.
     - **Detect** via `getAllRootTaskInfos`: the intended floating app should be a *visible freeform*
