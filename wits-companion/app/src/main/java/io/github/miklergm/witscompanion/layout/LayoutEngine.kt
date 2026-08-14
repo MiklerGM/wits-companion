@@ -3,12 +3,14 @@ package io.github.miklergm.witscompanion.layout
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import io.github.miklergm.witscompanion.carstate.CarState
 import io.github.miklergm.witscompanion.logging.EventLogger
 import io.github.miklergm.witscompanion.safety.ActionRateLimiter
 import io.github.miklergm.witscompanion.safety.GuardVerdict
 import io.github.miklergm.witscompanion.safety.ReverseGuard
 import io.github.miklergm.witscompanion.safety.Trigger
+import io.github.miklergm.witscompanion.wits.PrivilegedWindowController
 import io.github.miklergm.witscompanion.wits.WitsPackages
 import io.github.miklergm.witscompanion.wits.WitsWindowController
 import io.github.miklergm.witscompanion.wits.WitsWindowMode
@@ -62,6 +64,18 @@ class LayoutEngine(
     private var lastAppliedPackages: Set<String> = emptySet()
 
     /**
+     * True while WE are the one driving the screen — set by an [apply], cleared by
+     * [unwindowTiles] (Exit / reset). The post-apply verification must never "repair" a layout
+     * the user deliberately left: after Exit the last preset is still remembered, so without this
+     * a verification would helpfully bring the Cockpit back and fight the exit.
+     */
+    @Volatile
+    private var layoutOwned: Boolean = false
+
+    /** One tile an apply intended to place, captured for [verifyPlacement]. */
+    private data class ExpectedTile(val packageName: String, val bounds: android.graphics.Rect)
+
+    /**
      * @param trigger USER for a button press, AUTOMATIC for a restore
      * @param retries how many bounded retries to schedule (0..2)
      */
@@ -91,12 +105,18 @@ class LayoutEngine(
         return apply(preset, state, Trigger.AUTOMATIC, preserveLive = live)
     }
 
+    /**
+     * @param verifyAttempt how many post-apply verifications already corrected this layout. 0 for a
+     *   normal apply; [verifyPlacement] passes attempt+1 when it re-asserts, which is what bounds
+     *   the correction loop.
+     */
     fun apply(
         preset: LayoutPreset,
         state: CarState,
         trigger: Trigger,
         retries: Int = DEFAULT_RETRIES,
         preserveLive: Set<String> = emptySet(),
+        verifyAttempt: Int = 0,
     ): Result {
         // 1. Validate before touching anything.
         val issues = LayoutValidator.validate(preset)
@@ -168,10 +188,17 @@ class LayoutEngine(
             )
         }
 
-        // An anchored preset brings the companion up as the panel tile beside the map.
+        // An anchored preset brings the companion up as the panel tile beside the map. The panel is
+        // NOT one of the preset's windows (an anchored preset carries only the foreign app), so its
+        // bounds are computed here — and hoisted so the verification below can expect it too.
+        val panelBounds =
+            if (preset.kind == PresetKind.ANCHORED && floatingBounds != null) {
+                panelComplement(ordered.first { w -> w.packageName != WitsPackages.SELF }.bounds, area)
+            } else {
+                null
+            }
         var offset = 0L
         if (preset.kind == PresetKind.ANCHORED) {
-            val panelBounds = floatingBounds?.let { panelComplement(ordered.first { w -> w.packageName != WitsPackages.SELF }.bounds, area) }
             handler.postDelayed(
                 { if (stillValid(myGeneration, "anchor", WitsPackages.SELF)) bringAnchorToFront(panelBounds) },
                 parked * PARK_DELAY_MS,
@@ -246,6 +273,7 @@ class LayoutEngine(
         }
 
         lastAppliedPackages = ordered.map { it.packageName }.toSet()
+        layoutOwned = true
         rateLimiter.record(ActionRateLimiter.KEY_LAYOUT)
         logger?.log(
             category = "layout", action = "apply",
@@ -259,6 +287,20 @@ class LayoutEngine(
         )
 
         scheduleRetries(preset, area, ordered, retries.coerceIn(0, MAX_RETRIES), myGeneration, preserveLive)
+
+        // What this apply intends the screen to look like — the yardstick for the verification.
+        // Captured from the apply itself rather than derived from stored state, so "panel full-screen"
+        // is only ever wrong when THIS apply meant it to be a tile (the hidden state applies its own
+        // full-screen panel and is verified against that).
+        val expected = buildList {
+            ordered.forEach { w ->
+                if (windowController.isLaunchable(w.packageName)) {
+                    add(ExpectedTile(w.packageName, w.bounds.toPixels(area)))
+                }
+            }
+            if (panelBounds != null) add(ExpectedTile(WitsPackages.SELF, panelBounds))
+        }
+        scheduleVerification(preset, expected, ordered.size, myGeneration, verifyAttempt)
 
         return Result.Applied(ordered.size, warnings)
     }
@@ -370,6 +412,112 @@ class LayoutEngine(
     /** Total length of one full pass (geometry phase + visibility phase). */
     private fun passDuration(windowCount: Int): Long =
         launchPhaseStart(windowCount) + (windowCount - 1).coerceAtLeast(0) * LAUNCH_DELAY_MS
+
+    /**
+     * Schedules the post-apply verification — the "did what I just did actually take?" check.
+     *
+     * This is **not** a standing watchdog: it only ever runs in a bounded window right after an
+     * apply, so it cannot fight the user who later opens something else, nor the vendor stack. It
+     * exists because the blind [scheduleRetries] pass fires too early and unconditionally: on a cold
+     * boot the autostart apply lands while **freeform is not ready yet**, so the panel comes up
+     * full-screen and the floating app is never placed (`[RUNTIME]` 2026-08-11/14, 2 of 2 cold
+     * boots). The verification is the *conditional* retry with a longer horizon.
+     *
+     * Privileged path only — it needs `getAllRootTaskInfos` to observe anything.
+     */
+    private fun scheduleVerification(
+        preset: LayoutPreset,
+        expected: List<ExpectedTile>,
+        windowCount: Int,
+        myGeneration: Long,
+        attempt: Int,
+    ) {
+        if (!windowController.isPrivileged || expected.isEmpty()) return
+        if (attempt >= VERIFY_DELAYS_MS.size) return
+        // Measured from the end of the pass, like the retries, so the two never overlap.
+        val delay = passDuration(windowCount) + VERIFY_DELAYS_MS[attempt]
+        handler.postDelayed(
+            { verifyPlacement(preset, expected, myGeneration, attempt) },
+            RETRY_TOKEN,
+            delay,
+        )
+    }
+
+    /**
+     * Compares the live task state with what the apply intended and, on a mismatch, re-asserts the
+     * layout once more (bounded by [VERIFY_DELAYS_MS]).
+     *
+     * The correction is a **route-safe re-assert**, not a fresh apply: a live app is repositioned and
+     * fronted rather than relaunched, so a running Maps route survives a repair. That matters because
+     * this can fire on a cold boot while the driver is already looking at the screen.
+     */
+    private fun verifyPlacement(
+        preset: LayoutPreset,
+        expected: List<ExpectedTile>,
+        myGeneration: Long,
+        attempt: Int,
+    ) {
+        // Superseded by a newer apply / cancelled (cancelPending bumps the generation — that is also
+        // how opening the config screen calls this off).
+        if (myGeneration != generation.get()) return
+        // The user took the screen back (Exit / reset): the last preset is still remembered, but it
+        // is no longer ours to repair.
+        if (!layoutOwned) {
+            logger?.log("layout", "verify", result = "skipped:not_owned")
+            return
+        }
+        // Never re-lay windows over the reverse camera.
+        if (!reverseGuard.check(latestState, Trigger.AUTOMATIC).isAllowed) {
+            logger?.log("layout", "verify", result = "skipped:reverse")
+            return
+        }
+
+        val tasks = windowController.rootTasks()
+        val wrong = expected.filter { misplaced(it, tasks) }
+        if (wrong.isEmpty()) {
+            logger?.log(
+                "layout", "verify",
+                extras = mapOf("preset" to preset.id, "attempt" to attempt, "tiles" to expected.size),
+                result = "ok",
+            )
+            return
+        }
+
+        Log.i(TAG, "verify: ${preset.id} attempt=$attempt misplaced=${wrong.map { it.packageName }} -> re-assert")
+        logger?.log(
+            "layout", "verify",
+            extras = mapOf(
+                "preset" to preset.id,
+                "attempt" to attempt,
+                "misplaced" to wrong.joinToString(",") { it.packageName },
+            ),
+            result = "correcting",
+        )
+        // Same correction the user's "tap it again" performs, which is known to work.
+        apply(
+            preset, latestState, Trigger.AUTOMATIC,
+            preserveLive = livePackages(),
+            verifyAttempt = attempt + 1,
+        )
+    }
+
+    /**
+     * Coarse placement check for one tile — deliberately **not** an exact geometry match.
+     *
+     * Only gross failures count: no task at all, not a freeform window (the cold-boot symptom: the
+     * panel stuck full-screen), invisible (left behind the launcher), or sitting on the wrong side of
+     * the display. Exact bounds are left to the retry pass and the tiles' own self-resize; demanding
+     * pixel accuracy here would fight apps that legitimately resize themselves (Spotify) and cause
+     * endless corrections.
+     */
+    private fun misplaced(tile: ExpectedTile, tasks: List<PrivilegedWindowController.TaskSnapshot>): Boolean {
+        val task = tasks.firstOrNull { it.packageName == tile.packageName } ?: return true
+        if (task.windowingMode != WitsWindowMode.FREEFORM) return true
+        if (!task.visible) return true
+        // Wrong half of the screen: centres further apart than half the intended tile width.
+        val slack = (tile.bounds.width() / 2).coerceAtLeast(MIN_CENTRE_SLACK_PX)
+        return kotlin.math.abs(task.bounds.centerX() - tile.bounds.centerX()) > slack
+    }
 
     /**
      * Parks freeform windows that are not part of the incoming layout, to [parkBounds] in
@@ -626,6 +774,9 @@ class LayoutEngine(
      */
     fun unwindowTiles(thenGoHome: Boolean) {
         cancelPending()
+        // The user is taking the screen back: stop owning it, so no verification "repairs" the
+        // layout they just exited (the last preset is still remembered).
+        layoutOwned = false
         val myGeneration = generation.get()
 
         if (windowController.isPrivileged) {
@@ -739,6 +890,20 @@ class LayoutEngine(
         const val ANCHOR_SETTLE_MS = 450L
         const val DEFAULT_RETRIES = 1
         const val MAX_RETRIES = 2
+
+        /**
+         * When the post-apply verification runs, measured from the END of the pass — and, by its
+         * length, how many corrections are allowed (2). Deliberately later than [RETRY_DELAYS_MS]:
+         * the failure it targets is "freeform was not ready yet", which the blind retries are too
+         * early to catch. Each correction relaunches nothing but does re-assert, so the budget stays
+         * small — an unbounded loop would fight the vendor stack.
+         */
+        val VERIFY_DELAYS_MS = listOf(3_000L, 8_000L)
+
+        /** Floor for the centre tolerance, so a narrow tile still gets sane slack. */
+        const val MIN_CENTRE_SLACK_PX = 120
+
+        private const val TAG = "LayoutEngine"
 
         /**
          * Gaps measured from the END of the initial pass, not from apply().

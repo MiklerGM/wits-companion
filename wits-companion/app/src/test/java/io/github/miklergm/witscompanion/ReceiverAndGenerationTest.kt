@@ -205,6 +205,33 @@ class ReceiverAndGenerationTest {
             place.indexOf("PreservedInPlace") in 0 until place.lastIndexOf("launchIntoFreeform"))
     }
 
+    /**
+     * The post-apply verification repairs a layout that did not take (cold boot: freeform not ready
+     * yet). It must stay a bounded, guarded repair — never a standing watchdog that fights the user
+     * or the vendor stack.
+     */
+    @Test
+    fun `post-apply verification is bounded and guarded`() {
+        val src = sourceOf("layout/LayoutEngine.kt")
+        val schedule = src.substringAfter("private fun scheduleVerification(").substringBefore("\n    }")
+        assertTrue(
+            "bounded by the number of verify delays",
+            schedule.contains("attempt >= VERIFY_DELAYS_MS.size"),
+        )
+        assertTrue("privileged path only — it needs task observation", schedule.contains("isPrivileged"))
+
+        val verify = src.substringAfter("private fun verifyPlacement(").substringBefore("\n    }")
+        assertTrue("superseded applies must not correct", verify.contains("myGeneration != generation.get()"))
+        assertTrue("never repair a layout the user exited", verify.contains("!layoutOwned"))
+        assertTrue("never re-lay windows over the reverse camera", verify.contains("reverseGuard.check"))
+        assertTrue("correction carries the attempt budget", verify.contains("verifyAttempt = attempt + 1"))
+        assertTrue("correction is route-safe (repositions, not relaunches)", verify.contains("preserveLive"))
+
+        // Exit / reset must drop ownership, or a queued verification would undo the exit.
+        val unwindow = src.substringAfter("fun unwindowTiles(").substringBefore("\n    }")
+        assertTrue("exit drops layout ownership", unwindow.contains("layoutOwned = false"))
+    }
+
     /** Auto-starting our own panel is safe; doing it over the reverse camera is not. */
     @Test
     fun `cockpit autostart is opt-in and refused while reversing`() {

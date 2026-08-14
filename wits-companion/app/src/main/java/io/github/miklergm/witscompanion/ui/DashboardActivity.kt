@@ -751,6 +751,10 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     /** The Settings gear was tapped: show the config in the left tile and light the gear. */
     private fun onSettingsTap() {
         app.layoutRepository.cockpitLeft = CockpitLeft.Config
+        // Call off anything the engine still has queued for the layout we are replacing — in
+        // particular the post-apply verification, which would otherwise see "the map is missing"
+        // and re-assert the Cockpit over the config the user just opened.
+        app.layoutEngine.cancelPending()
         // Move the highlight onto the gear, dropping any app tile.
         settingsTile?.let { setTileSelected(it, selected = true, animate = true) }
         switcherTiles.forEach { (_, tile) -> setTileSelected(tile, selected = false) }
