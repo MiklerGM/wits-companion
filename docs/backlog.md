@@ -8,10 +8,11 @@ further down (linked by name).
 
 Things whose next step needs the car — verify a fix, or run a probe that only works there.
 
-- [ ] **N1 — the Cockpit's floating app (map) doesn't reach the front of its left tile** — the
-      panel (our own activity) tiles fine, but the foreign app stays behind the launcher. Two modes,
-      one root: *freeform placement / raise is unreliable*. Surfaced once the config stopped masking
-      it (`ba821ee`, 2026-08-11).
+- [x] **N1 — the Cockpit's floating app (map) doesn't reach the front of its left tile** — ✅ *BOTH
+      modes fixed + verified on-car 2026-08-17.* The panel (our own activity) tiled fine, but the
+      foreign app stayed behind the launcher. Surfaced once the config stopped masking it
+      (`ba821ee`, 2026-08-11). The two modes turned out to have **different** root causes — the
+      "freeform placement is unreliable" theory was only half right, and wrong for (b).
   - **(a) Raise after the vendor Home button / an app switch** — ✅ *FIXED + verified on-car
     2026-08-14 (`21e565f`): home→app fronts the map (logcat `START …apps.maps from uid 10163`).
     Gotcha: an earlier deploy showed no change because the build was **stale** — force a clean
@@ -27,9 +28,20 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
     - **Fix:** front the anchored app *always* — drop the `!preserve` from the engine's `bringToFront`;
       `place()`'s bring-to-front is already that same plain `startActivity` (`launchIntoFreeform`).
       One line. Verify on-car: home→app / hide→show front the map with no launcher peek, route intact.
-  - **(b) Cold boot** — autostart fires at ~12 s **before freeform is ready**, so the panel comes
-    up **fullscreen** (not a right tile) and the floating app isn't placed → panel content on the
-    right with a **black left strip** (its reservation), no map. Reproduced on 2 of 2 cold boots
+  - **(b) Cold boot** — ✅ *FIXED + verified on-car 2026-08-17 (`a83d7fb`).* **The freeform-readiness
+    race was a red herring.** Real cause: tapping an app in the Cockpit rail stores
+    `last_preset = anchored_<pkg>`, an **on-the-fly** preset that is never saved, so
+    `lastAppliedPreset()` resolved to **null** and the autostart applied *no layout at all* — it just
+    opened the panel. Hence "app tile lit but no app" (`cockpitLeft` persists fine; the preset did
+    not). Also explains the intermittency: after opening the Cockpit from Home the id was the
+    built-in `maps65_anchored`, which resolves. Proof in logcat: `autostart … -> open Cockpit (no
+    last layout)` → after the fix `autostart … preset=anchored_com.google.android.apps.maps ->
+    applied`, both tiles freeform+visible. Follow-ons: boot delay cut 12 s → 5 s (`ba933f1`, the long
+    wait had been guarding against this bug), and the post-apply verification (`70ad569`) stays as
+    the safety net for a genuine readiness race — it needed no correction at 5 s.
+    *Historic symptom description:* autostart fired at ~12 s, the panel came up **fullscreen** and
+    the floating app wasn't placed → panel content on the right with a **black left strip** (its
+    reservation), no map. Reproduced on 2 of 2 cold boots
     (`[RUNTIME]` 2026-08-11 + 2026-08-14; 2nd: Spotify session came up but no map, panel right / black
     left — milder than the earlier launcher-peek). ⏳ **IMPLEMENTED `70ad569` — verify on-car** (two
     cold boots in a row should come up map + panel; watch logcat `LayoutEngine: verify:`).
