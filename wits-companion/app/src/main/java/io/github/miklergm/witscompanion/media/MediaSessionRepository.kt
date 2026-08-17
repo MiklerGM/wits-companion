@@ -12,6 +12,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.util.Log
+import android.view.KeyEvent
 import io.github.miklergm.witscompanion.wits.WitsPackages
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -255,7 +256,17 @@ class MediaSessionRepository(
     // --------------------------------------------------------------- controls
 
     fun playPause() {
-        val c = controller ?: return
+        val c = controller
+        if (c == null) {
+            // No live session to command — the player has not run since boot, so there is nothing
+            // to control and the button used to be simply dead ("won't start playback until I open
+            // Spotify myself"). A media key still reaches the player's media-button receiver and
+            // cold-starts its playback service. `[RUNTIME]` 2026-08-17: with 0 sessions, a
+            // KEYCODE_MEDIA_PLAY brought Spotify up playing (state=3) **without** opening its UI, so
+            // the Cockpit keeps the map on screen.
+            dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
+            return
+        }
         if (c.playbackState?.state == PlaybackState.STATE_PLAYING) {
             c.transportControls.pause()
         } else {
@@ -263,8 +274,32 @@ class MediaSessionRepository(
         }
     }
 
-    fun next() = controller?.transportControls?.skipToNext()
-    fun previous() = controller?.transportControls?.skipToPrevious()
+    fun next() {
+        val c = controller
+        if (c == null) dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_NEXT)
+        else c.transportControls.skipToNext()
+    }
+
+    fun previous() {
+        val c = controller
+        if (c == null) dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS)
+        else c.transportControls.skipToPrevious()
+    }
+
+    /**
+     * Sends a media key the way a steering-wheel/headset button does, for when no MediaSession
+     * exists yet. The framework routes it to the last-known or manifest-registered media button
+     * receiver, which wakes the player's playback service. Requires the down/up pair — a lone
+     * ACTION_DOWN is ignored by most players.
+     */
+    private fun dispatchMediaKey(keyCode: Int) {
+        val audio = appContext.getSystemService(android.media.AudioManager::class.java) ?: return
+        runCatching {
+            audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+            audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
+            Log.d(TAG, "no session — dispatched media key $keyCode")
+        }.onFailure { Log.w(TAG, "dispatchMediaKeyEvent failed: ${it.javaClass.simpleName}") }
+    }
 
     /** Launches the player's own UI. */
     fun openPlayer(): android.content.Intent? {

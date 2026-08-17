@@ -570,7 +570,12 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         playPauseButton.text = if (snapshot.isPlaying) "⏸" else "▶"
         setTransportEnabled(
             prev = snapshot.canSkipPrevious,
-            playPause = snapshot.canPlay || snapshot.canPause,
+            // With no live session the player reports no actions at all — but play must stay
+            // tappable, because that is exactly the case it is for: it dispatches a media key that
+            // wakes the player's playback service (§ MediaSessionRepository.dispatchMediaKey). Left
+            // disabled, the fallback could never be reached and the button was simply dead until the
+            // user opened Spotify themselves (`[RUNTIME]` 2026-08-17).
+            playPause = snapshot.canPlay || snapshot.canPause || !snapshot.available,
             next = snapshot.canSkipNext,
         )
 
