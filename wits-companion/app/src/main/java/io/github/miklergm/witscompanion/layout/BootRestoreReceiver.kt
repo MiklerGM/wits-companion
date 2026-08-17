@@ -34,15 +34,20 @@ class BootRestoreReceiver : BroadcastReceiver() {
 
         // Let the launcher, CenterService and the MCU settle first. This is a non-blocking
         // postDelayed (the 80 s WIPE watchdog is unaffected); the only tension is *too early* —
-        // if freeform is not ready yet, the Cockpit opens full-screen without the map until a tap.
-        // 12 s trades a shorter wait for a slightly higher chance of that (was 30 s). If the panel
-        // routinely opens map-less on a cold boot, raise this.
+        // if freeform is not ready yet, the Cockpit can open full-screen without the map.
+        //
+        // 30 s → 12 s → 5 s. The long delays were guarding against "map-less cold boot", but that
+        // turned out to be an unresolvable last-preset id, not freeform readiness (`[RUNTIME]`
+        // 2026-08-17, see LayoutRepository.rebuiltAnchored). What remains of the early-fire risk is
+        // now covered by the post-apply verification, which re-asserts the layout at +3 s / +8 s if
+        // it did not take. BOOT_COMPLETED already lands well after the screen is touchable, so this
+        // delay is pure added wait for the driver.
         Handler(Looper.getMainLooper()).postDelayed({
             app.recoveryCoordinator.onBootCompleted(app.carStateRepository.state)
         }, BOOT_DELAY_MS)
     }
 
     private companion object {
-        const val BOOT_DELAY_MS = 12_000L
+        const val BOOT_DELAY_MS = 5_000L
     }
 }
