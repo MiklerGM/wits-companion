@@ -572,17 +572,22 @@ activity recreation (e.g. a day/night flip). Now the floating package is remembe
 - **[DONE]** Panel reservation is now side-aware (was: only a left-anchored map). With the map swapped to the right,
   the reserve-left logic returns 0 and the panel goes full-width (content then risks sitting
   under the map). Make the reservation side-aware, or fix the map to one side.
-- **Media widget sometimes doesn't attach to Spotify** (`[RUNTIME]`, intermittent) — the panel's
-  play/pause won't start playback until Spotify itself is opened once. There is a MediaSession to
-  *control*, but nothing to command until the app has been foregrounded / has an active session.
-  Options: nudge the session (a transport that wakes it), or detect "no controllable session" and
-  show an "open Spotify" hint instead of a dead button.
+- **Media widget doesn't attach to Spotify** — ⏳ *FIXED `d91753e`, deployed, **button itself not yet
+  tapped on-car***. Diagnosed 2026-08-17: nothing to do with notification access (the listener is
+  enabled and bound). `dumpsys media_session` reported **0 sessions** — until the player has run
+  there is no MediaSession, so `playPause()` returned early *and* the button was disabled anyway
+  (a session-less player advertises no actions), which made any fallback unreachable. Now a media
+  key is dispatched instead, and play stays enabled exactly in that case. Probed live: with 0
+  sessions a `KEYCODE_MEDIA_PLAY` woke Spotify playing (`state=3`) **without** opening its UI.
+  **Verify next drive**: cold boot → tap play → music starts, map stays on screen.
 - **Surface the car's own Settings next to the Hotspot tile** — a shortcut to the vendor car
   settings from the Cockpit panel (like the Hotspot pill), and consider an Android-settings
   shortcut in the same row (earlier note). One quick-access row: Hotspot · Car settings · Android
   settings.
-- **Tone down the play/pause colour** — the accent play/pause reads too orange; mute it toward a
-  more neutral tint (raised more than once). Part of a media-card palette pass.
+- **Tone down the play/pause colour** — ⏳ *DONE `33fef75`, **not yet deployed** (unit went offline
+  mid-session).* The button and track title are now neutral; the accent survives only in the soft
+  card wash and the thin progress line. Also fixed a latent day-mode contrast bug (white glyph on a
+  light fill when no accent existed). **Deploy + eyeball next drive.**
 
 ## UI
 
