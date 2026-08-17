@@ -48,7 +48,28 @@ class LayoutRepository(context: Context) {
         get() = prefs.getBoolean(KEY_SWAPPED, false)
         set(v) = prefs.edit().putBoolean(KEY_SWAPPED, v).apply()
 
-    fun preset(id: String): LayoutPreset? = allPresets().firstOrNull { it.id == id }
+    fun preset(id: String): LayoutPreset? =
+        allPresets().firstOrNull { it.id == id } ?: rebuiltAnchored(id)
+
+    /**
+     * Rebuilds one of the switcher's **on-the-fly** anchored presets from its id.
+     *
+     * Tapping an app in the Cockpit rail applies `DefaultPresets.anchoredFor(pkg)`, whose id is
+     * `anchored_<pkg>`. Those are built on demand and never stored, so [allPresets] cannot contain
+     * them and [lastAppliedPreset] used to resolve to **null** for the most common case of all —
+     * "the last thing I did was switch the floating app". The autostart then found no layout to
+     * restore and merely opened the panel: the Cockpit came up full-screen with the app tile lit but
+     * **no app placed** (`[RUNTIME]` 2026-08-17 cold boot: `autostart … -> open Cockpit (no last
+     * layout)`, panel `mode=fullscreen`, no Maps task). Reconstructing the preset makes the restore
+     * work exactly as it does for a built-in one.
+     *
+     * The label is only used for the title, so the package name is a fine stand-in here.
+     */
+    private fun rebuiltAnchored(id: String): LayoutPreset? {
+        if (!id.startsWith(DefaultPresets.ANCHORED_ID_PREFIX)) return null
+        val pkg = id.removePrefix(DefaultPresets.ANCHORED_ID_PREFIX).takeIf { it.isNotEmpty() } ?: return null
+        return applyTweaks(DefaultPresets.anchoredFor(pkg, pkg))
+    }
 
     fun customPresets(): List<LayoutPreset> {
         val raw = prefs.getString(KEY_CUSTOM_PRESETS, null) ?: return emptyList()

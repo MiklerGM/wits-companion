@@ -353,7 +353,7 @@ object DefaultPresets {
      * [LayoutPreset.withGeometry] from the user's single split setting.
      */
     fun anchoredFor(packageName: String, label: String): LayoutPreset = LayoutPreset(
-        id = "anchored_$packageName",
+        id = "$ANCHORED_ID_PREFIX$packageName",
         title = "$label over panel",
         kind = PresetKind.ANCHORED,
         windows = listOf(
@@ -383,6 +383,14 @@ object DefaultPresets {
             LayoutWindow(rightPackage, NormalizedBounds(LayoutPreset.DEFAULT_SPLIT, 0f, 1f, 1f), focusOrder = 1),
         ),
     )
+
+    /**
+     * Id prefix of the switcher's on-the-fly anchored presets (`anchored_<pkg>`). They are built on
+     * demand and never stored, so [LayoutRepository.preset] rebuilds them from the id — otherwise
+     * "restore the last layout" cannot resolve the most common case of all (the last thing the user
+     * did was switch the Cockpit's floating app).
+     */
+    const val ANCHORED_ID_PREFIX = "anchored_"
 
     const val ID_MAPS_SPOTIFY = "maps65_spotify35"
     const val ID_MAPS_CHROME = "maps65_chrome35"
