@@ -622,10 +622,14 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     }
 
     /**
-     * Paints the media card and the play button with [accent] (or neutral when null).
-     * The card fill is a soft wash of the accent so text stays readable; the play button
-     * is the solid accent. In day mode the accent is darkened for contrast on the light
-     * panel; the track text follows so it reads against the wash.
+     * Paints the media card from [accent] (or neutral when null).
+     *
+     * The accent survives only where it is quiet: a soft wash behind the card and the thin progress
+     * line. The **play button and the track text stay neutral** — carrying the album/brand colour
+     * there made the control glow yellow/orange depending on the cover, which is exactly the kind of
+     * loud, shifting colour a driving surface should not have (reported twice, `[RUNTIME]`
+     * 2026-08-17). Neutral also fixes the day-mode contrast: a white glyph used to sit on a light
+     * fill whenever no accent was available.
      */
     private fun tintMediaCard(accent: Int?) {
         val neutral = if (palette.night) Color.parseColor("#161618") else Color.parseColor("#F0F0F3")
@@ -634,23 +638,14 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         mediaCard.background = android.graphics.drawable.GradientDrawable().apply {
             cornerRadius = pad(20).toFloat(); setColor(cardFill)
         }
-        // The play button carries the accent but calmed down — a desaturated, moderate tone
-        // rather than the full album/brand colour, which read as too loud (e.g. bright orange).
-        val button = a?.let { calm(it) } ?: (if (palette.night) Color.parseColor("#3A3A40") else Color.parseColor("#C8C8CE"))
+        // One steady neutral in each theme, with a glyph that actually reads against it.
+        val button = if (palette.night) Color.parseColor("#3A3A40") else Color.parseColor("#DCDCE2")
         playPauseButton.background = android.graphics.drawable.GradientDrawable().apply {
             shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(button)
         }
-        trackView.setTextColor(if (a == null) palette.foreground else a)
+        playPauseButton.setTextColor(if (palette.night) Color.WHITE else palette.foreground)
+        trackView.setTextColor(palette.foreground)
         progressBar.progressTintList = android.content.res.ColorStateList.valueOf(a ?: palette.muted)
-    }
-
-    /** Desaturates and moderates a colour so it reads calm rather than loud (for the play button). */
-    private fun calm(color: Int): Int {
-        val hsv = FloatArray(3)
-        Color.colorToHSV(color, hsv)
-        hsv[1] *= 0.55f                        // roughly half the saturation
-        hsv[2] = hsv[2].coerceIn(0.42f, 0.70f) // keep it mid-tone, never glaring
-        return Color.HSVToColor(hsv)
     }
 
     /** Blends [color] over [base] at [alpha] — a soft tint without needing alpha compositing. */
