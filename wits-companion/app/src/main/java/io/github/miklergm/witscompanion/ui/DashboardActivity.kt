@@ -385,10 +385,23 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     override fun onResume() {
         super.onResume()
         applyImmersive()
+        // The rail's highlights are set when the view is built, but the left tile can change while
+        // the panel sits in the background — the config screen applies a layout (Cockpit card, a
+        // preset) and finishes, and we come back to front without being recreated. Re-read the state
+        // so the lit tile matches reality: otherwise the gear stays lit after Settings → Cockpit even
+        // though the map is now floating (`[RUNTIME]` 2026-08-17).
+        refreshRailSelection()
         // The panel is brought to the front as a freeform window, but a relaunch's setLaunchBounds
         // is ignored once the task exists, so it can arrive full-screen. Correct its own bounds to
         // the intended tile (or full, when hidden). Posted so the window metrics are settled first.
         ui.post { ensurePanelBounds() }
+    }
+
+    /** Lights exactly the rail entry the current [CockpitLeft] calls for — gear, one app, or none. */
+    private fun refreshRailSelection() {
+        settingsTile?.let { setTileSelected(it, app.layoutRepository.cockpitLeft is CockpitLeft.Config) }
+        val current = currentFloatingPackage()
+        switcherTiles.forEach { (pkg, tile) -> setTileSelected(tile, pkg == current) }
     }
 
     /**
