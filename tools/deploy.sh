@@ -60,6 +60,15 @@ pick_device() {
 
 install() {
   [ -n "$SERIAL" ] || pick_device
+  # Fail fast when the serial is not actually connected. A typo'd IP (or a unit that
+  # dropped off wifi) otherwise sails all the way through to "done" while nothing was
+  # installed, and the next test silently runs the OLD build — this cost several
+  # on-car test cycles before it was spotted.
+  if ! "$ADB" devices | awk 'NR>1 && $2=="device"{print $1}' | grep -qx "$SERIAL"; then
+    echo "!! device '$SERIAL' is not connected. Connected devices:"
+    "$ADB" devices
+    exit 1
+  fi
   echo "== installing $VARIANT → $SERIAL =="
   local out
   out=$("$ADB" -s "$SERIAL" install -r -d "$APK" 2>&1) || true
@@ -67,8 +76,11 @@ install() {
   if ! echo "$out" | grep -q Success; then
     echo "== retrying after uninstall (signature/downgrade clash) =="
     "$ADB" -s "$SERIAL" uninstall "$PKG" >/dev/null 2>&1 || true
-    "$ADB" -s "$SERIAL" install "$APK"
+    out=$("$ADB" -s "$SERIAL" install "$APK" 2>&1) || true
+    echo "$out"
   fi
+  # Never report success we did not get: "done" must mean the APK is on the device.
+  echo "$out" | grep -q Success || { echo "!! install FAILED on $SERIAL — the device still runs the previous build"; exit 1; }
   echo "== done: $VARIANT on $SERIAL =="
 }
 
