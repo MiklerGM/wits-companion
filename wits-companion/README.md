@@ -3,7 +3,7 @@
 Companion app for Witstek/XTRONS BMW head units. Uses only vendor APIs that already
 exist in the shipped firmware — no root, no platform signature, no partition changes.
 
-Full documentation: [`../docs/`](../docs/). Start with [`../docs/README.md`](../docs/README.md).
+Full documentation: [`../docs/`](../docs/). Start with [`../docs/window-management.md`](../docs/window-management.md).
 
 ## Namespace
 
@@ -14,7 +14,7 @@ namespace was present in this workspace.
 
 ```sh
 ./gradlew :app:assembleDebug      # -> app/build/outputs/apk/debug/app-debug.apk
-./gradlew :app:testDebugUnitTest  # 38 unit tests
+./gradlew :app:testDebugUnitTest  # unit tests
 ```
 
 Requires JDK 17 and an Android SDK with platform 35. Set `sdk.dir` in

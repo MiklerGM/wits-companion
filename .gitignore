@@ -1,0 +1,24 @@
+# Build output
+wits-companion/.gradle/
+wits-companion/build/
+wits-companion/app/build/
+wits-companion/local.properties
+.gradle/
+build/
+*.iml
+.idea/
+
+# Signing material — the platform key of a head unit is never committed
+tools/platform-key/
+*.p12
+*.jks
+*.pk8
+*.keystore
+
+# Device captures and vendor firmware artifacts stay out of this repository
+*.zip
+*.img
+*.apk
+!wits-companion/gradle/wrapper/*.jar
+logs/
+*.logcat
