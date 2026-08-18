@@ -70,6 +70,7 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
 - [x] **Cockpit floating-app switch returns to Maps** — *fixed + verified 2026-08-03.* Two-tile
       mode had broken it: parking to fullscreen made the previous app cover the screen and the
       new one couldn't reach the front (§ Layout placement → floating-app switch).
+- [ ] **Screenshots of the Cockpit for the public README** — grab a few on the head unit (`adb exec-out screencap -p > shot.png`): two-tile Cockpit with the map, the hidden/full-panel state, the rail with Settings lit. Check them for anything personal before publishing — a map centred on home, a track title, a visible SSID. They make the public repo far more legible than prose.
 - [x] **Eyeball the right-hand control rail** — *verified 2026-08-07: proportions/tap-targets look
       right on the real panel; Settings top, Exit bottom.*
 - [x] **Cockpit hide-toggle** — *verified 2026-08-07: two-tile → tap the active tile → app hidden
