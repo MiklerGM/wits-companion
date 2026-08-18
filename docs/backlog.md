@@ -11,24 +11,24 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
 - [x] **N1 — the Cockpit's floating app (map) doesn't reach the front of its left tile** — ✅ *BOTH
       modes fixed + verified on-car 2026-08-17.* The panel (our own activity) tiled fine, but the
       foreign app stayed behind the launcher. Surfaced once the config stopped masking it
-      (`fa96fca`, 2026-08-11). The two modes turned out to have **different** root causes — the
+      (`20e138c`, 2026-08-11). The two modes turned out to have **different** root causes — the
       "freeform placement is unreliable" theory was only half right, and wrong for (b).
   - **(a) Raise after the vendor Home button / an app switch** — ✅ *FIXED + verified on-car
-    2026-08-14 (`0bd9a48`): home→app fronts the map (logcat `START …apps.maps from uid 10163`).
+    2026-08-14 (`4a03eba`): home→app fronts the map (logcat `START …apps.maps from uid 10163`).
     Gotcha: an earlier deploy showed no change because the build was **stale** — force a clean
     rebuild after this kind of one-line engine change.* On a route-safe reassert the anchored app was
     preserved/resized in place (no reorder) and never fronted, so the map stayed behind the launcher.
     **Probed on the head unit** (cockpit up, map z-behind the launcher, `visible=false`):
     - `am stack move-task <t> <ownRoot> true` → **no-op** (moving a task into its own root does not
       reorder the display); `am stack move-stack` → not on this build; `startActivityFromRecents`
-      (tried `4a24242`, reverted `6f50545`) → **EXCLUSIVE**, hid the panel (`visible=false`).
+      (tried `79bd869`, reverted `446daa1`) → **EXCLUSIVE**, hid the panel (`visible=false`).
     - **A plain `am start` of the map → brought the existing task to the front over the launcher
       (`visible=true`) and left the panel `visible=true`** — non-exclusive, logged *"brought to the
       front"* (task reused, no relaunch → Maps route intact). That is the primitive.
     - **Fix:** front the anchored app *always* — drop the `!preserve` from the engine's `bringToFront`;
       `place()`'s bring-to-front is already that same plain `startActivity` (`launchIntoFreeform`).
       One line. Verify on-car: home→app / hide→show front the map with no launcher peek, route intact.
-  - **(b) Cold boot** — ✅ *FIXED + verified on-car 2026-08-17 (`e8526b5`).* **The freeform-readiness
+  - **(b) Cold boot** — ✅ *FIXED + verified on-car 2026-08-17 (`6795a71`).* **The freeform-readiness
     race was a red herring.** Real cause: tapping an app in the Cockpit rail stores
     `last_preset = anchored_<pkg>`, an **on-the-fly** preset that is never saved, so
     `lastAppliedPreset()` resolved to **null** and the autostart applied *no layout at all* — it just
@@ -36,14 +36,14 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
     not). Also explains the intermittency: after opening the Cockpit from Home the id was the
     built-in `maps65_anchored`, which resolves. Proof in logcat: `autostart … -> open Cockpit (no
     last layout)` → after the fix `autostart … preset=anchored_com.google.android.apps.maps ->
-    applied`, both tiles freeform+visible. Follow-ons: boot delay cut 12 s → 5 s (`dd065fc`, the long
-    wait had been guarding against this bug), and the post-apply verification (`318b010`) stays as
+    applied`, both tiles freeform+visible. Follow-ons: boot delay cut 12 s → 5 s (`88fa716`, the long
+    wait had been guarding against this bug), and the post-apply verification (`8c023f2`) stays as
     the safety net for a genuine readiness race — it needed no correction at 5 s.
     *Historic symptom description:* autostart fired at ~12 s, the panel came up **fullscreen** and
     the floating app wasn't placed → panel content on the right with a **black left strip** (its
     reservation), no map. Reproduced on 2 of 2 cold boots
     (`[RUNTIME]` 2026-08-11 + 2026-08-14; 2nd: Spotify session came up but no map, panel right / black
-    left — milder than the earlier launcher-peek). ⏳ **IMPLEMENTED `318b010` — verify on-car** (two
+    left — milder than the earlier launcher-peek). ⏳ **IMPLEMENTED `8c023f2` — verify on-car** (two
     cold boots in a row should come up map + panel; watch logcat `LayoutEngine: verify:`).
     Built as a **post-apply verification**, not a standing watchdog: each apply captures what it
     intended to place and re-checks at +3 s / +8 s, correcting only on a real mismatch. The yardstick
@@ -75,19 +75,19 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       right on the real panel; Settings top, Exit bottom.*
 - [x] **Cockpit hide-toggle** — *verified 2026-08-07: two-tile → tap the active tile → app hidden
       (black left, panel right, no tile lit) → tap any tile → app back. No crash.*
-- [x] **Settings opens as the Cockpit's LEFT TILE** — *verified on-car 2026-08-08* (`4f75c13` +
-      `09fa5ca`). The gear launches MainActivity freeform into the app/left tile (self-resizing its
+- [x] **Settings opens as the Cockpit's LEFT TILE** — *verified on-car 2026-08-08* (`ad7aa5b` +
+      `ed82d78`). The gear launches MainActivity freeform into the app/left tile (self-resizing its
       own task via `ensureConfigTileBounds`), panel stays right, top bar present, nothing
       un-windowed/finished. Open app → Cockpit; gear → config left + panel right; tap Maps → map
       returns. *(Replaced the full-screen-config approach, which raced with the ROM's missing
       `setTaskWindowingMode` + autostart `reassert` and closed the app to the vendor launcher.)*
       Minor: switching Maps back sometimes needs a second tap (the pre-existing autostart placement
       timing, not Settings-specific).
-- [ ] **Exit un-windows the apps** — *`b18beff` (verify).* Same root cause; Exit now clears freeform
+- [ ] **Exit un-windows the apps** — *`5671e0a` (verify).* Same root cause; Exit now clears freeform
       tiles then goes home. After Exit, re-opening navigation should be **fullscreen**, not windowed.
-- [x] **Panel is a real right-hand tile, not full-screen** — *verified 2026-08-08* (`9f04dc5`):
+- [x] **Panel is a real right-hand tile, not full-screen** — *verified 2026-08-08* (`04e5e88`):
       cockpit task is `~[1560,99][2400,900]`, not `[0,0][2400,900]`; app-switching is smooth, offset gone.
-- [x] **Hidden state hides the top strip** — *verified 2026-08-08* (`99d74ac`): in the hidden/full-screen
+- [x] **Hidden state hides the top strip** — *verified 2026-08-08* (`76ab0c6`): in the hidden/full-screen
       panel the vendor strip is gone (like the speedometer dashboard), swipe-from-top reveals it; two-tile keeps it.
 - [ ] **Top bar hide/reveal (general)** — mechanism now known: `FLAG_FULLSCREEN` / immersive
       (§ Status bar). Only applied in the hidden state above; the two-tile bar is intentionally kept.
@@ -127,17 +127,17 @@ Things doable now, without the car.
 - [ ] **Study the vendor "Car Device" source and the vendor dashboard** — what they switch to /
       which properties they read (§ Vendor integration).
 - [x] **Spotify top-left flicker** — *dropped 2026-08-09: no longer observed by the user, closing.*
-- [x] **Cockpit right-hand control column** — *implemented 2026-08-03* (`b3f1b33`): main column
+- [x] **Cockpit right-hand control column** — *implemented 2026-08-03* (`785dd33`): main column
       (media + hotspot + brightness) + narrow rail with Settings (gear) top, the app switcher
       vertical, Exit (reset) pinned bottom; no more ScrollView/footer. Verified structurally on
       the emulator (clipped there by the freeform cascade). **Eyeball on the car** — see On-car
       checklist. Still to do: the "Cockpit" name check (§ UI).
 - [ ] **Volume: read-only probe scaffolding** (verify-first), no active pinning yet (§ Volume).
-- [x] **Refresh Brightness values** — *done 2026-08-06* (`9073cf8`): the label refreshes on
+- [x] **Refresh Brightness values** — *done 2026-08-06* (`25f9fe6`): the label refreshes on
       resume and observes `SCREEN_BRIGHTNESS`, so a system day/night change is reflected live.
-- [x] **Play and Pause** button styles — *done 2026-08-06* (`9073cf8`): fill is a desaturated,
+- [x] **Play and Pause** button styles — *done 2026-08-06* (`25f9fe6`): fill is a desaturated,
       mid-tone `calm()` of the album/brand accent instead of the full (loud) colour.
-- [x] **Floating apps** tile style — *done 2026-08-06* (`9073cf8`): dropped the selected-tile
+- [x] **Floating apps** tile style — *done 2026-08-06* (`25f9fe6`): dropped the selected-tile
       outline (soft pill + bold label + dimmed neighbours already mark the active app); the
       "Floating app" category label was already removed in the rail refactor.
 
@@ -300,7 +300,7 @@ match exactly and `hiCarDensity=300` exists — verify the panel density when ba
   - Related: post-boot the tiles land at `top=0` (under the bar) not `top=99` — the `top` inset
     (`status_bar_height`) may read 0 in the freeform tile; the panel content then tucks under the
     bar. Fixing that inset is the smaller, doable win if we keep the bar.
-  - **[FIXED 2026-08-06 — content no longer tucks under the strip] (`819721e`, DashboardActivity
+  - **[FIXED 2026-08-06 — content no longer tucks under the strip] (`38ad026`, DashboardActivity
     inset guard).** The intermittent zero top-inset was letting our own content slide under the
     bar — reproducible as "open the Cockpit, come back to Settings, and Settings flies under the
     top bar". Both fullscreen windows now floor the top with the framework `status_bar_height`:
@@ -415,7 +415,7 @@ map, no tiles). The user considers this normal-ish — **after one manual tap on
 
 ## Layout placement (needs on-car re-test)
 
-- **[FIX IMPLEMENTED 2026-08-07 `b18beff` — verify on car] `setTaskWindowingMode` does not exist
+- **[FIX IMPLEMENTED 2026-08-07 `5671e0a` — verify on car] `setTaskWindowingMode` does not exist
   on this ROM (broke BOTH Settings and Exit).** Logcat on the head unit: `PrivWindowController: setTaskWindowingMode
   failed: NoSuchMethodException` → `privileged place failed ... setTaskWindowingMode returned false`
   for every tile. Confirmed in the decompiled framework: `android/app/IActivityTaskManager.java`
@@ -435,7 +435,7 @@ map, no tiles). The user considers this normal-ish — **after one manual tap on
   `place()`'s "not visible" branch **not** fall through to a launch when the intent was to un-window
   (pass the intent through, or guard the fallback). Re-verify Settings + Exit after. Same privileged
   layer as the panel-resize fix — do them together.
-- **[FIX IMPLEMENTED 2026-08-07 `9f04dc5` — verify on car] The Cockpit panel stayed a FULL-screen
+- **[FIX IMPLEMENTED 2026-08-07 `04e5e88` — verify on car] The Cockpit panel stayed a FULL-screen
   window instead of shrinking to the right complement tile.** Fix: `DashboardActivity` resizes its
   own task (`getTaskId()` + `resizeTaskTo` → `LayoutEngine.cockpitPanelBounds`) in `onResume` /
   `onConfigurationChanged`, since a relaunch's `setLaunchBounds` is ignored once the task exists.
@@ -456,7 +456,7 @@ map, no tiles). The user considers this normal-ish — **after one manual tap on
   `TaskSnapshot` so `DashboardActivity` can be told apart from `MainActivity`) and
   `setTaskWindowingMode(FREEFORM)` + `resizeTask(panelBounds)` it. Then the panel becomes a real
   `1560–2400` tile and the switch/flicker jank should go. Verify Settings/Exit again after.
-  *(Inset + content-offset were fixed on-car 2026-08-07, `d05c6e3`; those were separate.)*
+  *(Inset + content-offset were fixed on-car 2026-08-07, `3632f47`; those were separate.)*
 - **[FIXED + verified 2026-08-03] Cockpit floating-app switch could not return to Maps; the
   previous app covered the screen full-size.** A consequence of the panel-as-tile change:
   `parkStaleWindows` parked the previous floating app by resizing it to the *full display*
@@ -573,7 +573,7 @@ activity recreation (e.g. a day/night flip). Now the floating package is remembe
 - **[DONE]** Panel reservation is now side-aware (was: only a left-anchored map). With the map swapped to the right,
   the reserve-left logic returns 0 and the panel goes full-width (content then risks sitting
   under the map). Make the reservation side-aware, or fix the map to one side.
-- **Media widget doesn't attach to Spotify** — ⏳ *FIXED `f28f3be`, deployed, **button itself not yet
+- **Media widget doesn't attach to Spotify** — ⏳ *FIXED `196c8b8`, deployed, **button itself not yet
   tapped on-car***. Diagnosed 2026-08-17: nothing to do with notification access (the listener is
   enabled and bound). `dumpsys media_session` reported **0 sessions** — until the player has run
   there is no MediaSession, so `playPause()` returned early *and* the button was disabled anyway
@@ -585,7 +585,7 @@ activity recreation (e.g. a day/night flip). Now the floating package is remembe
   settings from the Cockpit panel (like the Hotspot pill), and consider an Android-settings
   shortcut in the same row (earlier note). One quick-access row: Hotspot · Car settings · Android
   settings.
-- **Tone down the play/pause colour** — ⏳ *DONE `8040d4b`, **not yet deployed** (unit went offline
+- **Tone down the play/pause colour** — ⏳ *DONE `90279aa`, **not yet deployed** (unit went offline
   mid-session).* The button and track title are now neutral; the accent survives only in the soft
   card wash and the thin progress line. Also fixed a latent day-mode contrast bug (white glyph on a
   light fill when no accent existed). **Deploy + eyeball next drive.**
