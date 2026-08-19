@@ -136,8 +136,18 @@ Things doable now, without the car.
       equivalent, and it works **only where we are exclusively full-screen** (the Cockpit's
       hidden state). Beside a freeform app the bar is not ours to hide, and `FORCE_FULLSCREEN`
       is system-owned, so there is no app-side lever for the two-tile case.
-- [ ] **Study the vendor "Car Device" source** — what it switches to / which properties it
-      reads (§ Vendor integration). The dashboard half of this item is closed above.
+- [x] **Study the vendor "Car Device" source** — *done 2026-08-19, from the decompiled launcher.*
+      It is **not an app**: the launcher card is `Id8UgCarDevicesFragment`, whose click calls
+      `LauncherViewModel.openCar()` → `UtilExport.sendKey(context, -78, 0)` — an **MCU key that
+      switches the head unit to the OEM/car source**, not an activity launch. Same file confirms
+      the settings entry we now use: `openSettings()` opens
+      `com.wits.settings/com.wits.settings.SettingsActivity`.
+      Wiring a Cockpit button for it is cheap — `WitsSourceController.switchToOem()` already
+      exists, guarded and rate-limited, just unused by any UI. Two cautions before doing it:
+      it hands the panel to the OEM image entirely (an Exit-class action, so it belongs beside
+      Exit in the rail, not in the quick row where a mis-tap costs you the map), and § Source
+      switching records an unresolved "OEM bounce" — Android → OEM → Android jumping around.
+      Verify on-car before trusting it.
 - [x] **Spotify top-left flicker** — *dropped 2026-08-09: no longer observed by the user, closing.*
 - [x] **Cockpit right-hand control column** — *implemented 2026-08-03* (`785dd33`): main column
       (media + hotspot + brightness) + narrow rail with Settings (gear) top, the app switcher
