@@ -70,6 +70,20 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
 - [x] **Cockpit floating-app switch returns to Maps** — *fixed + verified 2026-08-03.* Two-tile
       mode had broken it: parking to fullscreen made the previous app cover the screen and the
       new one couldn't reach the front (§ Layout placement → floating-app switch).
+- [ ] **Bind a hardware button to the Cockpit via the vendor `NaviApp` slot** — *zero-code
+      experiment, found 2026-08-19.* The vendor keeps its navigation app in
+      `Settings.System."NaviApp"` as a **package name** (decompiled: `String naiPackge =
+      Settings.System.getString(cr, "NaviApp")`), and its picker already enumerates us —
+      logcat: `ScanNaviList: findAppListByPackage: packageName=io.github.miklergm.witscompanion`.
+      So any control wired to "navigation" (the launcher shortcut, a steering `Map_key`, the
+      physical map/menu button) could land on the companion:
+      `adb shell settings put system NaviApp io.github.miklergm.witscompanion`
+      (note the current value first, e.g. `settings get system NaviApp`, to restore it).
+      It opens `MainActivity`, so it only lands in the Cockpit when **"Open the last layout
+      when the app is opened"** is on — then the autostart brings the tiles up and the config
+      yields to the back (the path fixed in `20e138c`). Caveat: this takes the navi slot away
+      from Maps, so the launcher's own navi card/guide may change behaviour — try it, and set
+      the package back if anything vendor-side depends on it.
 - [ ] **Screenshots of the Cockpit for the public README** — grab a few on the head unit (`adb exec-out screencap -p > shot.png`): two-tile Cockpit with the map, the hidden/full-panel state, the rail with Settings lit. Check them for anything personal before publishing — a map centred on home, a track title, a visible SSID. They make the public repo far more legible than prose.
 - [x] **Eyeball the right-hand control rail** — *verified 2026-08-07: proportions/tap-targets look
       right on the real panel; Settings top, Exit bottom.*
