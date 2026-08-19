@@ -89,8 +89,11 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       cockpit task is `~[1560,99][2400,900]`, not `[0,0][2400,900]`; app-switching is smooth, offset gone.
 - [x] **Hidden state hides the top strip** — *verified 2026-08-08* (`76ab0c6`): in the hidden/full-screen
       panel the vendor strip is gone (like the speedometer dashboard), swipe-from-top reveals it; two-tile keeps it.
-- [ ] **Top bar hide/reveal (general)** — mechanism now known: `FLAG_FULLSCREEN` / immersive
-      (§ Status bar). Only applied in the hidden state above; the two-tile bar is intentionally kept.
+- [x] **Top bar hide/reveal (general)** — *closed as understood, not as "do it".* Hiding works only
+      when we are exclusively full-screen (the Cockpit's hidden state, verified 2026-08-08). In the
+      two-tile state the bar belongs to the display, not to our window, and the system-owned
+      `FORCE_FULLSCREEN` is the only global lever — an app cannot set it (§ Status bar). So the
+      two-tile bar stays, by constraint rather than by choice.
 - [~] **zlink resolution** — *root cause found 2026-08-03:* AA res = `panel × aaDensity/hiCarDensity`
       = `2400×900 × 160/300 = 1280×480`. **Lever: `persist.zj.dpi.aaDensity`** (unset→160); set
       240 → 1920×720. (`rw.zlink.resize=true` blanks the mirror — ruled out.) Next time: set it,
@@ -122,10 +125,19 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
 
 Things doable now, without the car.
 
-- [ ] **Send `MainActivity` fully behind the Cockpit tiles** so it can't peek in uncovered
-      strips (§ Cockpit: play hides the map — follow-ups).
-- [ ] **Study the vendor "Car Device" source and the vendor dashboard** — what they switch to /
-      which properties they read (§ Vendor integration).
+- [x] **Send `MainActivity` fully behind the Cockpit tiles** — *done + verified on-car
+      2026-08-17.* Every path is covered: applying a layout from the config finishes it
+      (`openCockpit` / `applyFromHome` / `applyPreset`), and a standalone open whose autostart
+      brings the Cockpit up yields with `moveTaskToBack` (`20e138c`, MainActivity.yieldToCockpit).
+      This is what removed the "full-screen settings visible behind the tiles" overlap.
+- [x] **Study the vendor dashboard** — *done 2026-08-06, see § Status bar → "Source study".*
+      The strip is a standard AOSP status bar, re-skinned; the dashboard does **not** hide it
+      dynamically — every WitsLauncher activity just sets `FLAG_FULLSCREEN`. We do the modern
+      equivalent, and it works **only where we are exclusively full-screen** (the Cockpit's
+      hidden state). Beside a freeform app the bar is not ours to hide, and `FORCE_FULLSCREEN`
+      is system-owned, so there is no app-side lever for the two-tile case.
+- [ ] **Study the vendor "Car Device" source** — what it switches to / which properties it
+      reads (§ Vendor integration). The dashboard half of this item is closed above.
 - [x] **Spotify top-left flicker** — *dropped 2026-08-09: no longer observed by the user, closing.*
 - [x] **Cockpit right-hand control column** — *implemented 2026-08-03* (`785dd33`): main column
       (media + hotspot + brightness) + narrow rail with Settings (gear) top, the app switcher
