@@ -84,6 +84,12 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       yields to the back (the path fixed in `20e138c`). Caveat: this takes the navi slot away
       from Maps, so the launcher's own navi card/guide may change behaviour — try it, and set
       the package back if anything vendor-side depends on it.
+      **Probably the better slot: `defPlayApp`** (the music app). Same mechanism —
+      `LauncherViewModel.openMusic()` reads it and calls `getLaunchIntentForPackage(pkg)` — but it
+      does *not* take the navigation slot away from Maps, and the panel genuinely is a media
+      surface. Both slots are settable from the **vendor's own settings UI**, no adb:
+      `DialogViews` writes them from lists built by `ScanDevList`/`ScanNaviList`, which enumerate
+      every app with a LAUNCHER activity — so the companion shows up in both pickers.
 - [ ] **Screenshots of the Cockpit for the public README** — grab a few on the head unit (`adb exec-out screencap -p > shot.png`): two-tile Cockpit with the map, the hidden/full-panel state, the rail with Settings lit. Check them for anything personal before publishing — a map centred on home, a track title, a visible SSID. They make the public repo far more legible than prose.
 - [x] **Eyeball the right-hand control rail** — *verified 2026-08-07: proportions/tap-targets look
       right on the real panel; Settings top, Exit bottom.*
