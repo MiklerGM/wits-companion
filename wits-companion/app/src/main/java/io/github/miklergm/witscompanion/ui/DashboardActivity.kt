@@ -242,9 +242,16 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         // glance and it need not be reached through the quick-settings shade (two pulls). It
         // sizes to its content rather than spanning the column, so it reads as a button, not a
         // banner. Hidden entirely if the platform cannot even report hotspot state.
+        // One quick row: hotspot state, and shortcuts into the two settings apps. They open
+        // full-screen on purpose — see [openFullScreen].
+        val quickRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(MATCH, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
         if (app.hotspotController.isSupported()) {
             hotspotIcon = TextView(this).apply {
-                text = "📶"; textSize = 15f; setPadding(0, 0, pad(8), 0)
+                text = "📡"; textSize = 15f; setPadding(0, 0, pad(8), 0)
             }
             hotspotText = TextView(this).apply { textSize = 14f; setTypeface(typeface, Typeface.BOLD) }
             hotspotTile = LinearLayout(this).apply {
@@ -259,9 +266,14 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
                 addView(hotspotIcon)
                 addView(hotspotText)
             }
-            content.addView(hotspotTile)
+            quickRow.addView(hotspotTile)
             renderHotspot(app.hotspotController.state())
         }
+        // The vendor's car settings (CAN, camera, steering wheel, factory screens) and plain
+        // Android settings — both otherwise several taps away through the launcher.
+        quickRow.addView(shortcutPill("\uD83D\uDE97", "Car") { openCarSettings() })
+        quickRow.addView(shortcutPill("\uD83E\uDD16", "Android") { openAndroidSettings() })
+        content.addView(quickRow)
 
         // Brightness as a relative − / + control (no slider): a couple of taps to soften a
         // too-bright night or lift a too-dim day. There is no ambient-light sensor on this
@@ -789,6 +801,65 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
                 .invoke(opts, WitsWindowMode.FREEFORM)
         }
         startActivity(intent, opts.toBundle())
+    }
+
+    /**
+     * A neutral pill for the quick row, shaped like the hotspot tile so the row reads as one set.
+     */
+    private fun shortcutPill(glyph: String, label: String, onClick: () -> Unit): LinearLayout {
+        val icon = TextView(this).apply { text = glyph; textSize = 15f; setPadding(0, 0, pad(8), 0) }
+        val text = TextView(this).apply {
+            this.text = label; textSize = 14f
+            setTypeface(typeface, Typeface.BOLD); setTextColor(palette.foreground)
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(pad(14), pad(9), pad(16), pad(9))
+            isClickable = true
+            setOnClickListener { onClick() }
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = pad(20).toFloat()
+                setColor(if (palette.night) Color.parseColor("#2A2A2E") else Color.parseColor("#E4E4EA"))
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = pad(4); leftMargin = pad(8) }
+            addView(icon)
+            addView(text)
+        }
+    }
+
+    /**
+     * The vendor's own car settings — CAN, camera, steering wheel, the factory screens.
+     * `getLaunchIntentForPackage` first (it is a normal system app), falling back to the known
+     * component when it advertises no launcher entry.
+     */
+    private fun openCarSettings() {
+        val pm = packageManager
+        val intent = pm.getLaunchIntentForPackage(WitsPackages.WITS_SETTINGS)
+            ?: android.content.Intent().setClassName(
+                WitsPackages.WITS_SETTINGS, "${WitsPackages.WITS_SETTINGS}.SettingsActivity"
+            )
+        openFullScreen(intent, "Car settings")
+    }
+
+    /** Plain Android settings. */
+    private fun openAndroidSettings() =
+        openFullScreen(android.content.Intent(android.provider.Settings.ACTION_SETTINGS), "Android settings")
+
+    /**
+     * Starts a utility app **full-screen**, deliberately not as a Cockpit tile.
+     *
+     * Settings screens are dense, full-width UIs visited while parked, and vendor system apps set
+     * their own window flags — adopting them into a freeform tile buys little and costs a whole new
+     * window path to place, verify and repair. The Cockpit is a driving surface, not a window
+     * manager. Coming back is one tap on the companion icon, which re-applies the last layout.
+     */
+    private fun openFullScreen(intent: android.content.Intent, label: String) {
+        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { startActivity(intent) }
+            .onFailure { toast("$label unavailable") }
     }
 
     private fun toast(message: String) =

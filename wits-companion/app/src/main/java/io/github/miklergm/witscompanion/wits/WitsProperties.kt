@@ -147,6 +147,8 @@ object WitsPackages {
     const val SPOTIFY = "com.spotify.music"
     const val CHROME = "com.android.chrome"
     const val WITS_LAUNCHER = "com.wits.launcher"
+    /** The vendor car-settings app (CAN, camera, steering wheel, factory screens). */
+    const val WITS_SETTINGS = "com.wits.settings"
     const val CENTER_SERVICE = "com.wits.pms"
     const val SELF = "io.github.miklergm.witscompanion"
 }
