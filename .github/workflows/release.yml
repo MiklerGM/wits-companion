@@ -36,7 +36,7 @@ jobs:
       # anything, including a commit that never ran CI.
       - name: Verify
         working-directory: wits-companion
-        run: ./gradlew :app:testDebugUnitTest :app:lintDebug :probe:lintDebug
+        run: ../tools/ci-retry.sh ./gradlew :app:testDebugUnitTest :app:lintDebug :probe:lintDebug
 
       - name: Restore the platform keystore
         env:
@@ -58,7 +58,7 @@ jobs:
           WITS_PLATFORM_STORE_PASSWORD: ${{ secrets.PLATFORM_STORE_PASSWORD }}
           WITS_PLATFORM_KEY_ALIAS: ${{ secrets.PLATFORM_KEY_ALIAS }}
           WITS_PLATFORM_KEY_PASSWORD: ${{ secrets.PLATFORM_KEY_PASSWORD }}
-        run: ./gradlew :app:assemblePlatform
+        run: ../tools/ci-retry.sh ./gradlew :app:assemblePlatform
 
       # Without a usable key the build silently succeeds and emits
       # app-platform-UNSIGNED.apk instead. That is a safe fallback locally, but shipping it as

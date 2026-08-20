@@ -27,23 +27,27 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # Steps go through tools/ci-retry.sh: Maven Central intermittently 403s GitHub-hosted
+      # runners, which killed the very first run here before a single test compiled. The
+      # script retries only on resolution/transport failures and never on a failing build —
+      # see its header for why that distinction is the whole point.
       - name: Unit tests
         working-directory: wits-companion
         # Includes the safety suite (reverse guard freshness, transport trust), the recorder
         # concurrency tests, and the consistency gates that hold the docs to the code:
         # WitsProfileTest (car-state.md) and ManifestPolicyTest (security.md §3.6).
-        run: ./gradlew :app:testDebugUnitTest
+        run: ../tools/ci-retry.sh ./gradlew :app:testDebugUnitTest
 
       - name: Lint
         working-directory: wits-companion
         # Both modules are at 0 errors. The probe's ProtectedPermissions findings are
         # suppressed per-tag with a rationale rather than by a baseline, so a genuinely new
         # finding still fails here.
-        run: ./gradlew :app:lintDebug :probe:lintDebug
+        run: ../tools/ci-retry.sh ./gradlew :app:lintDebug :probe:lintDebug
 
       - name: Assemble
         working-directory: wits-companion
-        run: ./gradlew :app:assembleDebug :probe:assembleDebug
+        run: ../tools/ci-retry.sh ./gradlew :app:assembleDebug :probe:assembleDebug
 
       - name: Upload reports on failure
         if: failure()
