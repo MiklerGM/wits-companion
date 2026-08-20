@@ -56,6 +56,12 @@ data class CarState(
     /**
      * Reverse is considered ACTIVE if any independent indicator says so.
      *
+     * In practice there is only one on this vehicle: `wits.source` was measured staying
+     * at LAUNCHER for the whole of a reverse manoeuvre, so `wits.backcar` carries this
+     * alone (`[RUNTIME]` 2026-08-20, docs/car-state.md). The source branch is kept — it
+     * costs nothing and other profiles may populate it — but the redundancy is not real
+     * here and nothing should be built assuming it is.
+     *
      * Returns null when nothing is known — callers must treat null as
      * "unknown" and **fail closed** for automatic actions
      * (docs/source-switching.md §5).

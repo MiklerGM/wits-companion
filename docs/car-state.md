@@ -25,17 +25,33 @@ Source of truth for names: `analysis/jadx/CenterService/sources/com/middle/UtilE
 
 | Property | Observed | Note |
 |---|---|---|
-| `wits.acc` | `1` | works |
+| `wits.acc` | `1`, but **empty for a whole session** on 2026-08-20 even with the engine running | **unreliable** — see below |
 | `wits.backcar` | `0` | works |
 | `wits.brake` | `0` | works |
 | `wits.ill` | `0` | works |
-| `wits.source` | `7` | works |
+| `wits.source` | `7` throughout, **including while reversing** | works, but is *not* reverse evidence — see below |
 | `can.speed` | `0` (stationary) | works; **`car.speed` is empty** |
 | `vendor.can.angle` | `0` | works |
 | `can.radar` | `"2:0:0:4:0:0:0:0"` | **packed string**, decoding `[HYP]` |
 | `can.door` | `"ffffff80"` | **bitmask**, decoding `[HYP]` |
 | `car.signal`, `car.type` | `1`, `0` | meaning unknown |
 | `wits.mcu.version` | `LFE.ZHTD.BM.…` | works |
+
+### Two signals that do not behave as the table above implies `[RUNTIME]` 2026-08-20
+
+**`wits.source` never reports the reverse camera.** Sampled twice a second across a full
+P -> R -> N -> D -> P sequence, `wits.source` stayed `7` (LAUNCHER) for the entire time the
+reverse camera was up, while `wits.backcar` went `1` and back to `0`. So on this vehicle
+reverse detection rests **entirely** on `wits.backcar`; the `source == BACKCAR` branch in
+`CarState.reverseActive` is dead weight here. It is kept because it costs nothing and other
+profiles may populate it — but nothing should be written that *relies* on the redundancy.
+
+**`wits.acc` is not reliably populated.** It read `1` on 2026-07-31 and again on the morning
+of 2026-08-20, but was **empty for an entire six-minute session that evening**, engine running,
+across ignition-on, a gear sequence and a shutdown. Empty means `UNKNOWN`, not `0`, so nothing
+false is displayed — but any behaviour gated on ACC simply never fires when it is in that
+state, which includes the ACC-based autostart trigger. Cause unknown; worth a `getprop wits.acc`
+check at the start of any session that depends on it.
 
 ### Permanently empty on this profile `[RUNTIME]`
 

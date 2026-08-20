@@ -129,7 +129,9 @@ receiver itself:
   see the provenance rule below.
 
 Crucially, **safety decisions do not rest on this receiver alone**. `ReverseGuard` also
-consults the `wits.backcar` property and the source id, and the two transports are resolved
+consults the source id — though on the BMW profile measured, `wits.source` never reports
+BACKCAR even while reversing (see car-state.md), so in practice reverse detection rests on
+`wits.backcar` alone and that redundancy should not be relied on. The two transports are resolved
 against each other rather than overwriting one another — the rule is deliberately asymmetric
 (`CarStateRepository.keepTrustedPositive`):
 

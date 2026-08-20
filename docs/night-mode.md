@@ -9,7 +9,7 @@
 > |---|---|---|---|
 > | 1 | **Theme** — `UiModeManager` night bit | Dark theme in apps that honour it, including the companion | **No — locked on night**, never observed to move |
 > | 2 | **Backlight** — `screen_brightness` | Panel brightness, 255 <-> 75 | **Yes**, confirmed both directions |
-> | 3 | **Launcher skin** | Stock launcher goes black-ish | Reported yes, **not yet confirmed** |
+> | 3 | **Launcher skin** — `ID8UG_SKIN_MODEL` | Stock launcher goes black-ish | **Yes**, confirmed both directions |
 >
 > `wits_night_mode` — the key the companion writes — governs **(1) only**, and (1) is pinned
 > on this unit. So the companion's day/night control may have no visible effect here. What
@@ -67,19 +67,24 @@ Two facts here are unexplained and worth chasing before relying on the override:
 `customStart=22:00 customEnd=06:00` means a custom schedule is configured in `UiModeManager`
 even though the `wits_backlight_*` keys are absent from this unit.
 
-## 3. The launcher skin — unconfirmed `[RUNTIME]` 2026-08-20
+## 3. The launcher skin — confirmed `[RUNTIME]` 2026-08-20
 
-The stock launcher visibly goes black-ish with the headlights, reported by the driver but not
-yet instrumented. Candidate keys, from the capture with the lights **off**:
+`ID8UG_SKIN_MODEL` is the launcher skin driver, and it moves with the headlights in the same
+second as the backlight. Sampled once a second across two switch changes, engine running:
 
-| Key | Value with lights off | Note |
-|---|---|---|
-| `ID8UG_SKIN_MODEL` | `daytime` | prime suspect — the name and the value both fit |
-| `wits_skin` | unset | section 7.2 shows SystemUI writing `0`/`1` here, but it is absent on this unit |
-| `ID8_skin` | `blue` | unclear whether day/night related |
+```
+17:27:58   ill=0   screen_brightness=255   ID8UG_SKIN_MODEL=daytime    lights off
+17:28:08   ill=1   screen_brightness=75    ID8UG_SKIN_MODEL=night      lights ON
+17:28:39   ill=0   screen_brightness=255   ID8UG_SKIN_MODEL=daytime    lights off
+```
 
-The lights-on sample was never taken, so nothing is confirmed. The backlog carries a runnable
-two-state capture that settles it in one pass.
+So mechanisms (2) and (3) are one event with two effects, both driven by `wits.ill`.
+
+**`wits_skin` stayed `null` throughout** — it is never written on this profile. Section 7.2
+shows SystemUI setting `wits_skin` to `0`/`1` inside `setThemeByIll`, and that is exactly the
+path section 7.2 already establishes is *not live* here (its gate is false). Looking for
+`wits_skin` is why this mechanism stayed unidentified for so long: the decompiled code names a
+key this profile does not use. `ID8_skin` (`blue`) never moved either and appears unrelated.
 
 ## 4. The problem that is actually left: the engine-off brightness jump
 
@@ -89,6 +94,12 @@ two-state capture that settles it in one pass.
 Fully explained by section 1: engine off -> headlights drop -> `wits.ill` goes `0` ->
 BacklightControl writes `screen_brightness = screen_brightness_day` (**255**). Nothing to do
 with `UiModeManager`, which stays locked on night throughout.
+
+Both **endpoints** are measured (engine running with lights on: `ill=1`, brightness 75; engine
+off: `ill=0`, brightness 255). The **transition** is still not captured live: the attempt on
+2026-08-20 returned the lights to auto before switching the engine off, and in daylight auto
+means off — so `wits.ill` was already `0` and there was nothing left to observe. To catch it,
+leave the lights **on** (always-on) and switch the engine off directly, sampling throughout.
 
 Candidate levers, none tried:
 
