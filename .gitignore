@@ -22,3 +22,6 @@ tools/platform-key/
 !wits-companion/gradle/wrapper/*.jar
 logs/
 *.logcat
+
+# Claude Code personal settings (not shared)
+.claude/settings.local.json

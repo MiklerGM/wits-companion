@@ -22,6 +22,24 @@ panel — media, brightness, hotspot, app switcher — in the other, side by sid
   session yet.
 - **Panel controls** — brightness, Wi-Fi hotspot toggle with state restore, day/night.
 
+## What it looks like
+
+The Cockpit: a floating app in one tile, the control panel in the other. The panel carries
+media transport, brightness, the hotspot toggle, shortcuts into the vendor's car settings and
+plain Android settings, and a rail to switch the floating app.
+
+![The Cockpit — Maps in the left tile, control panel in the right](docs/images/cockpit.png)
+
+Tapping the lit rail tile hides the floating app. The panel takes the whole display and paints
+the freed strip black, keeping its controls where your hand already expects them.
+
+![The Cockpit with the floating app hidden](docs/images/cockpit-hidden.png)
+
+The gear opens the configuration in the Cockpit's *left* tile — the slot the map usually
+occupies — so the panel stays live beside it and nothing goes full-screen.
+
+![Configuration open as the Cockpit's left tile](docs/images/cockpit-settings.png)
+
 ## Two build variants
 
 | Variant | Signing | Window path |
