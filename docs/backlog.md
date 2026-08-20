@@ -141,6 +141,22 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
 - [ ] **One-line confirmations:** the emulator cascade is absent on the car (§ Emulator-only);
       `SensorManager` has no `TYPE_LIGHT` (§ Brightness).
 
+- [ ] **Verify the audit fixes on the vehicle** — *all fixed offline 2026-08-20, none confirmed
+      on-car.* Worth a deliberate pass, because two of them change safety-path behaviour:
+  - **Reverse freshness.** Automatic restores now refuse when the reverse signal has not been
+      refreshed within `ReverseGuard.controlMaxAgeMs` (5 s). If `wits.backcar` polls less
+      reliably on the vehicle than assumed, this will show up as autostart/ACC restores being
+      refused with "reverse state unknown or stale" in the log. Check the log after a few
+      power-ups before trusting the value.
+  - **Broadcast vs. property precedence.** A broadcast can no longer clear a fresh
+      property-backed `reverse=true`. Confirm reverse still *releases* promptly — engage and
+      leave reverse, and check the guard unblocks within a poll interval.
+  - **Layout cleanup gating.** Switch presets rapidly (Cockpit → tiled → Cockpit) and confirm
+      no tile is removed or parked out from under the new layout.
+  - **Split/swap now actually apply** to a New-layout Apply and to saved custom presets — the
+      controls were previously ignored, so saved layouts will change geometry on first use.
+  - **Hotspot-only boot restore** now fires; verify with the layout opt-in *off*.
+
 ## ☐ Offline checklist (emulator / code / study)
 
 Things doable now, without the car.
@@ -174,6 +190,41 @@ Things doable now, without the car.
       vertical, Exit (reset) pinned bottom; no more ScrollView/footer. Verified structurally on
       the emulator (clipped there by the freeform cascade). **Eyeball on the car** — see On-car
       checklist. Still to do: the "Cockpit" name check (§ UI).
+- [x] **Code audit — critical and high-priority findings** — *fixed offline 2026-08-20; **all
+      five want on-car confirmation**, see On-car checklist.* An external review of the app,
+      docs and deployment tooling. What it found and what was done:
+  - **Stale telemetry authorised automatic actions** (`b869543`). `STALE` readings stayed
+      "known", the polling merge retains the last value when a read fails, and the guard
+      accepted any known `false` — so a last-seen `reverse=false` kept authorising automatic
+      applies indefinitely after telemetry stopped. Split displayability from control-grade
+      trust: positive reverse evidence counts however old, negative evidence decays to
+      *unknown*. Same commit fixes a genuine lost-update race (polling on the worker thread vs.
+      broadcasts on main, both read-copy-writing the snapshot) and stops an unauthenticated
+      broadcast clearing a fresh property-backed positive.
+  - **Superseded layout callbacks damaged the next layout** (`d5dc15a`). `parkStaleWindows`
+      posted its `removeTask`/`applyWindow` bare — no generation check, no `RETRY_TOKEN` — so
+      applying A then B let A's cleanup tear down B's tiles. Also: `apply()` reported the
+      preset's window count as applied even when every window was skipped.
+  - **Session recordings did not have the redaction docs promised** (`3d602ce`). Writes
+      regexed the *serialized* JSON, so the key-aware list (ssid, password, phoneName, title)
+      never ran — and a `CapturedExtra` hides its real key in a `name` field, which defeats a
+      plain key walk too. Now a recursive, shape-aware walk. `stop()` is also transactional
+      (it leaked a thread per session and could be exported mid-write).
+  - **Assorted honesty bugs** (`f5545c5`). The New-layout Apply ignored the split and
+      swap controls entirely; `withGeometry` renamed the preset it decorated, orphaning the
+      stored last-applied id on a swap toggle; `openCockpit` recorded success on a guard
+      refusal; night mode and brightness reported `Written` for writes that never landed;
+      night-mode undo could not restore the original unset state; hotspot-only boot restore
+      never ran; media progress extrapolated from the wrong timestamp; `deploy.sh` uninstalled
+      the app (and its data) after *any* failed install.
+  - **Lint** (`c62773a`). Both modules now clean. The ten API-30 `WindowMetrics` errors never
+      affected the vehicle (Android 13; minSdk 29 is for the emulator) but the version handling
+      was implicit — now an explicit gate with a real API-29 fallback.
+  - **Not done — the architectural refactor.** The review also recommends splitting
+      `LayoutEngine` into planner/scheduler/executor/verifier, replacing the privileged boolean
+      with per-operation capability interfaces, and a richer apply result
+      (accepted/executing/verified/partial/failed/cancelled). Those are rewrites, not fixes,
+      and are deliberately left for a separate pass.
 - [ ] **Volume: read-only probe scaffolding** (verify-first), no active pinning yet (§ Volume).
 - [x] **Refresh Brightness values** — *done 2026-08-06* (`25f9fe6`): the label refreshes on
       resume and observes `SCREEN_BRIGHTNESS`, so a system day/night change is reflected live.
