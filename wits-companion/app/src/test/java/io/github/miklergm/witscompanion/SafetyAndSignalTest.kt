@@ -269,6 +269,73 @@ class SafetyAndSignalTest {
         assertNull("nothing known -> unknown", CarState().reverseActive)
     }
 
+    // ------------------------------------------------- control-grade freshness
+
+    @Test
+    fun `stale negative reverse evidence stops authorising automatic actions`() {
+        // The failure this exists to prevent: telemetry stops while reverse reads false, the
+        // reading is retained as the last known value, and it keeps saying "safe" forever.
+        val guard = ReverseGuard(controlMaxAgeMs = 5_000L, clock = { 100_000L })
+        val longAgo = CarState(reverse = valid(false, at = 1_000L))   // 99 s old
+
+        assertNull(
+            "a negative that old is no longer evidence of anything",
+            longAgo.reverseActiveForControl(now = 100_000L, maxAgeMs = 5_000L),
+        )
+        assertFalse(
+            "automatic actions must fail closed on it",
+            guard.check(longAgo, Trigger.AUTOMATIC).isAllowed,
+        )
+        assertTrue(
+            "an explicit user action is still allowed, as for any unknown",
+            guard.check(longAgo, Trigger.USER).isAllowed,
+        )
+    }
+
+    @Test
+    fun `fresh negative reverse evidence still authorises automatic actions`() {
+        val guard = ReverseGuard(
+            releaseDelayMs = 0L, controlMaxAgeMs = 5_000L, clock = { 4_000L },
+        )
+        val recent = CarState(reverse = valid(false, at = 1_000L))   // 3 s old
+        assertEquals(false, recent.reverseActiveForControl(now = 4_000L, maxAgeMs = 5_000L))
+        assertTrue(guard.check(recent, Trigger.AUTOMATIC).isAllowed)
+    }
+
+    @Test
+    fun `positive reverse evidence never expires`() {
+        // Asymmetric on purpose: a stale "camera is on" keeps blocking, a stale "camera is
+        // off" stops authorising. Both directions fail safe.
+        val guard = ReverseGuard(controlMaxAgeMs = 5_000L, clock = { 100_000L })
+        val ancient = CarState(reverse = valid(true, at = 1_000L))
+        assertEquals(true, ancient.reverseActiveForControl(now = 100_000L, maxAgeMs = 5_000L))
+        assertFalse(guard.check(ancient, Trigger.USER).isAllowed)
+        assertFalse(guard.check(ancient, Trigger.AUTOMATIC).isAllowed)
+
+        val ancientSource = CarState(source = valid(WitsSource.BACKCAR, at = 1_000L))
+        assertEquals(true, ancientSource.reverseActiveForControl(now = 100_000L, maxAgeMs = 5_000L))
+    }
+
+    @Test
+    fun `a STALE reading is displayable but never control-grade`() {
+        val stale = valid(false, at = 1_000L).withStaleness(5_000L, now = 40_000L)
+        assertEquals(Availability.STALE, stale.availability)
+        assertTrue("the UI may still show the last reading", stale.isKnown)
+        assertFalse(
+            "but it may not decide a control question",
+            stale.isFreshFor(maxAgeMs = 60_000L, now = 40_000L),
+        )
+        assertNull(CarState(reverse = stale).reverseActiveForControl(40_000L, 60_000L))
+    }
+
+    @Test
+    fun `display semantics are unchanged by the control-grade split`() {
+        // reverseActive still reports the last known reading, however old — the dashboard
+        // showing "no" is right where authorising an automatic action would not be.
+        val old = CarState(reverse = valid(false, at = 1_000L))
+        assertEquals(false, old.reverseActive)
+    }
+
     @Test
     fun `android and oem source flags`() {
         assertEquals(true, CarState(source = valid(WitsSource.LAUNCHER)).androidSourceActive)

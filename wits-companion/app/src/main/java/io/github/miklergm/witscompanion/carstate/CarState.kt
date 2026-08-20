@@ -65,6 +65,33 @@ data class CarState(
             }
         }
 
+    /**
+     * Reverse state for **control** decisions — the version the guards must use.
+     *
+     * Differs from [reverseActive] in one way that matters: negative evidence expires.
+     *
+     *  - **Positive** evidence (`reverse=true`, or source `BACKCAR`) counts whenever it is known
+     *    at all, however old. A camera we have seen is a camera we keep respecting.
+     *  - **Negative** evidence only counts while it is fresher than [maxAgeMs]. A last-known
+     *    `reverse=false` that stopped updating decays to *unknown*, not to *safe*, so automatic
+     *    actions fail closed instead of running on evidence that may be minutes out of date.
+     *
+     * [reverseActive] keeps the old semantics for display, where showing the last reading is
+     * the right behaviour.
+     */
+    fun reverseActiveForControl(now: Long, maxAgeMs: Long): Boolean? {
+        val bySignal = reverse.takeIf { it.isKnown }?.value
+        val bySource = source.takeIf { it.isKnown }?.value?.let { it == WitsSource.BACKCAR }
+
+        // Positive evidence never expires.
+        if (bySignal == true || bySource == true) return true
+
+        // Negative evidence must be recent to count.
+        val freshNegativeSignal = bySignal == false && reverse.isFreshFor(maxAgeMs, now)
+        val freshNegativeSource = bySource == false && source.isFreshFor(maxAgeMs, now)
+        return if (freshNegativeSignal || freshNegativeSource) false else null
+    }
+
     val androidSourceActive: Boolean?
         get() = source.takeIf { it.isKnown }?.value?.let { it == WitsSource.LAUNCHER }
 

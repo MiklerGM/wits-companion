@@ -55,6 +55,20 @@ data class SignalValue<T>(
 ) {
     val isKnown: Boolean get() = availability.isPresentable && value != null
 
+    /**
+     * True when this reading is good enough to **authorise an automatic action**.
+     *
+     * Deliberately stricter than [isKnown]. A [Availability.STALE] value stays "known" so the
+     * UI can keep showing the last reading rather than a dash, but a value that old must never
+     * decide a control question: once telemetry stops, the last reading would otherwise keep
+     * authorising actions forever. See docs/car-state.md and [CarState.reverseActiveForControl].
+     */
+    fun isFreshFor(maxAgeMs: Long, now: Long): Boolean {
+        if (!isKnown || availability == Availability.STALE) return false
+        val age = ageMs(now) ?: return false
+        return age <= maxAgeMs
+    }
+
     /** Milliseconds since the last update, or null if never updated. */
     fun ageMs(now: Long = SystemClock.elapsedRealtime()): Long? =
         if (updatedAtElapsedRealtime == 0L) null else now - updatedAtElapsedRealtime

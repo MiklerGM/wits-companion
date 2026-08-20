@@ -31,6 +31,7 @@ enum class Trigger { USER, AUTOMATIC }
  */
 class ReverseGuard(
     private val releaseDelayMs: Long = DEFAULT_RELEASE_DELAY_MS,
+    private val controlMaxAgeMs: Long = DEFAULT_CONTROL_MAX_AGE_MS,
     private val clock: () -> Long = SystemClock::elapsedRealtime,
 ) {
 
@@ -46,11 +47,16 @@ class ReverseGuard(
         if (lastReverseActiveAt == 0L) null else clock() - lastReverseActiveAt
 
     fun check(state: CarState, trigger: Trigger): GuardVerdict {
-        when (state.reverseActive) {
+        // Control-grade evidence, not the display value: a reverse=false that stopped being
+        // refreshed decays to unknown here, so an automatic action fails closed rather than
+        // running on telemetry that disappeared minutes ago.
+        when (state.reverseActiveForControl(clock(), controlMaxAgeMs)) {
             true -> return GuardVerdict.Blocked("reverse camera is active")
 
             null -> if (trigger == Trigger.AUTOMATIC) {
-                return GuardVerdict.Blocked("reverse state unknown; automatic actions are blocked")
+                return GuardVerdict.Blocked(
+                    "reverse state unknown or stale; automatic actions are blocked"
+                )
             }
 
             false -> Unit
@@ -72,6 +78,14 @@ class ReverseGuard(
 
     companion object {
         const val DEFAULT_RELEASE_DELAY_MS = 1_500L
+
+        /**
+         * How recent a `reverse=false` must be to authorise an automatic action.
+         *
+         * Five property polls at the default 1 s interval: long enough to ride out a couple of
+         * missed reads, far short of the 30 s staleness timeout the UI uses for display.
+         */
+        const val DEFAULT_CONTROL_MAX_AGE_MS = 5_000L
     }
 }
 
