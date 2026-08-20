@@ -122,7 +122,7 @@ Property name constants: `UtilExport.java:112-155` and `:160-186` `[CODE]`.
 
 ## 4. Broadcast signals
 
-Received by `WitsBroadcastReceiver`, registered **`RECEIVER_NOT_EXPORTED`** at runtime
+Received by `WitsBroadcastReceiver`, registered **`RECEIVER_EXPORTED`** at runtime — it has to be, because the senders are other processes and a NOT_EXPORTED receiver is never delivered their broadcasts. See security.md §3.2 for what replaces the lost isolation
 (never in the manifest — see `security.md`).
 
 | Action | Extra | Extra type | Meaning | Sender evidence | Status |

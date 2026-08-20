@@ -124,7 +124,9 @@ receiver itself:
   observer;
 - extras are read defensively, bounded to 512 chars, and unparseable values degrade to
   `INVALID` with the raw text retained rather than being trusted;
-- the worst a spoofed broadcast achieves is a wrong number on the dashboard.
+- a spoofed broadcast can put a wrong number on the dashboard, and can *raise* a safety
+  alarm (which only blocks our own automation — that fails safe). It cannot clear one:
+  see the provenance rule below.
 
 Crucially, **safety decisions do not rest on this receiver alone**. `ReverseGuard` also
 consults the `wits.backcar` property and the source id, and the two transports are resolved
@@ -139,6 +141,14 @@ against each other rather than overwriting one another — the rule is deliberat
 Legitimate clearing is not delayed: the next poll is at most one interval away and carries the
 same news on the trusted transport. A spoofed "reverse released" broadcast therefore cannot by
 itself unblock an automatic action.
+
+**Provenance, not just freshness.** `CarState.reverseActiveForControl()` will only accept
+*negative* evidence — "reverse is off" — that came from the **polled property**, which no
+installed app can write; `CarState.reverseFromProperty` / `sourceFromProperty` carry that
+trusted-transport view alongside the display values. Freshness alone would not be enough: a
+forged broadcast arrives with a brand-new timestamp, so it would defeat the staleness rule
+precisely when that rule matters most — when real telemetry has stopped arriving. Positive
+evidence is still accepted from either transport.
 
 Separately, evidence **expires**. `CarState.reverseActiveForControl()` accepts positive evidence
 however old, but requires negative evidence to be fresher than `ReverseGuard`'s

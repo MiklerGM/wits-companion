@@ -201,8 +201,18 @@ class LayoutRecoveryCoordinator(
             logger?.log("layout", "autostart_panel", result = "skipped:config_visible", extras = mapOf("reason" to reason))
             return false
         }
-        if (state.reverseActive != false) {
-            logger?.log("layout", "autostart_panel", result = "skipped:reverse", extras = mapOf("reason" to reason))
+        // Control-grade, not the display value. This is an automatic action, so it must hold
+        // to the same standard as a layout apply: `reverseActive` is the last *known* reading
+        // and will happily report a stale — or broadcast-forged — false. Routed through the
+        // guard so there is one definition of "safe enough to act", rather than a second
+        // hand-rolled check that can drift from it.
+        val verdict = reverseGuard.check(state, Trigger.AUTOMATIC)
+        if (!verdict.isAllowed) {
+            logger?.log(
+                "layout", "autostart_panel",
+                result = "skipped:${verdict.reasonOrNull ?: "unsafe"}",
+                extras = mapOf("reason" to reason),
+            )
             return false
         }
         return runCatching {

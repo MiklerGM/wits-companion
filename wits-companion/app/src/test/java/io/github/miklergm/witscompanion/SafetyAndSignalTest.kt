@@ -22,8 +22,20 @@ class SafetyAndSignalTest {
 
     // ------------------------------------------------------------- signals
 
-    private fun <T> valid(v: T, at: Long = 1_000L) =
-        SignalValue(v, Availability.VALID, SignalSource.PROPERTY, at, v.toString())
+    private fun <T> valid(v: T, at: Long = 1_000L, src: SignalSource = SignalSource.PROPERTY) =
+        SignalValue(v, Availability.VALID, src, at, v.toString())
+
+    /**
+     * A state where the polled property reports [v].
+     *
+     * Both the display field and the trusted-transport field are set, because that is what the
+     * reducer produces for a property reading. Constructing only the display field models a
+     * *broadcast*-sourced value, which deliberately cannot authorise anything.
+     */
+    private fun reverseFromProperty(v: Boolean, at: Long = 1_000L) = CarState(
+        reverse = valid(v, at),
+        reverseFromProperty = valid(v, at),
+    )
 
     @Test
     fun `unknown is never rendered as zero`() {
@@ -126,7 +138,7 @@ class SafetyAndSignalTest {
         guard.observe(CarState(reverse = valid(true)))
 
         now = 1_500L   // 500 ms after reverse was last active
-        val notYet = CarState(reverse = valid(false))
+        val notYet = reverseFromProperty(false)
         assertFalse(guard.check(notYet, Trigger.AUTOMATIC).isAllowed)
 
         now = 3_000L   // 2000 ms later
@@ -276,7 +288,7 @@ class SafetyAndSignalTest {
         // The failure this exists to prevent: telemetry stops while reverse reads false, the
         // reading is retained as the last known value, and it keeps saying "safe" forever.
         val guard = ReverseGuard(controlMaxAgeMs = 5_000L, clock = { 100_000L })
-        val longAgo = CarState(reverse = valid(false, at = 1_000L))   // 99 s old
+        val longAgo = reverseFromProperty(false, at = 1_000L)   // 99 s old
 
         assertNull(
             "a negative that old is no longer evidence of anything",
@@ -297,9 +309,37 @@ class SafetyAndSignalTest {
         val guard = ReverseGuard(
             releaseDelayMs = 0L, controlMaxAgeMs = 5_000L, clock = { 4_000L },
         )
-        val recent = CarState(reverse = valid(false, at = 1_000L))   // 3 s old
+        val recent = reverseFromProperty(false, at = 1_000L)   // 3 s old
         assertEquals(false, recent.reverseActiveForControl(now = 4_000L, maxAgeMs = 5_000L))
         assertTrue(guard.check(recent, Trigger.AUTOMATIC).isAllowed)
+    }
+
+    @Test
+    fun `a broadcast-sourced negative cannot authorise automatic actions`() {
+        // The receiver is EXPORTED with no sender authentication, so any installed app can
+        // forge reverse=false. Freshness alone would not stop it: a forged value arrives with
+        // a brand-new timestamp, which is precisely how it would defeat the staleness rule.
+        val forged = CarState(
+            reverse = valid(false, at = 1_000L, src = SignalSource.BROADCAST),
+            // reverseFromProperty deliberately left unknown: the trusted transport said nothing.
+        )
+        val guard = ReverseGuard(controlMaxAgeMs = 5_000L, clock = { 2_000L })
+
+        assertNull(
+            "a broadcast may not establish that reverse is safe",
+            forged.reverseActiveForControl(now = 2_000L, maxAgeMs = 5_000L),
+        )
+        assertFalse(guard.check(forged, Trigger.AUTOMATIC).isAllowed)
+        assertEquals("though the dashboard still shows it", false, forged.reverseActive)
+    }
+
+    @Test
+    fun `a broadcast-sourced positive still raises the alarm`() {
+        // The asymmetry: forging "reverse is on" only blocks our own automation, which is safe.
+        val raised = CarState(reverse = valid(true, at = 1_000L, src = SignalSource.BROADCAST))
+        val guard = ReverseGuard(clock = { 2_000L })
+        assertEquals(true, raised.reverseActiveForControl(now = 2_000L, maxAgeMs = 5_000L))
+        assertFalse(guard.check(raised, Trigger.USER).isAllowed)
     }
 
     @Test
@@ -325,14 +365,17 @@ class SafetyAndSignalTest {
             "but it may not decide a control question",
             stale.isFreshFor(maxAgeMs = 60_000L, now = 40_000L),
         )
-        assertNull(CarState(reverse = stale).reverseActiveForControl(40_000L, 60_000L))
+        assertNull(
+            CarState(reverse = stale, reverseFromProperty = stale)
+                .reverseActiveForControl(40_000L, 60_000L)
+        )
     }
 
     @Test
     fun `display semantics are unchanged by the control-grade split`() {
         // reverseActive still reports the last known reading, however old — the dashboard
         // showing "no" is right where authorising an automatic action would not be.
-        val old = CarState(reverse = valid(false, at = 1_000L))
+        val old = reverseFromProperty(false, at = 1_000L)
         assertEquals(false, old.reverseActive)
     }
 

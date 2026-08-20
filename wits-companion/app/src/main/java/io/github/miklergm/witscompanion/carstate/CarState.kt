@@ -24,6 +24,14 @@ data class CarState(
 
     // --- head unit --------------------------------------------------------
     val source: SignalValue<Int> = SignalValue.unknown(),
+
+    // --- trusted-transport view of the safety signals ---------------------
+    // The same two signals as reported by the *polled property only*, which no installed app
+    // can write. [reverse] and [source] above are the display values and may have come from a
+    // vendor broadcast; these are what the guards are allowed to clear an alarm on. Populated
+    // by CarSignalReducer from its per-transport evidence.
+    val reverseFromProperty: SignalValue<Boolean> = SignalValue.unknown(),
+    val sourceFromProperty: SignalValue<Int> = SignalValue.unknown(),
     val topPackage: SignalValue<String> = SignalValue.unknown(),
 
     // --- packed raw strings -----------------------------------------------
@@ -80,15 +88,26 @@ data class CarState(
      * the right behaviour.
      */
     fun reverseActiveForControl(now: Long, maxAgeMs: Long): Boolean? {
-        val bySignal = reverse.takeIf { it.isKnown }?.value
-        val bySource = source.takeIf { it.isKnown }?.value?.let { it == WitsSource.BACKCAR }
+        // Positive evidence counts from ANY transport and never expires. A broadcast may
+        // always raise the alarm — worst case a hostile app blocks our own automation, which
+        // fails safe.
+        val positive = reverse.takeIf { it.isKnown }?.value == true ||
+            source.takeIf { it.isKnown }?.value == WitsSource.BACKCAR
+        if (positive) return true
 
-        // Positive evidence never expires.
-        if (bySignal == true || bySource == true) return true
-
-        // Negative evidence must be recent to count.
-        val freshNegativeSignal = bySignal == false && reverse.isFreshFor(maxAgeMs, now)
-        val freshNegativeSource = bySource == false && source.isFreshFor(maxAgeMs, now)
+        // Negative evidence must come from the **polled property** and be recent.
+        //
+        // Provenance matters as much as freshness here. The vendor receiver is registered
+        // EXPORTED with no sender authentication, so any installed app can forge a
+        // `reverse=false` or a `source=LAUNCHER`. Accepting broadcast negatives would let an
+        // attacker refill the evidence slot with fresh values of their choosing — which would
+        // defeat the freshness rule entirely, since its whole purpose is to fail closed
+        // exactly when real telemetry has stopped arriving. See docs/security.md §3.2.
+        val freshNegativeSignal = reverseFromProperty.takeIf { it.isKnown }?.value == false &&
+            reverseFromProperty.isFreshFor(maxAgeMs, now)
+        val freshNegativeSource = sourceFromProperty.takeIf { it.isKnown }?.value
+            ?.let { it != WitsSource.BACKCAR } == true &&
+            sourceFromProperty.isFreshFor(maxAgeMs, now)
         return if (freshNegativeSignal || freshNegativeSource) false else null
     }
 

@@ -163,6 +163,27 @@ class LayoutEngine(
         val area = windowController.usableArea(appContext)
         val ordered = preset.windows.sortedBy { it.focusOrder }
 
+        // 4. Preflight, BEFORE anything is mutated.
+        //
+        // The refusal for "nothing launchable" used to sit at the end, after the stale-window
+        // cleanup had already been scheduled and the generation bumped. Applying a preset whose
+        // apps have since been uninstalled therefore tore down the layout that was on screen —
+        // possibly a live navigation task — and only then reported Refused. A refusal must cost
+        // nothing.
+        //
+        // An anchored preset always places something (the panel comes up whether or not the
+        // floating app is installed), so only a tiled preset can be empty.
+        val launchable = ordered.filter { windowController.isLaunchable(it.packageName) }
+        if (launchable.isEmpty() && preset.kind != PresetKind.ANCHORED) {
+            logger?.log(
+                "layout", "apply", extras = mapOf("preset" to preset.id),
+                result = "nothing_launchable",
+            )
+            return Result.Refused(
+                "nothing to place: no app in this layout is installed with a launcher activity"
+            )
+        }
+
         // Invalidate anything still queued from an earlier apply.
         val myGeneration = generation.incrementAndGet()
         latestState = state
@@ -311,9 +332,11 @@ class LayoutEngine(
         // panel an anchored preset does not carry as a window — so a preset whose apps are
         // all missing no longer reports a cheerful "Applied 2 window(s)" while nothing moved.
         if (expected.isEmpty()) {
+            // Preflight above should have caught this; reaching here means an anchored preset
+            // produced no panel bounds either, so nothing was dispatched after all.
             logger?.log(
                 "layout", "apply", extras = mapOf("preset" to preset.id),
-                result = "nothing_launchable",
+                result = "nothing_dispatched",
             )
             return Result.Refused(
                 "nothing to place: no app in this layout is installed with a launcher activity"

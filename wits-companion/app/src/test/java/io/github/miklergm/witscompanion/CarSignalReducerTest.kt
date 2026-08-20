@@ -72,6 +72,30 @@ class CarSignalReducerTest {
     }
 
     @Test
+    fun `a forged broadcast cannot unblock automation once telemetry stops`() {
+        // The whole attack, end to end. Reverse is genuinely engaged; polling then fails, so
+        // the property evidence ages out. A hostile app forges "reverse released" with a
+        // fresh timestamp. Freshness alone would accept it — provenance is what does not.
+        val r = CarSignalReducer(propertyTrustWindowMs = 5_000L)
+        r.reduceProperties(props(WitsProperties.BACKCAR to "1"), now = 1_000L)
+
+        r.reduceProperties(props(), now = 30_000L)   // telemetry gone; last reading retained
+        r.reduceBroadcast(BroadcastUpdate.Reverse(active = false, raw = "0"), now = 30_100L)
+
+        // The display follows the most recent word, as it should.
+        assertEquals(false, r.state.reverse.value)
+        assertEquals(SignalSource.BROADCAST, r.state.reverse.source)
+
+        // Control does not.
+        assertNull(
+            "a forged clear must not authorise anything",
+            r.state.reverseActiveForControl(now = 30_100L, maxAgeMs = 5_000L),
+        )
+        val guard = ReverseGuard(controlMaxAgeMs = 5_000L, clock = { 30_100L })
+        assertFalse(guard.check(r.state, Trigger.AUTOMATIC).isAllowed)
+    }
+
+    @Test
     fun `the property clears reverse on its own next poll`() {
         // Legitimate clearing must not be delayed by the anti-spoof rule — the trusted
         // transport carries the same news within one poll interval.

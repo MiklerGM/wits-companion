@@ -173,6 +173,11 @@ class CarSignalReducer(
         // transport is still raising.
         reverse = resolve(reverse, now) { it == true },
         source = resolve(source, now) { it == WitsSource.BACKCAR },
+        // The trusted-transport view the guards clear alarms on. Kept separate because the
+        // projected values above may have come from a broadcast, and a broadcast cannot
+        // establish that reverse is safe — only that it might not be.
+        reverseFromProperty = reverse.property.withStaleness(staleTimeoutMs, now),
+        sourceFromProperty = source.property.withStaleness(staleTimeoutMs, now),
     )
 
     /**

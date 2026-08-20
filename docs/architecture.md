@@ -163,7 +163,7 @@ architectural decision that shapes the whole layout engine.
 ```mermaid
 flowchart TD
     A["MainActivity / Fragments"] --> B["CarStateRepository<br/>(singleton, main thread)"]
-    C["WitsBroadcastReceiver<br/>registered NOT_EXPORTED"] --> B
+    C["WitsBroadcastReceiver<br/>registered EXPORTED (must be)"] --> B
     D["PropertyReader<br/>reflection + getprop fallback<br/>(background executor, throttled)"] --> B
     B --> E["StateFlow-like observers"]
     F["LayoutEngine"] --> G["WitsWindowController<br/>(sendBroadcast)"]
