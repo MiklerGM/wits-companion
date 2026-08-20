@@ -32,6 +32,11 @@ class SignalExplorer(
     var recorder: SessionRecorder? = null
         private set
 
+    /** The most recently stopped session, retained only so an export can await its finalization. */
+    @Volatile
+    var lastSession: SessionRecorder? = null
+        private set
+
     val isRecording: Boolean get() = recorder?.active == true
 
     private val audioProbe = AudioProbe(appContext)
@@ -125,17 +130,37 @@ class SignalExplorer(
         return rec
     }
 
-    fun stopSession() {
-        val rec = recorder ?: return
-        writeSnapshot(rec, "SESSION_END")
+    /**
+     * Stops the probes first, then finalizes the recorder.
+     *
+     * The just-stopped recorder is kept in [lastSession] rather than dropped, so an export can
+     * tell whether its files are complete — see [awaitLastSessionFinalized].
+     *
+     * @param onFinalized runs on the recorder's writer thread once the session is fully on disk.
+     */
+    fun stopSession(onFinalized: (() -> Unit)? = null) {
+        val rec = recorder
+        if (rec == null) { onFinalized?.invoke(); return }
+        // Producers first: nothing new must arrive while the recorder is closing.
         broadcastProbe?.stop(appContext); broadcastProbe = null
         propertyProbe?.stop(); propertyProbe = null
         settingsProbe?.stop(); settingsProbe = null
         carStateRepository.removeObserver(this)
-        rec.stop()
+        writeSnapshot(rec, "SESSION_END")
         logger?.log("signal_explorer", "session_stop",
             extras = mapOf("session" to rec.metadata.sessionId, "events" to rec.eventCount))
         recorder = null
+        lastSession = rec
+        rec.stop(onFinalized)
+    }
+
+    /**
+     * Waits for the most recent session to finish being written, so a caller does not export a
+     * truncated one. Returns true when there is nothing to wait for.
+     */
+    fun awaitLastSessionFinalized(timeoutMs: Long): Boolean {
+        val rec = lastSession ?: return true
+        return rec.finalized || rec.awaitFinalized(timeoutMs)
     }
 
     // -------------------------------------------------------------------- markers

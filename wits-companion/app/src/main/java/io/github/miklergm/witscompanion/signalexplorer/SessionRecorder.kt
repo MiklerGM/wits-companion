@@ -11,6 +11,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -64,6 +65,20 @@ class SessionRecorder(
     @Volatile
     var active: Boolean = true
         private set
+
+    /**
+     * True once every queued write has hit the disk and the executor is shut down. Only then
+     * does the session directory hold the complete tail, closing markers and catalog delta —
+     * exporting before this reads a truncated session.
+     */
+    @Volatile
+    var finalized: Boolean = false
+        private set
+
+    private val bytesWritten = AtomicLong(0)
+
+    @Volatile
+    private var sizeCapLogged = false
 
     init {
         io.execute {
@@ -123,11 +138,32 @@ class SessionRecorder(
 
     /**
      * Redaction happens at write time so nothing sensitive ever reaches storage.
-     * Media metadata keys are dropped unless verbose debugging is on elsewhere.
+     *
+     * This walks the JSON tree with [LogRedactor.redactJson] rather than regexing the
+     * serialized string: string-level redaction only matches MAC/VIN/long-digit shapes, so an
+     * SSID, a paired phone name or a track title arriving in a vendor broadcast extra went to
+     * disk verbatim — including through the `{"name":…,"value":…}` shape that hides the real
+     * key from a plain key walk. docs/security.md promises key-aware redaction here; now it is.
+     *
+     * Writes stop at [MAX_SESSION_BYTES]. A session is a debugging aid on a head unit with a
+     * small data partition, and broadcast extras can carry whole byte arrays as hex.
      */
     private fun appendRedacted(file: File, json: JSONObject) {
-        val text = LogRedactor.redactValue(json.toString())
-        file.appendText(text + "\n")
+        if (bytesWritten.get() >= MAX_SESSION_BYTES) {
+            if (!sizeCapLogged) {
+                sizeCapLogged = true
+                Log.w(TAG, "session size cap reached (${MAX_SESSION_BYTES} bytes); dropping further writes")
+                runCatching {
+                    File(sessionDir, "TRUNCATED").writeText(
+                        "Session exceeded ${MAX_SESSION_BYTES} bytes and was truncated.\n"
+                    )
+                }
+            }
+            return
+        }
+        val text = LogRedactor.redactJson(json).toString() + "\n"
+        file.appendText(text)
+        bytesWritten.addAndGet(text.toByteArray().size.toLong())
     }
 
     // -------------------------------------------------------------------- markers
@@ -203,9 +239,27 @@ class SessionRecorder(
 
     // ---------------------------------------------------------------------- stop
 
-    fun stop() {
-        if (!active) return
-        active = false
+    /**
+     * Ends the session and finalizes it on the writer thread.
+     *
+     * Finalization is completion-based, not fire-and-forget. The old version queued the closing
+     * marker and catalog writes and returned immediately, leaving the executor running: an
+     * export starting right after could read a session missing its tail, its closing markers or
+     * its catalog delta, and every finished session leaked its writer thread.
+     *
+     * Order: stop accepting events, drain what is pending, write the catalog delta, mark
+     * [finalized], shut the executor down. [onFinalized] runs on the writer thread once the
+     * queue is empty — post back to your own thread if you need to touch UI.
+     */
+    fun stop(onFinalized: (() -> Unit)? = null) {
+        if (!active) {
+            // Already stopping or stopped: do not queue a second finalization, but still let
+            // the caller learn when the first one is done.
+            if (finalized) onFinalized?.invoke() else io.execute { onFinalized?.invoke() }
+            return
+        }
+        active = false   // producers stop here; record() and recordSnapshot() are now no-ops
+
         // Close any marker still waiting for its post-window.
         val remaining = synchronized(pendingMarkers) {
             val all = pendingMarkers.map { it.first }; pendingMarkers.clear(); all
@@ -219,13 +273,31 @@ class SessionRecorder(
             runCatching {
                 File(sessionDir, "catalog-delta.json")
                     .writeText(catalogDelta.toJson(catalog).toString(2))
-            }
+            }.onFailure { Log.w(TAG, "catalog delta write failed: ${it.message}") }
+            finalized = true
+            runCatching { onFinalized?.invoke() }
+                .onFailure { Log.w(TAG, "finalize callback failed: ${it.message}") }
         }
+        // Accept no further work; everything already queued still runs.
+        io.shutdown()
     }
+
+    /**
+     * Blocks until finalization completes, for callers that genuinely cannot proceed without
+     * the full session on disk (tests, and the export path). Returns false on timeout.
+     */
+    fun awaitFinalized(timeoutMs: Long): Boolean =
+        runCatching { io.awaitTermination(timeoutMs, TimeUnit.MILLISECONDS) }.getOrDefault(false)
 
     companion object {
         private const val TAG = "WitsSessionRecorder"
         const val DEFAULT_RING_CAPACITY = 2000
+
+        /**
+         * Ceiling on one session's JSONL. Broadcast extras can carry whole byte arrays as hex,
+         * and this writes to the head unit's data partition.
+         */
+        const val MAX_SESSION_BYTES = 32L * 1024 * 1024
         const val DEFAULT_PRE_WINDOW_MS = 3_000L
         const val DEFAULT_POST_WINDOW_MS = 8_000L
 

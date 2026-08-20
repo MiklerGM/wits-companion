@@ -126,9 +126,26 @@ receiver itself:
   `INVALID` with the raw text retained rather than being trusted;
 - the worst a spoofed broadcast achieves is a wrong number on the dashboard.
 
-Crucially, **safety decisions do not rest on this receiver alone**: `ReverseGuard` also
-consults the `wits.backcar` property and the source id, so a spoofed "reverse released"
-broadcast cannot by itself unblock an automatic action.
+Crucially, **safety decisions do not rest on this receiver alone**. `ReverseGuard` also
+consults the `wits.backcar` property and the source id, and the two transports are resolved
+against each other rather than overwriting one another — the rule is deliberately asymmetric
+(`CarStateRepository.keepTrustedPositive`):
+
+- a broadcast may always **raise** a safety alarm (worst case a hostile app blocks *our own*
+  automation, which fails safe);
+- it may not **clear** an alarm that the polled property — the transport an app cannot write —
+  is still asserting and confirmed within the trust window.
+
+Legitimate clearing is not delayed: the next poll is at most one interval away and carries the
+same news on the trusted transport. A spoofed "reverse released" broadcast therefore cannot by
+itself unblock an automatic action.
+
+Separately, evidence **expires**. `CarState.reverseActiveForControl()` accepts positive evidence
+however old, but requires negative evidence to be fresher than `ReverseGuard`'s
+`controlMaxAgeMs`; a `reverse=false` that stops being refreshed decays to *unknown*, not to
+*safe*, so automatic actions fail closed once telemetry disappears. The display value
+(`reverseActive`) keeps showing the last reading, which is correct for a dashboard and wrong
+for a control decision — hence the split.
 
 ### 3.3 No remote control surface
 
@@ -180,6 +197,19 @@ Prevents both user-driven and bug-driven ping-pong.
 | Phone name, contact names | dropped |
 | Media track title/artist | dropped unless verbose debug is explicitly enabled |
 | IMEI/subscriber ids | dropped |
+
+Redaction is **key-aware and recursive** (`LogRedactor.redactJson`), applied to the whole JSON
+tree before anything is written — event log and Signal Explorer session files alike. Matching on
+serialized text alone would only catch the MAC/VIN/long-digit *shapes*; an SSID or a track title
+is identified by its key, so the walk has to see keys.
+
+Captured broadcast extras get a second rule, because they do not nest their key as a JSON key: a
+`CapturedExtra` serializes as `{"name":"ssid","javaType":…,"value":…}`, so when `name` names
+something sensitive the sibling `value`, `hex` and `base64` fields are dropped with it.
+
+Session files are additionally capped at `SessionRecorder.MAX_SESSION_BYTES`; a session that hits
+the cap stops writing and is marked with a `TRUNCATED` file rather than filling the data
+partition (broadcast extras can carry whole byte arrays as hex).
 
 Export is user-initiated via the Storage Access Framework (`ACTION_CREATE_DOCUMENT`), so
 the app never needs storage permissions and the user picks the destination.

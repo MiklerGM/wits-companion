@@ -3,6 +3,7 @@ package io.github.miklergm.witscompanion.logging
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -29,9 +30,70 @@ object LogRedactor {
         "title", "artist", "album",   // media metadata: private by default
     )
 
+    /** Media metadata is sensitive by default but can be kept with an explicit debug opt-in. */
+    private val MEDIA_KEYS = listOf("title", "artist", "album")
+
+    /** The payload fields of a [CapturedExtra]; its real key lives in a sibling "name". */
+    private val EXTRA_PAYLOAD_KEYS = setOf("value", "hex", "base64")
+
+    const val REDACTED = "<redacted>"
+
     fun isSensitiveKey(key: String): Boolean {
         val k = key.lowercase()
         return SENSITIVE_KEYS.any { k.contains(it) }
+    }
+
+    private fun isMediaKey(key: String): Boolean =
+        key.lowercase().let { k -> MEDIA_KEYS.any { k.contains(it) } }
+
+    /** Whether a key's value must be dropped, honouring the media opt-in. */
+    fun isRedactedKey(key: String, verboseMedia: Boolean = false): Boolean =
+        if (isMediaKey(key)) !verboseMedia else isSensitiveKey(key)
+
+    /**
+     * Key-aware redaction over a whole JSON tree — the form anything persisted must go through.
+     *
+     * [redactValue] alone is not enough: it only matches MAC/VIN/long-digit *shapes*, so an SSID,
+     * a paired phone name or a track title passes straight through it. Those are caught by key,
+     * which means the walk has to see the keys — serializing first and regexing the string loses
+     * them.
+     *
+     * Two rules, because captured broadcast extras do not nest their key as a JSON key:
+     *
+     *  1. Any key that [isRedactedKey] accepts has its value replaced, however deep.
+     *  2. A [CapturedExtra] object serializes as `{"name":"ssid","javaType":…,"value":"…"}` — its
+     *     real key is *data*, not a key. When "name" names something sensitive, the sibling
+     *     payload fields (`value`, `hex`, `base64`) are dropped with it. Without this a vendor
+     *     broadcast carrying an SSID or a phone name would be recorded verbatim.
+     */
+    fun redactJson(value: Any?, verboseMedia: Boolean = false): Any? = when (value) {
+        is JSONObject -> redactJsonObject(value, verboseMedia)
+        is JSONArray -> JSONArray().also { out ->
+            for (i in 0 until value.length()) out.put(redactJson(value.opt(i), verboseMedia))
+        }
+        is String -> redactValue(value)
+        else -> value
+    }
+
+    private fun redactJsonObject(o: JSONObject, verboseMedia: Boolean): JSONObject {
+        // Rule 2: only for the captured-extra shape, identified by its javaType companion, so
+        // an unrelated object with a "name" field is not over-redacted.
+        val extraName = o.optString("name", "").takeIf { it.isNotEmpty() && o.has("javaType") }
+        val extraIsSensitive = extraName != null && isRedactedKey(extraName, verboseMedia)
+
+        val out = JSONObject()
+        o.keys().forEach { key ->
+            val child = o.opt(key)
+            out.put(
+                key,
+                when {
+                    isRedactedKey(key, verboseMedia) -> REDACTED
+                    extraIsSensitive && key in EXTRA_PAYLOAD_KEYS -> REDACTED
+                    else -> redactJson(child, verboseMedia)
+                },
+            )
+        }
+        return out
     }
 
     fun redactValue(value: String): String =
@@ -47,10 +109,8 @@ object LogRedactor {
         extras: Map<String, Any?>,
         verboseMedia: Boolean = false,
     ): Map<String, String> = extras.mapNotNull { (k, v) ->
-        val isMedia = k.lowercase().let { it.contains("title") || it.contains("artist") || it.contains("album") }
         when {
-            isMedia && !verboseMedia -> k to "<redacted>"
-            isSensitiveKey(k) && !(isMedia && verboseMedia) -> k to "<redacted>"
+            isRedactedKey(k, verboseMedia) -> k to REDACTED
             v == null -> k to "null"
             else -> k to redactValue(v.toString())
         }

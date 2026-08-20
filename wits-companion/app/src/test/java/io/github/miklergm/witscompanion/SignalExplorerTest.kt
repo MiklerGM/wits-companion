@@ -17,6 +17,7 @@ import io.github.miklergm.witscompanion.signalexplorer.StreamState
 import io.github.miklergm.witscompanion.signalexplorer.ValueType
 import io.github.miklergm.witscompanion.signalexplorer.VolumeDomain
 import io.github.miklergm.witscompanion.signalexplorer.VolumeReading
+import io.github.miklergm.witscompanion.logging.LogRedactor
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -30,6 +31,68 @@ import org.robolectric.RobolectricTestRunner
 class SignalExplorerTest {
 
     // ------------------------------------------------ typed extras / serialization
+
+    // -------------------------------------------------------------- redaction
+
+    @Test
+    fun `session redaction catches sensitive values inside captured extras`() {
+        // The shape that defeated string-level redaction: the real key is *data* in a "name"
+        // field, so nothing a key walk looks at ever says "ssid".
+        val extra = JSONObject()
+            .put("name", "ssid")
+            .put("javaType", "String")
+            .put("value", "MyHomeNetwork")
+        val event = JSONObject()
+            .put("kind", "BROADCAST")
+            .put("payload", JSONObject().put("extras", org.json.JSONArray().put(extra)))
+
+        val out = LogRedactor.redactJson(event).toString()
+
+        assertFalse("the SSID must not reach disk", out.contains("MyHomeNetwork"))
+        assertTrue("the key itself is kept, so the capture stays useful", out.contains("ssid"))
+    }
+
+    @Test
+    fun `sensitive extras are redacted across value hex and base64`() {
+        val extra = JSONObject()
+            .put("name", "phoneName")
+            .put("javaType", "byte[]")
+            .put("hex", "4a6f686e73")
+            .put("base64", "Sm9obnM=")
+        val out = LogRedactor.redactJson(extra).toString()
+        assertFalse(out.contains("4a6f686e73"))
+        assertFalse(out.contains("Sm9obnM="))
+    }
+
+    @Test
+    fun `redaction recurses and leaves ordinary capture data intact`() {
+        val nested = JSONObject().put(
+            "outer",
+            JSONObject().put("inner", JSONObject().put("password", "hunter2")),
+        ).put("key_code", 42).put("action", "com.can.ACTION_KEY_CODE")
+
+        val out = LogRedactor.redactJson(nested).toString()
+        assertFalse("nested secrets are reached", out.contains("hunter2"))
+        assertTrue("unrelated research data survives", out.contains("42"))
+        assertTrue(out.contains("com.can.ACTION_KEY_CODE"))
+    }
+
+    @Test
+    fun `an extra whose name is harmless is not redacted`() {
+        val extra = JSONObject()
+            .put("name", "key_status").put("javaType", "String").put("value", "down")
+        assertTrue(LogRedactor.redactJson(extra).toString().contains("down"))
+    }
+
+    @Test
+    fun `media metadata is redacted by default and kept under the debug opt-in`() {
+        val extra = JSONObject()
+            .put("name", "title").put("javaType", "String").put("value", "Some Song")
+        assertFalse(LogRedactor.redactJson(extra).toString().contains("Some Song"))
+        assertTrue(
+            LogRedactor.redactJson(extra, verboseMedia = true).toString().contains("Some Song"),
+        )
+    }
 
     @Test
     fun `bundle extras keep their real java types`() {

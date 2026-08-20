@@ -95,7 +95,9 @@ class SignalExplorerSection(private val app: WitsCompanionApp) : MainActivity.Se
         }.weighted())
         recordRow.addView(btn(activity, "Stop") {
             app.signalExplorer.recorder?.removeListener(recorderListener)
-            app.signalExplorer.stopSession()
+            // The session is complete only once the writer thread drains; refresh again then so
+            // the status line stops saying "finishing" without the user having to poke it.
+            app.signalExplorer.stopSession { activity.runOnUiThread { refreshAll() } }
             activity.toast("Stopped"); refreshAll()
         }.weighted())
         c.addView(recordRow)
@@ -261,8 +263,17 @@ class SignalExplorerSection(private val app: WitsCompanionApp) : MainActivity.Se
     }
 
     private fun exportLatest(activity: MainActivity) {
+        if (app.signalExplorer.isRecording) {
+            activity.toast("Stop the recording first"); return
+        }
         val dir = SessionRecorder.listSessions(activity).firstOrNull()
         if (dir == null) { activity.toast("No sessions"); return }
+        // Finalization is asynchronous: the closing markers, the session tail and the catalog
+        // delta are written on the recorder's writer thread. Exporting before it drains produces
+        // a bundle that is quietly missing exactly the part the tester just recorded.
+        if (!app.signalExplorer.awaitLastSessionFinalized(FINALIZE_WAIT_MS)) {
+            activity.toast("Session still being written — try again in a moment"); return
+        }
         val text = Exporter.bundleAsText(dir, app.signalExplorer.catalog)
         LogExportHelper.exportText(activity, text, "${dir.name}-signal-session.txt")
     }
@@ -331,5 +342,12 @@ class SignalExplorerSection(private val app: WitsCompanionApp) : MainActivity.Se
     private companion object {
         /** Coalescing window for timeline refreshes driven by probe threads. */
         const val REFRESH_MS = 250L
+
+        /**
+         * How long Export waits for a session that is still being finalized. The queue is a
+         * handful of small JSON writes, so this is all but always instant; the cap exists so a
+         * wedged writer degrades to a toast rather than an unresponsive screen.
+         */
+        const val FINALIZE_WAIT_MS = 2_000L
     }
 }
