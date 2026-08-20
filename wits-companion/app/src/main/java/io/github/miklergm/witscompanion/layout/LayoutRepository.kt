@@ -23,11 +23,21 @@ class LayoutRepository(context: Context) {
      * adjusted split), followed by any fully custom presets.
      */
     fun allPresets(): List<LayoutPreset> =
-        DefaultPresets.all().map { applyTweaks(it) } + customPresets()
+        (DefaultPresets.all() + customPresets()).map { decorate(it) }
 
-    /** Applies the single user geometry to a preset. */
-    private fun applyTweaks(preset: LayoutPreset): LayoutPreset =
-        preset.withGeometry(split, swapped)
+    /**
+     * Applies the single user geometry to a preset.
+     *
+     * **Apply this exactly once per preset.** It is not idempotent: [LayoutPreset.withSplit]
+     * re-derives the tiles from their current left edges, so a second pass over an already
+     * mirrored preset flips the sides back. Presets are decorated where they are *produced* —
+     * here for stored ones, and at the ad-hoc construction sites — never again at apply time.
+     *
+     * Custom presets are stored undecorated and decorated on read, so changing the split or
+     * the side order retunes saved layouts too instead of freezing them at the geometry that
+     * happened to be set when they were saved.
+     */
+    fun decorate(preset: LayoutPreset): LayoutPreset = preset.withGeometry(split, swapped)
 
     /**
      * The one split ratio, shared by every layout.
@@ -68,7 +78,7 @@ class LayoutRepository(context: Context) {
     private fun rebuiltAnchored(id: String): LayoutPreset? {
         if (!id.startsWith(DefaultPresets.ANCHORED_ID_PREFIX)) return null
         val pkg = id.removePrefix(DefaultPresets.ANCHORED_ID_PREFIX).takeIf { it.isNotEmpty() } ?: return null
-        return applyTweaks(DefaultPresets.anchoredFor(pkg, pkg))
+        return decorate(DefaultPresets.anchoredFor(pkg, pkg))
     }
 
     fun customPresets(): List<LayoutPreset> {

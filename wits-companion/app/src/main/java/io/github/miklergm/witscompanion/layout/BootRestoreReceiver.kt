@@ -26,11 +26,18 @@ class BootRestoreReceiver : BroadcastReceiver() {
         ) return
 
         val app = context.applicationContext as? WitsCompanionApp ?: return
-        // Fire only if restore-on-boot (half of the "autostart on power-up" switch) is enabled;
-        // onBootCompleted then reasserts the last layout, or opens the Cockpit if there is none.
-        if (!app.layoutRepository.restoreOnBoot) return
+        // Two independent opt-ins ride on BOOT_COMPLETED: restoring the layout, and bringing the
+        // hotspot back. onBootCompleted() gates each one itself, so this must fire when *either*
+        // is enabled — gating on restoreOnBoot alone meant a user who wanted only the hotspot
+        // restored never got it, because the receiver returned before reaching that call.
+        val wantsLayout = app.layoutRepository.restoreOnBoot
+        val wantsHotspot = app.layoutRepository.restoreHotspot
+        if (!wantsLayout && !wantsHotspot) return
 
-        app.eventLogger.log("layout", "boot_received", result = "scheduled")
+        app.eventLogger.log(
+            "layout", "boot_received", result = "scheduled",
+            extras = mapOf("layout" to wantsLayout, "hotspot" to wantsHotspot),
+        )
 
         // Let the launcher, CenterService and the MCU settle first. This is a non-blocking
         // postDelayed (the 80 s WIPE watchdog is unaffected); the only tension is *too early* —
@@ -42,8 +49,21 @@ class BootRestoreReceiver : BroadcastReceiver() {
         // now covered by the post-apply verification, which re-asserts the layout at +3 s / +8 s if
         // it did not take. BOOT_COMPLETED already lands well after the screen is touchable, so this
         // delay is pure added wait for the driver.
+        //
+        // goAsync() keeps the process alive across the delay. Without it onReceive() returns
+        // immediately, the receiver is done, and a just-booted unit under memory pressure is
+        // free to kill us before the callback ever runs. BOOT_COMPLETED is a background
+        // broadcast, so the allowance is comfortably longer than the delay — but finish() is
+        // called on every path regardless, because failing to release it is an ANR.
+        val pending = goAsync()
         Handler(Looper.getMainLooper()).postDelayed({
-            app.recoveryCoordinator.onBootCompleted(app.carStateRepository.state)
+            try {
+                app.recoveryCoordinator.onBootCompleted(app.carStateRepository.state)
+            } catch (t: Throwable) {
+                app.eventLogger.log("layout", "boot_restore", result = "error:${t.javaClass.simpleName}")
+            } finally {
+                pending.finish()
+            }
         }, BOOT_DELAY_MS)
     }
 

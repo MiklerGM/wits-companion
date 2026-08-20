@@ -191,7 +191,11 @@ data class LayoutPreset(
 
             windows.size == 2 && splitFraction() != null -> {
                 val resplit = withSplit(f)
-                if (swapped) resplit.mirrored() else resplit
+                // Keep the id: geometry is a *display* choice, and the persisted
+                // last-applied id must survive the user toggling it. mirrored()'s default
+                // "<id>_mirrored" made the stored id unresolvable the moment swap changed,
+                // which is the same failure that once broke the cold-boot restore.
+                if (swapped) resplit.mirrored(newId = id) else resplit
             }
 
             else -> this

@@ -239,7 +239,12 @@ class MediaSessionRepository(
                 isPlaying = ps?.state == PlaybackState.STATE_PLAYING,
                 durationMs = md?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
                 positionMs = ps?.position ?: 0L,
-                positionUpdatedElapsedMs = android.os.SystemClock.elapsedRealtime(),
+                // PlaybackState.position is the position as of lastPositionUpdateTime, not as
+                // of now — both in the elapsedRealtime timebase. Stamping it with the snapshot
+                // time instead made the UI extrapolate from the wrong origin, so progress
+                // lagged (or jumped) by however long ago the player last published a state.
+                positionUpdatedElapsedMs = ps?.lastPositionUpdateTime?.takeIf { it > 0L }
+                    ?: android.os.SystemClock.elapsedRealtime(),
                 canPlay = actions and PlaybackState.ACTION_PLAY != 0L,
                 canPause = actions and PlaybackState.ACTION_PAUSE != 0L,
                 canSkipNext = actions and PlaybackState.ACTION_SKIP_TO_NEXT != 0L,

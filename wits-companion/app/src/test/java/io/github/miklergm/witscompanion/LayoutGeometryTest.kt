@@ -24,6 +24,56 @@ class LayoutGeometryTest {
 
     private val display2400x900 = Rect(0, 0, 2400, 900)
 
+    // ------------------------------------------------- geometry vs. identity
+
+    @Test
+    fun `swapping sides does not change the preset id`() {
+        // The persisted last-applied id must survive a geometry change. When withGeometry()
+        // renamed the preset to "<id>_mirrored", toggling swap orphaned that stored id — the
+        // same class of failure that once left a cold boot with no layout to restore.
+        val base = DefaultPresets.all().first { it.splitFraction() != null }
+
+        val plain = base.withGeometry(0.65f, swapped = false)
+        val swapped = base.withGeometry(0.65f, swapped = true)
+
+        assertEquals("identity is not a function of geometry", base.id, plain.id)
+        assertEquals("identity is not a function of geometry", base.id, swapped.id)
+        assertNotEquals(
+            "the tiles must still actually swap",
+            plain.windows.sortedBy { it.bounds.left }.first().packageName,
+            swapped.windows.sortedBy { it.bounds.left }.first().packageName,
+        )
+    }
+
+    @Test
+    fun `withGeometry applies the requested split to both orders`() {
+        val base = DefaultPresets.all().first { it.splitFraction() != null }
+
+        val plain = base.withGeometry(0.4f, swapped = false)
+        assertEquals(0.4f, plain.splitFraction()!!, 0.001f)
+
+        // Mirrored, the primary app occupies the right-hand 40%: the left tile is the
+        // complement, so the reported split is 0.6.
+        val swapped = base.withGeometry(0.4f, swapped = true)
+        assertEquals(0.6f, swapped.splitFraction()!!, 0.001f)
+    }
+
+    @Test
+    fun `withGeometry is order-dependent, so it must be applied exactly once`() {
+        // Documents why decoration happens where presets are produced and never again at
+        // apply time: withSplit() re-derives tiles from their current left edges, so a second
+        // pass over an already mirrored preset swaps the sides back.
+        val base = DefaultPresets.all().first { it.splitFraction() != null }
+        val once = base.withGeometry(0.65f, swapped = true)
+        val twice = once.withGeometry(0.65f, swapped = true)
+
+        assertNotEquals(
+            "double decoration is not a no-op — hence the single-application rule",
+            once.windows.sortedBy { it.bounds.left }.first().packageName,
+            twice.windows.sortedBy { it.bounds.left }.first().packageName,
+        )
+    }
+
     @Test
     fun `full bounds map to the whole area`() {
         val px = NormalizedBounds.FULL.toPixels(display2400x900)

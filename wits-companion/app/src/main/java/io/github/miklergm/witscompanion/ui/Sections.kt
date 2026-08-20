@@ -25,7 +25,6 @@ import io.github.miklergm.witscompanion.safety.Trigger
 import io.github.miklergm.witscompanion.wits.WitsNightModeController
 import io.github.miklergm.witscompanion.wits.WitsPackages
 import io.github.miklergm.witscompanion.wits.WitsSettingsKeys
-import io.github.miklergm.witscompanion.wits.WitsSourceController
 import io.github.miklergm.witscompanion.wits.WitsWindowMode
 
 // ------------------------------------------------------------------ view helpers
@@ -263,11 +262,21 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
             // start DashboardActivity here as well: a plain start would create it fullscreen
             // first, and the later freeform placement would only reorder that fullscreen task,
             // leaving the panel overlapping (and hiding) the map on the first control tap.
-            app.layoutEngine.apply(anchored, app.carStateRepository.state, Trigger.USER)
-            app.layoutRepository.lastAppliedPresetId = anchored.id
-            val mapPkg = anchored.windows.firstOrNull { it.packageName != WitsPackages.SELF }?.packageName
-            app.layoutRepository.cockpitLeft = mapPkg?.let { CockpitLeft.App(it) } ?: CockpitLeft.Default
-            dismissConfig(activity)
+            when (val r = app.layoutEngine.apply(anchored, app.carStateRepository.state, Trigger.USER)) {
+                is LayoutEngine.Result.Applied -> {
+                    app.layoutRepository.lastAppliedPresetId = anchored.id
+                    val mapPkg = anchored.windows
+                        .firstOrNull { it.packageName != WitsPackages.SELF }?.packageName
+                    app.layoutRepository.cockpitLeft =
+                        mapPkg?.let { CockpitLeft.App(it) } ?: CockpitLeft.Default
+                    dismissConfig(activity)
+                }
+                // A refusal is usually the reverse guard. Recording the Cockpit as applied and
+                // closing the screen anyway told the user it had worked and left the persisted
+                // last-layout pointing at a layout that was never placed.
+                is LayoutEngine.Result.Refused -> activity.toast("Refused: ${r.reason}")
+                is LayoutEngine.Result.Invalid -> activity.toast("Invalid: ${r.errors.joinToString()}")
+            }
         } else {
             // No anchored preset to place the map with — still open the panel.
             activity.startActivity(android.content.Intent(activity, DashboardActivity::class.java))
@@ -394,9 +403,14 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
 
         fun chosen(): Pair<String, String> =
             suggested[left.selectedItemPosition] to suggested[right.selectedItemPosition]
-        fun preset() = chosen().let { (l, r) ->
+        // The placeholder geometry DefaultPresets.tiledFor() carries is a stand-in; the split
+        // slider and the swap button above only take effect once the repository decorates it.
+        // Applying the raw preset ignored both controls entirely.
+        fun rawPreset() = chosen().let { (l, r) ->
             DefaultPresets.tiledFor(l, r, catalog.labelFor(l), catalog.labelFor(r))
         }
+        // Saved undecorated, so a later change to the split or side order retunes it too.
+        fun preset() = repo.decorate(rawPreset())
 
         val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
         row.addView(Button(activity).apply {
@@ -413,7 +427,7 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
             setOnClickListener {
                 val (l, r) = chosen()
                 if (l == r) { activity.toast("Pick two different apps"); return@setOnClickListener }
-                app.layoutRepository.saveCustomPreset(preset())
+                app.layoutRepository.saveCustomPreset(rawPreset())
                 activity.toast("Saved"); activity.refreshCurrentSection()
             }
         })
@@ -658,7 +672,11 @@ class SettingsSection(private val app: WitsCompanionApp) : MainActivity.Section 
         WitsNightModeController.Mode.entries.forEach { mode ->
             c.addView(activity.button("${mode.label} (${mode.value}) — ${mode.description}") {
                 if (app.layoutRepository.nightModeBackup == null) {
-                    app.layoutRepository.nightModeBackup = app.nightModeController.readRaw() ?: "unset"
+                    // "unset" is a real recorded state — the key genuinely had no value before
+                    // we touched it — not an absence of backup. restoreRaw() tells the user
+                    // that plainly rather than claiming nothing was recorded.
+                    app.layoutRepository.nightModeBackup =
+                        app.nightModeController.readRaw() ?: WitsNightModeController.UNSET
                 }
                 when (val r = app.nightModeController.write(mode)) {
                     WitsNightModeController.Result.Written -> activity.toast("Set to ${mode.label}")
@@ -668,6 +686,8 @@ class SettingsSection(private val app: WitsCompanionApp) : MainActivity.Section 
                     }
                     is WitsNightModeController.Result.Refused -> activity.toast("Refused: ${r.reason}")
                     is WitsNightModeController.Result.Error -> activity.toast("Error: ${r.message}")
+                    is WitsNightModeController.Result.NotApplied ->
+                        activity.toast("Not applied: ${r.reason}")
                 }
                 refresh()
             })
@@ -675,11 +695,20 @@ class SettingsSection(private val app: WitsCompanionApp) : MainActivity.Section 
 
         c.addView(activity.button("Restore previous value") {
             val backup = app.layoutRepository.nightModeBackup
-            if (backup == null || backup == "unset") {
+            if (backup == null) {
                 activity.toast("No previous value recorded")
             } else {
-                app.nightModeController.restoreRaw(backup)
-                activity.toast("Restored $backup")
+                // The old version toasted "Restored" unconditionally, including for the "unset"
+                // backup that restoreRaw() cannot honour and for a write that never landed.
+                when (val r = app.nightModeController.restoreRaw(backup)) {
+                    WitsNightModeController.Result.Written -> activity.toast("Restored $backup")
+                    WitsNightModeController.Result.PermissionRequired ->
+                        activity.toast("Grant \"Modify system settings\" first")
+                    is WitsNightModeController.Result.Refused -> activity.toast(r.reason)
+                    is WitsNightModeController.Result.Error -> activity.toast("Error: ${r.message}")
+                    is WitsNightModeController.Result.NotApplied ->
+                        activity.toast("Not applied: ${r.reason}")
+                }
                 refresh()
             }
         })

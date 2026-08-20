@@ -38,6 +38,14 @@ class WitsNightModeController(
         data object PermissionRequired : Result
         data class Refused(val reason: String) : Result
         data class Error(val message: String) : Result
+
+        /**
+         * The write was attempted and permitted, but the setting did not end up holding the
+         * requested value — the provider rejected it, or something wrote over it immediately.
+         * Distinct from [Error] (which means the call threw) and emphatically not [Written]:
+         * reporting success for a write that did not take is how a UI ends up lying.
+         */
+        data class NotApplied(val reason: String) : Result
     }
 
     fun canWrite(): Boolean = Settings.System.canWrite(appContext)
@@ -87,29 +95,61 @@ class WitsNightModeController(
 
         val before = readRaw()
         return try {
-            Settings.System.putInt(
+            // putInt returns false when the provider refuses the write; ignoring it (and the
+            // readback below) meant "Written" was reported for writes that never landed.
+            val accepted = Settings.System.putInt(
                 appContext.contentResolver, WitsSettingsKeys.WITS_NIGHT_MODE, mode.value
             )
             rateLimiter.record(ActionRateLimiter.KEY_NIGHT_MODE)
             val after = readRaw()
+            val took = after?.trim() == mode.value.toString()
             logger?.log(
                 category = "night_mode", action = "write",
                 extras = mapOf("old" to (before ?: "unset"), "new" to (after ?: "?"), "mode" to mode.name),
-                result = if (after?.trim() == mode.value.toString()) "ok" else "readback_mismatch",
+                result = when {
+                    !accepted -> "rejected"
+                    took -> "ok"
+                    else -> "readback_mismatch"
+                },
                 confidence = "HYP",
             )
-            Result.Written
+            when {
+                !accepted -> Result.NotApplied("the system rejected the write")
+                took -> Result.Written
+                else -> Result.NotApplied("the setting still reads ${after ?: "unset"}")
+            }
         } catch (t: Throwable) {
             logger?.log("night_mode", "write", result = "error:${t.javaClass.simpleName}")
             Result.Error(t.message ?: t.javaClass.simpleName)
         }
     }
 
-    /** Restores a previously recorded raw value (used by "undo"). */
+    /**
+     * Restores a previously recorded raw value (used by "undo").
+     *
+     * [UNSET] is a real, distinct backup state, not a missing one: on this firmware
+     * `wits_night_mode` has no value at all until something writes it, so the honest first
+     * backup is "there was nothing here". Android offers no supported way to return a
+     * `Settings.System` key to absent, so that case is refused with the actual reason rather
+     * than the misleading "nothing to restore" it used to produce — the value had been
+     * recorded, it simply cannot be put back.
+     */
     fun restoreRaw(raw: String?): Result {
-        val v = raw?.trim()?.toIntOrNull()
-            ?: return Result.Refused("nothing to restore")
+        val trimmed = raw?.trim()
+        if (trimmed == null || trimmed.isEmpty()) return Result.Refused("nothing to restore")
+        if (trimmed == UNSET) {
+            return Result.Refused(
+                "the setting was unset before; Android cannot return it to unset. " +
+                    "Pick a mode explicitly instead."
+            )
+        }
+        val v = trimmed.toIntOrNull() ?: return Result.Refused("unknown previous value: $raw")
         val mode = Mode.fromValue(v) ?: return Result.Refused("unknown previous value: $raw")
         return write(mode)
+    }
+
+    companion object {
+        /** Backup marker for "the key had never been written". See [restoreRaw]. */
+        const val UNSET = "unset"
     }
 }

@@ -40,6 +40,9 @@ class BrightnessController(
         data class Written(val percent: Int) : Result
         data object PermissionRequired : Result
         data class Error(val message: String) : Result
+
+        /** Permitted and attempted, but the panel did not take the new value. */
+        data class NotApplied(val reason: String) : Result
     }
 
     fun canWrite(): Boolean = Settings.System.canWrite(appContext)
@@ -87,17 +90,29 @@ class BrightnessController(
                     Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL,
                 )
             }
-            Settings.System.putInt(
+            // putInt's return value says whether the provider accepted the write at all;
+            // discarding it (and the readback) reported the *intended* percentage as fact even
+            // when the panel never moved.
+            val accepted = Settings.System.putInt(
                 appContext.contentResolver, Settings.System.SCREEN_BRIGHTNESS, next
             )
             val readback = readRaw()
             logger?.log(
                 category = "brightness", action = "nudge",
                 extras = mapOf("old" to (current), "new" to next, "delta" to deltaFraction),
-                result = if (readback == next) "ok" else "readback=$readback",
+                result = when {
+                    !accepted -> "rejected"
+                    readback == next -> "ok"
+                    else -> "readback=$readback"
+                },
                 confidence = "HYP",
             )
-            Result.Written(rawToPercent(next))
+            when {
+                !accepted -> Result.NotApplied("the system rejected the write")
+                // Report what the panel actually holds, not what we asked for.
+                readback != null -> Result.Written(rawToPercent(readback))
+                else -> Result.Written(rawToPercent(next))
+            }
         } catch (t: Throwable) {
             logger?.log("brightness", "nudge", result = "error:${t.javaClass.simpleName}")
             Result.Error(t.message ?: t.javaClass.simpleName)

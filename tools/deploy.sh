@@ -74,10 +74,19 @@ install() {
   out=$("$ADB" -s "$SERIAL" install -r -d "$APK" 2>&1) || true
   echo "$out"
   if ! echo "$out" | grep -q Success; then
-    echo "== retrying after uninstall (signature/downgrade clash) =="
-    "$ADB" -s "$SERIAL" uninstall "$PKG" >/dev/null 2>&1 || true
-    out=$("$ADB" -s "$SERIAL" install "$APK" 2>&1) || true
-    echo "$out"
+    # Uninstall ONLY for the failures a reinstall actually fixes. This wipes the app's data
+    # (layouts, presets, recorded sessions), so a disk-full, transport or corrupt-APK failure
+    # must not trigger it — those used to take out the working install and its data as well.
+    if echo "$out" | grep -qE 'INSTALL_FAILED_UPDATE_INCOMPATIBLE|INSTALL_PARSE_FAILED_INCONSISTENT_CERTIFICATES|INSTALL_FAILED_VERSION_DOWNGRADE|INSTALL_FAILED_SHARED_USER_INCOMPATIBLE'; then
+      echo "== signature/downgrade clash — reinstalling clean (THIS ERASES APP DATA) =="
+      "$ADB" -s "$SERIAL" uninstall "$PKG" >/dev/null 2>&1 || true
+      out=$("$ADB" -s "$SERIAL" install "$APK" 2>&1) || true
+      echo "$out"
+    else
+      echo "!! install failed for a reason an uninstall would not fix — leaving the existing"
+      echo "!! installation and its data alone. Fix the cause and retry:"
+      echo "$out" | sed 's/^/!!   /'
+    fi
   fi
   # Never report success we did not get: "done" must mean the APK is on the device.
   echo "$out" | grep -q Success || { echo "!! install FAILED on $SERIAL — the device still runs the previous build"; exit 1; }

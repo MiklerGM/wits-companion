@@ -542,6 +542,10 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
                 runCatching { startActivity(app.brightnessController.permissionIntent()) }
             }
             is BrightnessController.Result.Error -> toast("Brightness: ${r.message}")
+            is BrightnessController.Result.NotApplied -> {
+                toast("Brightness unchanged: ${r.reason}")
+                renderBrightness()
+            }
         }
     }
 

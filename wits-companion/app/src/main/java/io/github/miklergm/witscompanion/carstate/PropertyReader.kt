@@ -3,6 +3,7 @@ package io.github.miklergm.witscompanion.carstate
 import android.util.Log
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.util.concurrent.TimeUnit
 
 /**
  * Reads Android system properties from an ordinary (non-system) app.
@@ -132,7 +133,17 @@ class PropertyReader {
                 }
             }
         } finally {
-            runCatching { process.waitFor() }
+            // Bounded wait. probe() runs this from the constructor when the reflection strategy
+            // is unavailable, and the app constructs the reader on the main thread — an
+            // unbounded waitFor() there would hang startup on a wedged subprocess, on a unit
+            // whose vendor watchdog reboots into a recovery WIPE if the system does not report
+            // ready in 80 s (docs/security.md §1.7).
+            runCatching {
+                if (!process.waitFor(GETPROP_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                    Log.w(TAG, "getprop did not exit within ${GETPROP_TIMEOUT_MS}ms; killing it")
+                    process.destroyForcibly()
+                }
+            }
             runCatching { process.destroy() }
         }
         synchronized(bulkCache) {
@@ -151,6 +162,9 @@ class PropertyReader {
 
     private companion object {
         const val TAG = "WitsPropertyReader"
+
+        /** Ceiling on the bulk `getprop` subprocess. See [refreshBulkInternal]. */
+        const val GETPROP_TIMEOUT_MS = 2_000L
         val GETPROP_LINE = Regex("""\[([^\]]*)]:\s*\[(.*)]""")
     }
 }
