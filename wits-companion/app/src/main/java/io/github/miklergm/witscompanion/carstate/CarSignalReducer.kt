@@ -1,5 +1,7 @@
 package io.github.miklergm.witscompanion.carstate
 
+import io.github.miklergm.witscompanion.wits.WitsProfile
+import io.github.miklergm.witscompanion.wits.WitsProfile.SignalId
 import io.github.miklergm.witscompanion.wits.WitsProperties
 import io.github.miklergm.witscompanion.wits.WitsSource
 
@@ -60,42 +62,56 @@ class CarSignalReducer(
      *   `PropertyReader::get` in production, a map in tests.
      */
     fun reduceProperties(read: (String) -> String?, now: Long): CarState {
-        fun boolOf(name: String) =
-            SignalValue.of(read(name), SignalSource.PROPERTY, SignalParsers::bool, null, now)
-
-        fun intOf(name: String) =
-            SignalValue.of(read(name), SignalSource.PROPERTY, SignalParsers::int, null, now)
-
-        fun floatOf(name: String) =
-            SignalValue.of(read(name), SignalSource.PROPERTY, SignalParsers::float, null, now)
-
-        fun strOf(name: String) =
-            SignalValue.of(read(name), SignalSource.PROPERTY, SignalParsers::string, null, now)
-
-        acc = acc.copy(property = keepKnown(acc.property, boolOf(WitsProperties.ACC)))
-        reverse = reverse.copy(property = keepKnown(reverse.property, boolOf(WitsProperties.BACKCAR)))
-        brake = brake.copy(property = keepKnown(brake.property, boolOf(WitsProperties.BRAKE)))
-        illumination = illumination.copy(
-            property = keepKnown(illumination.property, boolOf(WitsProperties.ILL))
+        acc = acc.copy(property = keepKnown(acc.property, readSignal<Boolean>(SignalId.ACC, read, now)))
+        reverse = reverse.copy(
+            property = keepKnown(reverse.property, readSignal<Boolean>(SignalId.REVERSE, read, now))
         )
-        source = source.copy(property = keepKnown(source.property, intOf(WitsProperties.SOURCE)))
-
-        // Speed appears under two names; prefer whichever is actually populated.
-        val speed = intOf(WitsProperties.CAR_SPEED).takeIf { it.isKnown }
-            ?: intOf(WitsProperties.CAN_SPEED)
+        brake = brake.copy(property = keepKnown(brake.property, readSignal<Boolean>(SignalId.BRAKE, read, now)))
+        illumination = illumination.copy(
+            property = keepKnown(illumination.property, readSignal<Boolean>(SignalId.ILLUMINATION, read, now))
+        )
+        source = source.copy(property = keepKnown(source.property, readSignal<Int>(SignalId.SOURCE, read, now)))
 
         state = project(now).copy(
-            batteryVoltageRaw = merge(state.batteryVoltageRaw, floatOf(WitsProperties.BATTERY_VOL), now),
-            speedRaw = merge(state.speedRaw, speed, now),
-            rpmRaw = merge(state.rpmRaw, intOf(WitsProperties.CAR_RATE), now),
-            steeringAngleRaw = merge(state.steeringAngleRaw, intOf(WitsProperties.CAN_ANGLE), now),
-            topPackage = merge(state.topPackage, strOf(WitsProperties.TOP_PACKAGE), now),
+            batteryVoltageRaw = merge(
+                state.batteryVoltageRaw, readSignal<Float>(SignalId.BATTERY_VOLTAGE, read, now), now
+            ),
+            speedRaw = merge(state.speedRaw, readSignal<Int>(SignalId.SPEED, read, now), now),
+            rpmRaw = merge(state.rpmRaw, readSignal<Int>(SignalId.RPM, read, now), now),
+            steeringAngleRaw = merge(
+                state.steeringAngleRaw, readSignal<Int>(SignalId.STEERING_ANGLE, read, now), now
+            ),
+            topPackage = merge(state.topPackage, readSignal<String>(SignalId.TOP_PACKAGE, read, now), now),
             // This profile publishes PDC and doors as single packed strings rather than
             // per-index properties, so keep them raw and unparsed [RUNTIME].
-            radarRaw = merge(state.radarRaw, strOf(WitsProperties.CAN_RADAR), now),
-            doorsRaw = merge(state.doorsRaw, strOf(WitsProperties.CAN_DOOR), now),
+            radarRaw = merge(state.radarRaw, readSignal<String>(SignalId.RADAR, read, now), now),
+            doorsRaw = merge(state.doorsRaw, readSignal<String>(SignalId.DOORS, read, now), now),
         )
         return state
+    }
+
+    /**
+     * Reads one signal from whichever of its sysprops is populated.
+     *
+     * Both the property name(s) and the parser come from [WitsProfile], so this path and the
+     * broadcast path cannot pick different parsers for the same signal.
+     *
+     * A signal with a fallback name (speed: `car.speed`, then `can.speed`) prefers the first
+     * that actually *parses*, not merely the first present — a populated-but-unparseable
+     * primary must not mask a good fallback. If none parse, the first present raw value is
+     * still returned so it surfaces as INVALID with its text kept, rather than as UNKNOWN.
+     */
+    private inline fun <reified T> readSignal(
+        id: SignalId,
+        read: (String) -> String?,
+        now: Long,
+    ): SignalValue<T> {
+        val signal = WitsProfile.signal(id)
+        val names = signal.propertyNames
+        val raw = names.firstNotNullOfOrNull { name ->
+            read(name)?.takeIf { signal.parse(it) != null }
+        } ?: names.firstNotNullOfOrNull(read)
+        return SignalValue.of(raw, SignalSource.PROPERTY, { signal.parse(it) as? T }, null, now)
     }
 
     /** Folds one vendor broadcast in. Unhandled actions leave the state untouched. */

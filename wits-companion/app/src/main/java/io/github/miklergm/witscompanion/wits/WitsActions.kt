@@ -71,22 +71,14 @@ object WitsActions {
 
     const val EXTRA_REVSTATUS = "REVSTATUS"
 
-    /** Every action the car-state receiver subscribes to (read-only). */
-    val CAR_STATE_ACTIONS: List<String> = listOf(
-        ACTION_ACC_INFO,
-        ACTION_ILL_INFO,
-        ACTION_REVSTATUS,
-        ACTION_REAL_REVSTATUS,
-        ACTION_BRAKE_INFO,
-        ACTION_RADAR_VIEW,
-        ACTION_KEY_CODE,
-        ACTION_SOURCE_INFO,
-        ACTION_CAR_VIDEO_STATUS,
-        ACTION_MUSIC_INFO,
-        ACTION_RADIO_INFO,
-        ACTION_BT_INFO,
-        ACTION_BATTERY_VOL,
-    )
+    /**
+     * Every action the car-state receiver subscribes to (read-only).
+     *
+     * Derived from [WitsProfile] rather than listed again here: this used to be a hand-kept
+     * copy, so a signal could be parsed but never subscribed to (or the reverse) with nothing
+     * to catch it.
+     */
+    val CAR_STATE_ACTIONS: List<String> get() = WitsProfile.OBSERVED_ACTIONS
 
     // ------------------------------------------------------------- FORBIDDEN
     /*

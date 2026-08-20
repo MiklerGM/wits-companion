@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import io.github.miklergm.witscompanion.wits.WitsActions
+import io.github.miklergm.witscompanion.wits.WitsProfile
 
 /**
  * Parsed form of a vendor car-state broadcast.
@@ -114,35 +115,16 @@ class WitsBroadcastReceiver(
         onUpdate(action, parse(action, intent))
     }
 
-    private fun parse(action: String, intent: Intent): BroadcastUpdate = when (action) {
-        WitsActions.ACTION_ACC_INFO -> {
-            val raw = readAny(intent, WitsActions.EXTRA_STATUS)
-            BroadcastUpdate.Acc(raw?.let { SignalParsers.bool(it) }, raw)
-        }
-
-        WitsActions.ACTION_ILL_INFO -> {
-            val raw = readAny(intent, WitsActions.EXTRA_STATUS)
-            BroadcastUpdate.Illumination(raw?.let { SignalParsers.bool(it) }, raw)
-        }
-
-        WitsActions.ACTION_REVSTATUS, WitsActions.ACTION_REAL_REVSTATUS -> {
-            // com.can.* carries an Int; com.real.* carries a Boolean. Handle both.
-            val raw = readAny(intent, WitsActions.EXTRA_REVSTATUS)
-            BroadcastUpdate.Reverse(raw?.let { SignalParsers.bool(it) }, raw)
-        }
-
-        WitsActions.ACTION_SOURCE_INFO -> {
-            val raw = readAny(intent, WitsActions.EXTRA_SOURCE_MODE)
-            BroadcastUpdate.Source(raw?.let { SignalParsers.int(it) }, raw)
-        }
-
-        WitsActions.ACTION_BRAKE_INFO -> {
-            val raw = readAny(intent, WitsActions.EXTRA_STATUS)
-                ?: readAny(intent, "state")
-            BroadcastUpdate.Brake(raw?.let { SignalParsers.bool(it) }, raw)
-        }
-
-        else -> BroadcastUpdate.Unhandled
+    /**
+     * Looks the action up in [WitsProfile] and reads whichever of its extras is present.
+     *
+     * Previously a hand-written `when` repeated, per action, the extra name and the parser
+     * that the property path had already chosen elsewhere. Both now come from the one table.
+     */
+    private fun parse(action: String, intent: Intent): BroadcastUpdate {
+        val signal = WitsProfile.signalFor(action) ?: return BroadcastUpdate.Unhandled
+        val raw = signal.extras.firstNotNullOfOrNull { readAny(intent, it) }
+        return WitsProfile.toUpdate(signal, raw)
     }
 
     /**
