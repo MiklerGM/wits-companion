@@ -141,21 +141,44 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
 - [ ] **One-line confirmations:** the emulator cascade is absent on the car (§ Emulator-only);
       `SensorManager` has no `TYPE_LIGHT` (§ Brightness).
 
-- [ ] **Verify the audit fixes on the vehicle** — *all fixed offline 2026-08-20, none confirmed
-      on-car.* Worth a deliberate pass, because two of them change safety-path behaviour:
-  - **Reverse freshness.** Automatic restores now refuse when the reverse signal has not been
-      refreshed within `ReverseGuard.controlMaxAgeMs` (5 s). If `wits.backcar` polls less
-      reliably on the vehicle than assumed, this will show up as autostart/ACC restores being
-      refused with "reverse state unknown or stale" in the log. Check the log after a few
-      power-ups before trusting the value.
-  - **Broadcast vs. property precedence.** A broadcast can no longer clear a fresh
-      property-backed `reverse=true`. Confirm reverse still *releases* promptly — engage and
-      leave reverse, and check the guard unblocks within a poll interval.
-  - **Layout cleanup gating.** Switch presets rapidly (Cockpit → tiled → Cockpit) and confirm
-      no tile is removed or parked out from under the new layout.
-  - **Split/swap now actually apply** to a New-layout Apply and to saved custom presets — the
-      controls were previously ignored, so saved layouts will change geometry on first use.
-  - **Hotspot-only boot restore** now fires; verify with the layout opt-in *off*.
+- [ ] **Verify the audit fixes on the vehicle** — *deployed + partly confirmed on-car
+      2026-08-20.* Build installed 09:46:57; capture in `capture-20260820-postaudit/`.
+  - [x] **Reverse freshness — the 5 s window is safe.** The worry was that `wits.backcar`
+      polls unreliably, which would start refusing automatic restores. Sampled 30×: `"0"`
+      every time, **zero empty reads**, so the reading never goes stale in normal running.
+      Confirmed end-to-end too — the post-update autostart restored the Cockpit and logged
+      `layout/verify -> ok tiles=2`, and **22 log entries since the update contain no
+      `blocked`, `refused`, `stale`, `rate_limited` or `error` results at all.**
+  - [x] **Split/swap decoration reaches the UI** — every preset card renders "65/35", and the
+      applied geometry measured `[0,99][1560,900]` + `[1560,99][2400,900]` = 0.65 exactly.
+  - [x] **Preset identity survives** — the restored preset id is
+      `anchored_com.google.android.apps.maps`, with no `_mirrored` suffix.
+  - [x] **The night-mode "unset" case is real, not hypothetical** — `wits_night_mode` reads
+      `null` on this unit, which is exactly the backup state whose undo used to fail silently.
+  - [ ] **Reverse engage/release** — still unverified; needs the car actually put into reverse.
+      Confirm the guard blocks on engage and unblocks within a poll interval on release.
+  - [ ] **Layout cleanup gating** — not exercised. Note `lockWhilePlacing()` disables the cards
+      for `PLACING_LOCK_MS` after a tap, so the rapid A-then-B switch the generation gate
+      protects against may not be reachable from the UI at all; provoking it probably needs
+      two applies driven programmatically rather than by tapping.
+  - [ ] **Hotspot-only boot restore** — needs a reboot with the layout opt-in *off*.
+- [ ] **Night mode flips to DAY when the engine goes off** — *reported 2026-08-20, not yet
+      reproduced under instrumentation.* With the headlights on **auto** the original
+      always-on-headlights complaint is solved (night and tunnels behave), but shutting the
+      engine off drops the headlights and the screen goes bright while you are still sitting
+      in the car at night. The capture that day had the headlights already off with the engine
+      *running* and night mode stayed locked on (`mNightMode=2`, `mNightModeLocked=true`), so
+      `wits.ill=0` alone is **not** the trigger — it is something in the shutdown transition.
+      **Next step:** keep adb connected over wifi, switch the engine off, and watch
+      `dumpsys uimode`, `wits.acc` and `wits.ill` across it. Levers and cautions in
+      § docs/night-mode.md 3.3 — do *not* reach for "Force day", and note it is untested
+      whether the override even wins against `mNightModeLocked=true`.
+- [ ] **docs/night-mode.md §2 and §3.1 are stale** — §3.2 records the re-measurement. The ILL
+      branch is documented as gated on `UiSettings == "witstek8" && wits_night_mode == 0`, both
+      unset here; §3.1's force-night lock does still hold post-OTA. Two unexplained facts to
+      chase: what sets `mNightModeLocked=true`, and what wrote `customStart=22:00
+      customEnd=06:00` into `UiModeManager` when the `wits_backlight_*` keys are absent.
+      Re-derive from the v2.6.3 SystemUI rather than trusting the pre-OTA decompile.
 
 ## ☐ Offline checklist (emulator / code / study)
 
