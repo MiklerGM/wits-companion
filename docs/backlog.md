@@ -162,23 +162,55 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       protects against may not be reachable from the UI at all; provoking it probably needs
       two applies driven programmatically rather than by tapping.
   - [ ] **Hotspot-only boot restore** — needs a reboot with the layout opt-in *off*.
-- [ ] **Night mode flips to DAY when the engine goes off** — *reported 2026-08-20, not yet
-      reproduced under instrumentation.* With the headlights on **auto** the original
-      always-on-headlights complaint is solved (night and tunnels behave), but shutting the
-      engine off drops the headlights and the screen goes bright while you are still sitting
-      in the car at night. The capture that day had the headlights already off with the engine
-      *running* and night mode stayed locked on (`mNightMode=2`, `mNightModeLocked=true`), so
-      `wits.ill=0` alone is **not** the trigger — it is something in the shutdown transition.
-      **Next step:** keep adb connected over wifi, switch the engine off, and watch
-      `dumpsys uimode`, `wits.acc` and `wits.ill` across it. Levers and cautions in
-      § docs/night-mode.md 3.3 — do *not* reach for "Force day", and note it is untested
-      whether the override even wins against `mNightModeLocked=true`.
-- [ ] **docs/night-mode.md §2 and §3.1 are stale** — §3.2 records the re-measurement. The ILL
-      branch is documented as gated on `UiSettings == "witstek8" && wits_night_mode == 0`, both
-      unset here; §3.1's force-night lock does still hold post-OTA. Two unexplained facts to
-      chase: what sets `mNightModeLocked=true`, and what wrote `customStart=22:00
-      customEnd=06:00` into `UiModeManager` when the `wits_backlight_*` keys are absent.
-      Re-derive from the v2.6.3 SystemUI rather than trusting the pre-OTA decompile.
+- [ ] **Day/night: settle mechanism (3), the launcher skin** — *needs the car; everything
+      else here is already answered.* "Night mode" on this unit is three independent things
+      (§ docs/night-mode.md 3.2a): the **theme** is locked on and never moves, the **backlight**
+      follows the headlights (confirmed both directions: `wits.ill=1` → `screen_brightness=75`,
+      `wits.ill=0` → `255`), and the **launcher skin** is *reported* to follow them but was
+      never sampled in both states. Run this with the engine on, once with the headlights on
+      and once off, and diff the two:
+
+      ```sh
+      D=<ip:5555>          # head unit
+      for state in lights-on lights-off; do
+        read -r -p "Set headlights $state, then press enter..."
+        { date -Is
+          adb -s $D shell getprop wits.ill
+          adb -s $D shell getprop wits.acc
+          for k in screen_brightness screen_brightness_day screen_brightness_night \
+                   screen_brightness_mode wits_skin ID8UG_SKIN_MODEL ID8_skin \
+                   wits_night_mode UiSettings UiName; do
+            echo "$k=$(adb -s $D shell settings get system $k | tr -d '\r')"
+          done
+          adb -s $D shell dumpsys uimode
+        } > "daynight-$state.txt"
+      done
+      diff daynight-lights-on.txt daynight-lights-off.txt
+      ```
+
+      Whatever differs *is* the mechanism. `ID8UG_SKIN_MODEL` is the prime suspect — it read
+      `daytime` with the lights off.
+- [ ] **Engine-off brightness jump** — *cause identified offline, fix untested.* Engine off →
+      headlights drop → `wits.ill=0` → BacklightControl writes
+      `screen_brightness = screen_brightness_day` (**255**), so the screen goes to full
+      brightness at night while you are still in the car. Not a `wits_night_mode` problem —
+      that governs the locked theme. Levers in § docs/night-mode.md 3.3; the promising one is
+      `wits_backlight_control_mode = 1` (documented time-based backlight control), whose
+      `wits_backlight_start/end_hour` keys are **absent** here and may need writing as a set.
+      Try lowering `screen_brightness_day` first as a one-line sanity check that the endpoint
+      is really what gets written.
+- [ ] **Cockpit brightness adjustments do not survive a headlight change** — *consequence of
+      the above, not a bug in our writer.* `BrightnessController` writes `screen_brightness`;
+      so does BacklightControl on every headlight transition, from `screen_brightness_day/
+      _night`. Writing those endpoints instead would make an adjustment stick, but they are
+      vendor-owned and the vendor UI edits them too — probe before adopting. Worth a line in
+      the panel UI either way, so the behaviour is not mistaken for a failed write.
+- [ ] **docs/night-mode.md §2 and §3.1 are stale** — §3.2/§3.2a/§3.2b record the
+      re-measurement. The ILL branch is documented as gated on `UiSettings == "witstek8" &&
+      wits_night_mode == 0`, both unset here; §3.1's force-night lock does still hold post-OTA.
+      Two unexplained facts to chase: what sets `mNightModeLocked=true`, and what wrote
+      `customStart=22:00 customEnd=06:00` into `UiModeManager` when the `wits_backlight_*`
+      keys are absent. Re-derive from the v2.6.3 SystemUI rather than the pre-OTA decompile.
 
 ## ☐ Offline checklist (emulator / code / study)
 

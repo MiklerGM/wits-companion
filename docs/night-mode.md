@@ -184,6 +184,68 @@ override: `mNightModeLocked=true` means something called `setNightMode` with the
 and `customStart=22:00 customEnd=06:00` means a custom schedule is configured in
 `UiModeManager` even though the `wits_backlight_*` keys are absent.
 
+## 3.2a Three separate day/night mechanisms `[RUNTIME]` 2026-08-20
+
+The single biggest source of confusion in this document — and in the sections above — is
+that "night mode" on this unit is **at least three independent things**. They do not move
+together, and only one of them is `wits_night_mode`'s business.
+
+| # | Mechanism | What it changes | Keys | State on this unit |
+|---|---|---|---|---|
+| 1 | **Theme** (`UiModeManager` uiMode night bit) | Dark theme in apps that honour it — including the companion's own palette | `wits_night_mode`, `UiSettings` | **Locked on night.** `mNightMode=2`, `mNightModeLocked=true`. Never observed to move. |
+| 2 | **Backlight** | Panel brightness | `screen_brightness`, `screen_brightness_day` (255), `screen_brightness_night` (75) | **Follows the headlights.** Confirmed in both directions — see §3.2b. |
+| 3 | **Launcher skin** | The stock launcher going black-ish | `ID8UG_SKIN_MODEL` (`daytime` observed), `wits_skin` (unset), `ID8_skin` (`blue`) | **Reported to follow the headlights**; not yet sampled in both states. |
+
+What the driver calls "night mode" is (2) and (3). What `wits_night_mode` controls is (1),
+which is pinned and invisible to them. Every earlier conclusion in this document that
+reasoned from `dumpsys uimode` alone was reading the one mechanism that does not move.
+
+Mechanism (3) is unconfirmed: `ID8UG_SKIN_MODEL` read `daytime` with the headlights **off**,
+which is consistent with it flipping, but the lights-on sample was never taken. See the
+backlog for the two-state capture that settles it.
+
+## 3.2b The mechanism: it is the **backlight**, not the theme `[RUNTIME]` 2026-08-20
+
+The user's report — *"switching the headlights from auto to always-on visibly changes
+day/night"* — looked at first like it contradicted §3.2's locked `mNightMode`. It does not.
+They are two different mechanisms, and only one of them moves:
+
+| | `wits.ill` | `Settings.System.screen_brightness` | `dumpsys uimode` |
+|---|---|---|---|
+| headlights **on** | `1` | **75** | `mNightMode=2 (yes)` |
+| headlights **off** | `0` | **255** | `mNightMode=2 (yes)`, `mNightModeLocked=true` |
+
+And the stored endpoints, from the same capture:
+
+```
+screen_brightness_day   = 255
+screen_brightness_night = 75
+screen_brightness       = 255   (with the lights off; 75 with them on)
+screen_brightness_mode  = 0     (manual — no ambient sensor involved)
+```
+
+So the illumination line drives the **panel backlight**, swapping `screen_brightness`
+between the two stored endpoints. That is the change you see. The dark *theme* is constant
+because `UiModeManager` is pinned (§3.2), which is also why every companion screenshot is
+dark regardless of the headlight state — the app's palette reads the `uiMode` night bit,
+and that bit never moves on this unit.
+
+This is `BacklightControl` doing what its name says. §3.1 read that class looking for the
+theme lock and found one; the class's *other* job — the day/night backlight swap — is the
+part the user actually experiences as "night mode".
+
+### Consequence for the companion's brightness control
+
+`BrightnessController` writes `Settings.System.screen_brightness`. So does BacklightControl,
+on every headlight transition, from values the user never set through us. **A brightness
+adjustment made in the Cockpit survives only until the next headlight change**, at which
+point it is overwritten with `screen_brightness_day`/`_night`. Anyone reporting "the
+brightness buttons don't stick" is seeing this, not a bug in our writer.
+
+Writing `screen_brightness_day` / `screen_brightness_night` instead of (or as well as)
+`screen_brightness` would make an adjustment persist — untested, and it changes a vendor
+setting the vendor UI also owns, so probe before adopting.
+
 ## 3.3 The problem that is actually left: the engine-off flip `[RUNTIME]` 2026-08-20
 
 With the headlights on **auto** the original complaint is gone — night and tunnels behave
@@ -192,21 +254,23 @@ correctly. The user reports what remains:
 > Switch the engine off → the car drops the headlights → the unit flips to **day** mode and
 > the screen goes bright, at night, while you are still sitting in the car.
 
-**Not yet reproduced under instrumentation.** The capture above has the headlights already
-off with the engine running, and night mode stayed locked on — so "headlights off" alone
-does not cause the flip. Whatever triggers it is tied to the shutdown transition itself
-(ACC drop, or CenterService tearing down), not to `wits.ill` going `0`. That is the next
-thing to capture: leave adb connected over wifi, switch the engine off, and watch
-`dumpsys uimode` plus `wits.acc`/`wits.ill` across the transition.
+**Explained by §3.2b, and it is the backlight.** Engine off → the car drops the headlights →
+`wits.ill` goes `0` → BacklightControl writes `screen_brightness = screen_brightness_day`
+(255). The screen goes to full brightness, at night, while you are still in the car. Nothing
+to do with `UiModeManager`, which stays locked on night throughout.
+
+The earlier note here — "headlights off alone does not cause the flip" — was reasoning from
+`mNightMode` only, and `mNightMode` is the one thing that never moves on this unit. The
+backlight was the signal to watch.
 
 Candidate levers, none yet tried:
 
 | Approach | Notes |
 |---|---|
-| `wits_night_mode = 1` (schedule) | Day/night by clock, immune to headlight state. But `wits_backlight_start/end_hour` are **absent** on this unit and the companion does not expose them. Note `UiModeManager` already carries `customStart=22:00 customEnd=06:00` from somewhere — find out what wrote it first. |
-| `wits_night_mode = 2` (force night) | Correct at shutdown, wrong every daytime, unless something sets it *at* ACC-off and clears it on ACC-on. |
-| Companion-driven | The app already observes ACC and illumination and owns a guarded, rate-limited `wits_night_mode` writer. Holding night across an ACC-off transition and restoring on ACC-on fits what it already does. Depends on the undo path being trustworthy — which is why the "unset" backup case had to be fixed first. |
+| Lower `screen_brightness_day` | The bluntest fix: if the "day" endpoint were not 255, the engine-off jump would not blind you. Costs real daytime brightness, so probably too blunt on its own. |
+| `wits_backlight_control_mode = 1` | Documented as *time-based* backlight control, with `wits_backlight_start/end_hour`. Would decouple the backlight from the headlights entirely — the right shape of fix. Those keys are **absent** on this unit, so this is untested and may need all four written together. |
+| `wits_night_mode = 1` (schedule) | Sibling of the above for the *theme*; irrelevant while the theme is locked, but worth understanding. Note `UiModeManager` already carries `customStart=22:00 customEnd=06:00` from somewhere — find out what wrote it. |
+| Companion-driven | The app already observes ACC and illumination and owns a guarded, rate-limited brightness writer. Re-asserting the night brightness across an ACC-off transition fits what it already does — and unlike the `wits_night_mode` route it acts on the setting that demonstrably moves. |
 
-Do **not** reach for `3` (force day): that answered the always-on-headlights framing in the
-header, which auto headlights have already solved. Given `mNightModeLocked=true`, it is also
-unclear whether the override wins against the lock at all — untested.
+Do **not** reach for `wits_night_mode` at all for this problem. It governs the theme, and the
+theme is both locked and not what changes. The signal to act on is `screen_brightness`.
