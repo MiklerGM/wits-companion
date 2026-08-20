@@ -13,6 +13,7 @@ import io.github.miklergm.witscompanion.carstate.CarState
 import io.github.miklergm.witscompanion.carstate.CarStateRepository
 import io.github.miklergm.witscompanion.databinding.ActivityMainBinding
 import io.github.miklergm.witscompanion.wits.statusBarHeightPx
+import io.github.miklergm.witscompanion.wits.currentWindowBounds
 
 /**
  * Single-activity host. Each tab swaps a section view into the content frame.
@@ -124,10 +125,9 @@ class MainActivity : AppCompatActivity(), CarStateRepository.Observer {
     }
 
     private fun errorView(section: Section, t: Throwable): android.view.View {
-        val metrics = runCatching {
-            val b = getSystemService(android.view.WindowManager::class.java).currentWindowMetrics.bounds
-            "window ${b.width()}x${b.height()}"
-        }.getOrDefault("window size unknown")
+        val metrics = currentWindowBounds()
+            ?.let { "window ${it.width()}x${it.height()}" }
+            ?: "window size unknown"
         android.util.Log.e("MainActivity", "section ${section.title} failed to inflate", t)
         return android.widget.TextView(this).apply {
             text = "Section \"${section.title}\" failed to open.\n\n" +

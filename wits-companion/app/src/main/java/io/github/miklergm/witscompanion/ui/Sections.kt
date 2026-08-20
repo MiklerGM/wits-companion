@@ -26,6 +26,7 @@ import io.github.miklergm.witscompanion.wits.WitsNightModeController
 import io.github.miklergm.witscompanion.wits.WitsPackages
 import io.github.miklergm.witscompanion.wits.WitsSettingsKeys
 import io.github.miklergm.witscompanion.wits.WitsWindowMode
+import io.github.miklergm.witscompanion.wits.currentWindowBounds
 
 // ------------------------------------------------------------------ view helpers
 
@@ -791,12 +792,9 @@ class DebugSection(private val app: WitsCompanionApp) : MainActivity.Section {
         // Our own window, which is NOT what layouts are measured from: the companion can
         // be one of the tiles it places, and a shrinking window is the visible symptom of
         // measuring a layout from it. Shown so that case is obvious at a glance.
-        val own = runCatching {
-            android.graphics.Rect(
-                ctx.getSystemService(android.view.WindowManager::class.java)
-                    .currentWindowMetrics.bounds
-            )
-        }.getOrNull()
+        // currentWindowMetrics needs an Activity context; text.context is one here, but go
+        // through the compat helper so the API-30 gate lives in exactly one place.
+        val own = (ctx as? android.app.Activity)?.currentWindowBounds()
         text.text = buildString {
             appendLine("display full   ${full.width()}x${full.height()}  $full")
             appendLine("display usable ${usable.width()}x${usable.height()}  $usable")

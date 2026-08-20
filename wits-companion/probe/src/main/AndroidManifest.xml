@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!--
       Signature-level permissions. A normal APK is simply refused these; the point of the
@@ -9,13 +10,25 @@
       MANAGE_ACTIVITY_TASKS is the one that matters: ActivityTaskManagerService.resizeTask
       guards on it, and resizeTask can move a tile without bringing it to the front — the
       primitive the vendor CHANGE_WINDOW hook cannot offer.
+
+      tools:ignore="ProtectedPermissions" is deliberate and is the whole point of this
+      module, not an oversight. Lint is right that a normal app cannot hold these; this
+      APK is built to be signed with the platform key, and asking for them is the
+      experiment. Suppressed per-tag with this note rather than through a lint baseline,
+      so the module's lint stays green and any *new* finding is visible.
     -->
-    <uses-permission android:name="android.permission.MANAGE_ACTIVITY_TASKS" />
-    <uses-permission android:name="android.permission.START_TASKS_FROM_RECENTS" />
-    <uses-permission android:name="android.permission.INTERNAL_SYSTEM_WINDOW" />
-    <uses-permission android:name="android.permission.STATUS_BAR_SERVICE" />
-    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
-    <uses-permission android:name="android.permission.REAL_GET_TASKS" />
+    <uses-permission android:name="android.permission.MANAGE_ACTIVITY_TASKS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.START_TASKS_FROM_RECENTS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.INTERNAL_SYSTEM_WINDOW"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.STATUS_BAR_SERVICE"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.REAL_GET_TASKS"
+        tools:ignore="ProtectedPermissions" />
 
     <application
         android:allowBackup="false"

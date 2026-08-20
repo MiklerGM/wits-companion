@@ -5,6 +5,8 @@ import android.graphics.Rect
 import android.view.WindowManager
 import io.github.miklergm.witscompanion.wits.WitsWindowController
 import kotlin.math.abs
+import io.github.miklergm.witscompanion.wits.currentWindowBounds
+import io.github.miklergm.witscompanion.wits.maximumWindowBounds
 
 /** How wide our window must be, as a percentage of the display, to count as filling it (not a tile). */
 private const val FILLS_DISPLAY_PERCENT = 90
@@ -21,12 +23,11 @@ private const val BOUNDS_THRESHOLD_PX = 4
  * Defaults to true when the metrics cannot be read (assume full-screen, the safe default for inset
  * flooring).
  */
-fun Activity.fillsDisplay(): Boolean = runCatching {
-    val wm = getSystemService(WindowManager::class.java)
-    val own = wm.currentWindowMetrics.bounds.width()
-    val display = wm.maximumWindowMetrics.bounds.width()
-    display > 0 && own * 100 >= display * FILLS_DISPLAY_PERCENT
-}.getOrDefault(true)
+fun Activity.fillsDisplay(): Boolean {
+    val own = currentWindowBounds()?.width() ?: return true
+    val display = maximumWindowBounds()?.width() ?: return true
+    return display > 0 && own * 100 >= display * FILLS_DISPLAY_PERCENT
+}
 
 /**
  * Resize this activity's **own** task (by [Activity.getTaskId]) to [target] when it is off by more
@@ -42,7 +43,7 @@ fun Activity.fillsDisplay(): Boolean = runCatching {
  */
 fun Activity.matchOwnTaskBounds(controller: WitsWindowController, target: Rect): Boolean {
     if (!controller.isPrivileged) return false
-    val current = runCatching { windowManager.currentWindowMetrics.bounds }.getOrNull() ?: return false
+    val current = currentWindowBounds() ?: return false
     val off = abs(current.left - target.left) > BOUNDS_THRESHOLD_PX ||
         abs(current.top - target.top) > BOUNDS_THRESHOLD_PX ||
         abs(current.width() - target.width()) > BOUNDS_THRESHOLD_PX ||

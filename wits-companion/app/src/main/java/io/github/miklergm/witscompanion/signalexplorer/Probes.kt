@@ -166,7 +166,12 @@ class AudioProbe(private val context: Context) {
                     min = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
                         am.getStreamMinVolume(id) else 0,
                     db = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
-                        runCatching { am.getStreamVolumeDb(id, am.getStreamVolume(id), DEVICE_SPEAKER) }
+                        runCatching {
+                            am.getStreamVolumeDb(
+                                id, am.getStreamVolume(id),
+                                android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
+                            )
+                        }
                             .getOrNull() else null,
                     muted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
                         runCatching { am.isStreamMute(id) }.getOrDefault(false) else false,
@@ -234,7 +239,6 @@ class AudioProbe(private val context: Context) {
     companion object {
         /** MAX_VOLUME = 40 for M701 (McuManager.java:1658). */
         const val MCU_MAX_VOLUME = 40
-        private const val DEVICE_SPEAKER = 0x2   // AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
 
         val STREAMS = listOf(
             AudioManager.STREAM_VOICE_CALL to "VOICE_CALL",
