@@ -217,8 +217,11 @@ class ReceiverAndGenerationTest {
         val src = engineSource()
         val park = src.substringAfter("private fun parkStaleWindows(").substringBefore("\n    }")
 
-        // Both cleanup paths — privileged removal and the in-place park — are delayed.
-        assertTrue("the privileged path removes tasks", park.contains("removeTask(task.taskId)"))
+        // Both cleanup paths — task removal and the in-place park — are delayed.
+        assertTrue(
+            "removal is asked for by capability, not inferred from a build flag",
+            park.contains("windowController.taskRemover") && park.contains("remover.remove(task.taskId)"),
+        )
         assertTrue("the unprivileged path re-parks in place", park.contains("WindowRequest(pkg, parkBounds, parkMode)"))
 
         // Neither may fire unguarded: stillValid() re-checks both the generation and the
@@ -262,7 +265,10 @@ class ReceiverAndGenerationTest {
             "bounded by the number of verify delays",
             schedule.contains("attempt >= VERIFY_DELAYS_MS.size"),
         )
-        assertTrue("privileged path only — it needs task observation", schedule.contains("isPrivileged"))
+        assertTrue(
+            "requires task observation specifically — it must be able to read back what it sent",
+            schedule.contains("windowController.taskObserver == null"),
+        )
 
         val verify = src.substringAfter("private fun verifyPlacement(").substringBefore("\n    }")
         assertTrue("superseded applies must not correct", verify.contains("myGeneration != generation.get()"))

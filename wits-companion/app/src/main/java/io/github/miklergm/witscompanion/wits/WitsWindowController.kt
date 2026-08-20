@@ -36,26 +36,46 @@ class WitsWindowController(
      * `resizeTask` (no flicker, no front) and the two-phase CHANGE_WINDOW dance in
      * [io.github.miklergm.witscompanion.layout.LayoutEngine] is unnecessary — see
      * [applyWindow]. Cached, because it cannot change without a reinstall.
+     *
+     * **Diagnostics and this class's own internals only.** Callers must not branch on it:
+     * every one of them is really asking a narrower question, and there is a capability for
+     * each — [taskObserver], [taskResizer], [taskRemover]. See `WindowCapabilities.kt`.
      */
     val isPrivileged: Boolean by lazy { privileged.isAvailable() }
 
-    /** Real task state, or empty on the unprivileged path. For feedback and diagnostics. */
+    // ------------------------------------------------------------- capabilities
+
+    /** Live task state, or null when this build cannot observe tasks at all. */
+    val taskObserver: TaskObserver? by lazy {
+        if (isPrivileged) TaskObserver { privileged.rootTasks() } else null
+    }
+
+    /** In-place task movement that does not front the window, or null when unavailable. */
+    val taskResizer: TaskResizer? by lazy {
+        if (!isPrivileged) null
+        else TaskResizer { taskId, bounds ->
+            if (privileged.resizeTaskTo(taskId, bounds)) WindowOutcome.Done
+            else WindowOutcome.Failed("resizeTask", "task $taskId refused")
+        }
+    }
+
+    /** Task teardown, or null when this build has no way to close a window. */
+    val taskRemover: TaskRemover? by lazy {
+        if (!isPrivileged) null
+        else object : TaskRemover {
+            override fun remove(taskId: Int): WindowOutcome =
+                if (privileged.removeTask(taskId)) WindowOutcome.Done
+                else WindowOutcome.Failed("removeTask", "task $taskId refused")
+
+            override fun removeAllFreeform(): WindowOutcome =
+                if (privileged.removeFreeformTasks()) WindowOutcome.Done
+                else WindowOutcome.Failed("removeFreeformTasks", "refused")
+        }
+    }
+
+    /** Real task state, or empty when this build cannot observe tasks. */
     fun rootTasks(): List<PrivilegedWindowController.TaskSnapshot> =
-        if (isPrivileged) privileged.rootTasks() else emptyList()
-
-    /**
-     * Removes every freeform tile in one privileged call — the reliable un-window on this ROM
-     * (`setTaskWindowingMode` is absent here). Returns false on the unprivileged path, where the
-     * caller falls back to the per-tile CHANGE_WINDOW hook.
-     */
-    fun removeFreeformTasks(): Boolean = isPrivileged && privileged.removeFreeformTasks()
-
-    /** Resizes a task (typically the caller's own, by taskId) in place. Privileged path only. */
-    fun resizeTaskTo(taskId: Int, bounds: Rect): Boolean =
-        isPrivileged && privileged.resizeTaskTo(taskId, bounds)
-
-    /** Removes a single task by id — clears one stale window. Privileged path only. */
-    fun removeTask(taskId: Int): Boolean = isPrivileged && privileged.removeTask(taskId)
+        taskObserver?.rootTasks() ?: emptyList()
 
     /**
      * The usable display area in pixels: full display minus system bar insets.

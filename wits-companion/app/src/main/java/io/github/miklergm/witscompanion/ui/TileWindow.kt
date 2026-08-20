@@ -42,12 +42,14 @@ fun Activity.fillsDisplay(): Boolean {
  * @return true if a resize was issued.
  */
 fun Activity.matchOwnTaskBounds(controller: WitsWindowController, target: Rect): Boolean {
-    if (!controller.isPrivileged) return false
+    // Needs in-place movement specifically: a plain launch would front this activity, which
+    // is exactly what a tile correcting its own bounds must not do.
+    val resizer = controller.taskResizer ?: return false
     val current = currentWindowBounds() ?: return false
     val off = abs(current.left - target.left) > BOUNDS_THRESHOLD_PX ||
         abs(current.top - target.top) > BOUNDS_THRESHOLD_PX ||
         abs(current.width() - target.width()) > BOUNDS_THRESHOLD_PX ||
         abs(current.height() - target.height()) > BOUNDS_THRESHOLD_PX
-    if (off) controller.resizeTaskTo(taskId, target)
+    if (off) resizer.resize(taskId, target)
     return off
 }

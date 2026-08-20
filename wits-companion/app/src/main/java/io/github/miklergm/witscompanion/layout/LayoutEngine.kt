@@ -369,7 +369,9 @@ class LayoutEngine(
                     if (stillValid(myGeneration, "retry_visible", window.packageName) &&
                         windowController.isLaunchable(window.packageName)
                     ) {
-                        if (windowController.isPrivileged) {
+                        // With in-place movement available, applyWindow repositions without
+                        // fronting; without it the only way to re-place a tile is to launch it.
+                        if (windowController.taskResizer != null) {
                             windowController.applyWindow(
                                 WitsWindowController.WindowRequest(window.packageName, pixels, window.windowMode)
                             )
@@ -450,7 +452,9 @@ class LayoutEngine(
         myGeneration: Long,
         attempt: Int,
     ) {
-        if (!windowController.isPrivileged || expected.isEmpty()) return
+        // Verification needs to read live task state; without that it could send corrections
+        // but never find out whether the layout took.
+        if (windowController.taskObserver == null || expected.isEmpty()) return
         if (attempt >= VERIFY_DELAYS_MS.size) return
         // Measured from the end of the pass, like the retries, so the two never overlap.
         val delay = passDuration(windowCount) + VERIFY_DELAYS_MS[attempt]
@@ -581,7 +585,8 @@ class LayoutEngine(
         // Switching presets then piled up windows (`[RUNTIME]` 2026-08-08: 5 freeform tasks). On
         // the privileged path, REMOVE the stale tasks outright instead (they are not in the new
         // layout); the app is relaunched clean when a preset that includes it is next applied.
-        if (parkMode == WitsWindowMode.FULLSCREEN && windowController.isPrivileged) {
+        val remover = windowController.taskRemover
+        if (parkMode == WitsWindowMode.FULLSCREEN && remover != null) {
             // A tiled layout has NO companion window, so also clear our own leftover Cockpit tiles
             // (the config + the panel), not just stale foreign apps — otherwise they stay on top
             // and cover the two tiles ("Maps and Chrome didn't open because it was Cockpit before",
@@ -592,7 +597,7 @@ class LayoutEngine(
             toRemove.forEachIndexed { index, task ->
                 val pkg = task.packageName ?: "task:${task.taskId}"
                 handler.postDelayed(
-                    { if (stillValid(myGeneration, "remove_stale", pkg)) windowController.removeTask(task.taskId) },
+                    { if (stillValid(myGeneration, "remove_stale", pkg)) remover.remove(task.taskId) },
                     RETRY_TOKEN,
                     index * PARK_DELAY_MS,
                 )
@@ -814,13 +819,18 @@ class LayoutEngine(
         layoutOwned = false
         val myGeneration = generation.get()
 
-        if (windowController.isPrivileged) {
-            val removed = windowController.removeFreeformTasks()
+        val bulkRemover = windowController.taskRemover
+        if (bulkRemover != null) {
+            val removed = bulkRemover.removeAllFreeform()
             if (thenGoHome) {
                 handler.postDelayed({ if (myGeneration == generation.get()) goHome() }, ANCHOR_SETTLE_MS)
             }
             lastAppliedPackages = emptySet()
-            logger?.log("layout", "unwindow_tiles", extras = mapOf("removed" to removed, "home" to thenGoHome))
+            logger?.log(
+                "layout", "unwindow_tiles",
+                extras = mapOf("home" to thenGoHome),
+                result = removed.reasonOrNull ?: "ok",
+            )
             return
         }
 
@@ -892,7 +902,7 @@ class LayoutEngine(
         //    panel in step 2 simply covers it (it stays alive behind; the next apply parks/removes
         //    it). This is the honest version of what already happened: the old un-window call just
         //    logged a failure on this ROM.
-        if (!windowController.isPrivileged &&
+        if (windowController.taskRemover == null &&
             floatingPackage != null && floatingPackage != WitsPackages.SELF &&
             windowController.isLaunchable(floatingPackage)
         ) {
