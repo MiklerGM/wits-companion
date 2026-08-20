@@ -106,12 +106,22 @@ flowchart LR
     B -->|"ContentObserver"| C["SystemUI<br/>PhoneStatusBarView"]
     C --> D["UiModeManager.setNightMode()"]
     C --> E["AUTONAVI day/night broadcast"]
-    F["MCU: wits.ill (headlights 0/1)"] -.->|"only when wits_night_mode == 0"| C
+    F["MCU: wits.ill (headlights 0/1)"] -.->|"gated: not live on this unit"| C
+    F ==>|"BacklightControl"| G["Settings.System.screen_brightness<br/>255 (day) / 75 (night)"]
 ```
 
 **Evidence:** `PhoneStatusBarView.java:1245-1270` observes `wits_night_mode` and maps
 `0 → follow wits.ill`, `1 → time schedule`, `2 → force night`, `3 → force day` `[CODE]`.
-`setThemeByIll()` at `:616` reads sysprop `wits.ill` `[CODE]`. See `night-mode.md`.
+`setThemeByIll()` at `:616` reads sysprop `wits.ill` `[CODE]`.
+
+**But on this unit the dotted edge does not fire, and the solid one does.** The ILL→theme
+path is gated on `UiSettings == "witstek8" && wits_night_mode == 0`; both are unset, so the
+theme never moves — it is separately *locked* on night. What the headlights actually drive is
+the **backlight**, via `BacklightControl` swapping `screen_brightness` between
+`screen_brightness_day` and `_night`. `[RUNTIME]` 2026-08-20
+
+So this diagram shows what the companion *writes*, not what the driver *sees* change. Day/night
+is three separate mechanisms here — see `night-mode.md`, which leads with them.
 
 ---
 

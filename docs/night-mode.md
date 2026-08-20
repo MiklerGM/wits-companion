@@ -1,18 +1,126 @@
 # Day / night mode
 
-The user's problem: on this BMW the headlights are effectively always on, so the head
-unit sits in night mode during the day, while the factory KOMBI still reacts to real
-ambient light.
+> **Read this first.** "Night mode" on this unit is **three independent mechanisms**, not one.
+> They do not move together. Most of the confusion in the history of this document — and one
+> wrong conclusion that survived several sessions — came from measuring one of them and
+> reasoning about another.
+>
+> | | Mechanism | What the driver sees | Follows the headlights? |
+> |---|---|---|---|
+> | 1 | **Theme** — `UiModeManager` night bit | Dark theme in apps that honour it, including the companion | **No — locked on night**, never observed to move |
+> | 2 | **Backlight** — `screen_brightness` | Panel brightness, 255 <-> 75 | **Yes**, confirmed both directions |
+> | 3 | **Launcher skin** | Stock launcher goes black-ish | Reported yes, **not yet confirmed** |
+>
+> `wits_night_mode` — the key the companion writes — governs **(1) only**, and (1) is pinned
+> on this unit. So the companion's day/night control may have no visible effect here. What
+> the driver experiences as day/night is (2) and (3).
 
-**Cause:** Android's day/night here is driven by a **boolean illumination line**, not by
-a light sensor or an analog ambient value.
-
-**Fix:** the firmware already has a master override — `wits_night_mode` — writable with
-plain `WRITE_SETTINGS`. No root, no firmware change.
+**Status of the original complaint.** This document opened as: *"on this BMW the headlights
+are effectively always on, so the head unit sits in night mode during the day."* That was a
+**vehicle setting, not a firmware problem** — switching the headlights from always-on to
+**auto** resolved it, and night and tunnels now behave correctly `[RUNTIME]` 2026-08-20.
+What remains is a different bug, at engine-off; see section 4.
 
 ---
 
-## 1. The illumination signal
+## 1. What moves: the backlight `[RUNTIME]` 2026-08-20
+
+Two samples, one session, both directions of the boolean:
+
+| | `wits.ill` | `Settings.System.screen_brightness` | `dumpsys uimode` |
+|---|---|---|---|
+| headlights **on** | `1` | **75** | `mNightMode=2 (yes)` |
+| headlights **off** | `0` | **255** | `mNightMode=2 (yes)`, `mNightModeLocked=true` |
+
+The stored endpoints, from the same capture:
+
+```
+screen_brightness_day   = 255
+screen_brightness_night = 75
+screen_brightness       = 255   (lights off; 75 with them on)
+screen_brightness_mode  = 0     (manual — no ambient sensor involved)
+```
+
+The illumination line drives the **panel backlight**, swapping `screen_brightness` between
+the two stored endpoints. This is `BacklightControl` doing what its name says: section 7.2
+read that class looking for a theme lock and found one, but the class's *other* job — the
+day/night backlight swap — is the part the driver actually experiences as "night mode".
+
+## 2. What does not move: the theme `[RUNTIME]` 2026-08-20
+
+`UiModeManager` is pinned to night and stays there regardless of the headlights (see the
+table above: `mNightMode=2` in both states, with `mNightModeLocked=true`). The lock is
+attributed to `BacklightControl` calling `setNightMode(2)` unconditionally — see section 7.2,
+whose conclusion still holds post-OTA.
+
+Consequences:
+
+- The companion's own palette reads the `uiMode` night bit (`DashboardActivity`), so **the app
+  is always dark on this unit**, whatever the headlights do. Every screenshot in the README
+  was taken in that state.
+- Writing `wits_night_mode` may therefore produce **no visible change**. Whether the override
+  beats `mNightModeLocked=true` is **untested** — the documented observer fires regardless of
+  `UiSettings` (section 7.3), but nothing has confirmed it wins against the lock.
+
+Two facts here are unexplained and worth chasing before relying on the override:
+`mNightModeLocked=true` means something called `setNightMode` *with the lock flag*, and
+`customStart=22:00 customEnd=06:00` means a custom schedule is configured in `UiModeManager`
+even though the `wits_backlight_*` keys are absent from this unit.
+
+## 3. The launcher skin — unconfirmed `[RUNTIME]` 2026-08-20
+
+The stock launcher visibly goes black-ish with the headlights, reported by the driver but not
+yet instrumented. Candidate keys, from the capture with the lights **off**:
+
+| Key | Value with lights off | Note |
+|---|---|---|
+| `ID8UG_SKIN_MODEL` | `daytime` | prime suspect — the name and the value both fit |
+| `wits_skin` | unset | section 7.2 shows SystemUI writing `0`/`1` here, but it is absent on this unit |
+| `ID8_skin` | `blue` | unclear whether day/night related |
+
+The lights-on sample was never taken, so nothing is confirmed. The backlog carries a runnable
+two-state capture that settles it in one pass.
+
+## 4. The problem that is actually left: the engine-off brightness jump
+
+> Switch the engine off -> the car drops the headlights -> the screen goes to full brightness,
+> at night, while you are still sitting in the car.
+
+Fully explained by section 1: engine off -> headlights drop -> `wits.ill` goes `0` ->
+BacklightControl writes `screen_brightness = screen_brightness_day` (**255**). Nothing to do
+with `UiModeManager`, which stays locked on night throughout.
+
+Candidate levers, none tried:
+
+| Approach | Notes |
+|---|---|
+| Lower `screen_brightness_day` | Bluntest fix: if the day endpoint were not 255, the jump would not blind you. Costs real daytime brightness. Useful first as a *sanity check* that this endpoint is really what gets written. |
+| `wits_backlight_control_mode = 1` | Documented as *time-based* backlight control with `wits_backlight_start/end_hour` (section 7.3). Would decouple the backlight from the headlights entirely — the right shape of fix. Those keys are **absent** here, so untested; may need all four written together. |
+| Companion-driven | The app already observes ACC and illumination and owns a guarded, rate-limited brightness writer. Re-asserting the night brightness across an ACC-off transition fits what it already does — and unlike the `wits_night_mode` route it acts on the setting that demonstrably moves. |
+
+Do **not** reach for `wits_night_mode` for this. It governs the theme; the theme is both
+locked and not what changes. The signal to act on is `screen_brightness`.
+
+## 5. Consequence for the companion's brightness control
+
+`BrightnessController` writes `Settings.System.screen_brightness`. So does BacklightControl,
+on **every headlight transition**, from endpoints the user never set through us. So a
+brightness adjustment made in the Cockpit **survives only until the next headlight change**,
+when it is overwritten with `screen_brightness_day`/`_night`.
+
+"The brightness buttons don't stick" is this, not a failed write. Writing the *endpoints*
+instead of (or as well as) the current value would make an adjustment persist — untested, and
+they are vendor-owned keys the vendor UI also edits, so probe before adopting.
+
+---
+
+# Firmware evidence (decompiled)
+
+Everything below is read from the vendor code. It describes what the firmware *can* do;
+sections 1-3 record what this unit is observed to actually do, and the two do not fully agree
+— see section 8.
+
+## 7.1 The illumination signal
 
 ```java
 // McuManager.java:3402-3416   [CODE]
@@ -34,9 +142,11 @@ public void updateIll(int value) {
 - Published as sysprop `wits.ill` and broadcast `com.can.ACTION_ILL_INFO` (extra
   `status`). `[CODE]` `UtilExport.java:621-626`
 
----
+This part is confirmed live: the companion receives `com.can.ACTION_ILL_INFO` and parses it
+correctly (`Illumination(on=true, raw=1)` in the event log), and `wits.ill` tracks the
+headlights. `[RUNTIME]`
 
-## 2. The consumer: SystemUI
+## 7.2 The consumer: SystemUI
 
 ```java
 // PhoneStatusBarView.java:616-634   [CODE]
@@ -68,9 +178,24 @@ if (action.equals("com.can.ACTION_ILL_INFO")) {
 }
 ```
 
----
+**This path is not live on this unit.** Both `UiSettings` and `wits_night_mode` are unset, so
+the gate is false — consistent with the theme never moving (section 2). `[RUNTIME]`
 
-## 3. The master key: `wits_night_mode`
+And the theme lock, from the same class family:
+
+```java
+// BacklightControl.java:57-61   [CODE]
+String uiSettings = Settings.System.getString(cr, "UiSettings");
+if (!"witstek8".equals(uiSettings)) {
+    ((UiModeManager) ctx.getSystemService(UiModeManager.class)).setNightMode(2);
+}
+```
+
+`UiSettings` is unset, so the guard passes and CenterService calls `setNightMode(2)`
+unconditionally at start — consistent with `mNightModeLocked=true`, before **and** after the
+OTA. `[HYP-strong]` + `[RUNTIME]`
+
+## 7.3 The master key: `wits_night_mode`
 
 `Settings.System` key, observed by SystemUI:
 
@@ -90,22 +215,23 @@ cr.registerContentObserver(Settings.System.getUriFor("wits_night_mode"), false,
 
 | Value | Behaviour | Companion label |
 |---|---|---|
-| `0` | Follow illumination (`wits.ill`) — the problematic default | *Follow headlights* |
+| `0` | Follow illumination (`wits.ill`) | *Follow headlights* |
 | `1` | Follow Witstek time schedule (`wits_backlight_*_hour/minute`) | *Follow Witstek schedule* |
 | `2` | Force **night** | *Force night* |
 | `3` | Force **day** | *Force day* |
 
-`-1` = unset.
+`-1` = unset — which is its state on this unit, so **none of these branches is what holds it
+in night mode**. That is the lock in section 7.2.
 
-> Important: the `wits_night_mode` **observer fires regardless of `UiSettings`**, unlike
-> the ILL branch which additionally requires `UiSettings == "witstek8"`. Writing `2`/`3`
-> should therefore deterministically force night/day even if the BMW profile uses a
-> different `UiSettings` value. `[CODE]` — needs `[RUNTIME]` confirmation.
+> The `wits_night_mode` **observer fires regardless of `UiSettings`**, unlike the ILL branch.
+> Writing `2`/`3` should therefore reach `setNightMode` even on this profile. `[CODE]` —
+> still needs `[RUNTIME]` confirmation, and specifically confirmation that it wins against
+> `mNightModeLocked=true`.
 
 Constant declarations: `UtilSetting.java:264` `WITS_NIGHT_MODE = "wits_night_mode"`,
 `FactoryKey.java:52` `KEY_MODE_NIGHT = "wits_night_mode"` `[CODE]`.
 
-### Related keys (read-only for us)
+### Related keys
 
 | Key | Purpose | Evidence |
 |---|---|---|
@@ -118,159 +244,29 @@ Constant declarations: `UtilSetting.java:264` `WITS_NIGHT_MODE = "wits_night_mod
 
 ---
 
-## 3.1 Runtime reality on this unit — the cause is different
+## 8. Runtime history — superseded conclusions
 
-Captured before the OTA `[RUNTIME]`:
+Kept because the measurements are real and the reasoning errors are instructive. **Do not
+cite these as current.**
 
-| Key | Value |
-|---|---|
-| `Settings.System["wits_night_mode"]` | **not set** |
-| `Settings.System["UiSettings"]` | **not set** |
-| `Settings.System["UiName"]` | `BM_EVOID9_701GEN` |
-| `dumpsys uimode` | `mNightMode=2 (yes)`, **`mNightModeLocked=true`**, `mComputedNightMode=true` |
+**Pre-OTA `[RUNTIME]`.** `wits_night_mode` unset, `UiSettings` unset, `UiName` =
+`BM_EVOID9_701GEN`, `dumpsys uimode` = `mNightMode=2 (yes)`, `mNightModeLocked=true`. The
+conclusion drawn — that `BacklightControl`'s unconditional `setNightMode(2)` is what holds the
+unit in night mode — **still holds** and is now section 7.2.
 
-Because `wits_night_mode` is unset, **none of the 0/1/2/3 branches above can be what
-holds this unit in night mode.** The likely cause is CenterService instead:
+**Post-OTA `[RUNTIME]` 2026-08-20.** `UiName` changed to `BMW_ID8_UI`; everything else above
+unchanged. The theme lock survived the OTA.
 
-```java
-// BacklightControl.java:57-61   [CODE]
-String uiSettings = Settings.System.getString(cr, "UiSettings");
-if (!"witstek8".equals(uiSettings)) {
-    ((UiModeManager) ctx.getSystemService(UiModeManager.class)).setNightMode(2);
-}
-```
+**Superseded: "day/night now tracks the illumination line."** Briefly concluded mid-session
+from a single sample — `ill=1` with `night=yes` — while the other state was never checked.
+`ill=0` with `night` still `yes` disproved it within minutes.
+*One direction of a boolean proves nothing when the other state is pinned.*
 
-`UiSettings` is unset, so the guard passes and CenterService calls `setNightMode(2)`
-unconditionally at start — consistent with `mNightModeLocked=true`. `[HYP-strong]`
+**Superseded: "headlights off alone does not cause the engine-off flip."** Correct about
+`mNightMode`, wrong about the phenomenon, because `mNightMode` is the one mechanism that never
+moves here. The backlight was the signal to watch. This is what motivated the three-mechanism
+split at the top.
 
-**Implication for the companion:** writing `wits_night_mode = 3` should still take effect
-(the observer fires on any change regardless of `UiSettings`), but it is now a
-*counter-measure* against an unconditional force-night, not a mode selector. Verify that
-it survives an ACC cycle — CenterService may re-assert night mode on the next start.
-
----
-
-## 3.2 Runtime reality **after** the OTA `[RUNTIME]` 2026-08-20
-
-Re-measured on the unit (v2.6.3, engine running, headlights switched to **auto**):
-
-| Key / probe | Value |
-|---|---|
-| `Settings.System["wits_night_mode"]` | **not set** (still) |
-| `Settings.System["UiSettings"]` | **not set** (still) |
-| `Settings.System["UiName"]` | `BMW_ID8_UI` — *changed* from `BM_EVOID9_701GEN` |
-| `Settings.System["ID8UG_SKIN_MODEL"]` | `daytime` |
-| `Settings.System["screen_brightness_night"]` | `75` |
-| `dumpsys uimode` | `mNightMode=2 (yes)`, **`mNightModeLocked=true`**, `mComputedNightMode=true`, `customStart=22:00 customEnd=06:00` |
-
-**§3.1 still holds: night mode is locked on.** Two samples minutes apart in one session:
-
-| `wits.ill` | `dumpsys uimode` |
-|---|---|
-| `1` (headlights on) | `mNightMode=2 (yes)` |
-| `0` (headlights off) | `mNightMode=2 (yes)`, `mNightModeLocked=true` |
-
-So the ILL branch is **not** observably driving `UiModeManager` here — the lock from
-§3.1's `BacklightControl` path survives the OTA. The `UiName` change is real but did not
-alter this. `[RUNTIME]`
-
-> Method note: an earlier reading of this session saw only `ill=1 → night=yes` and briefly
-> concluded that day/night was tracking the headlights. One direction of a boolean proves
-> nothing when the other state is pinned — `ill=0` was the sample that settled it. Take both
-> directions before claiming a signal drives anything.
-
-Two facts here are new and unexplained, and both are worth chasing before touching the
-override: `mNightModeLocked=true` means something called `setNightMode` with the lock flag,
-and `customStart=22:00 customEnd=06:00` means a custom schedule is configured in
-`UiModeManager` even though the `wits_backlight_*` keys are absent.
-
-## 3.2a Three separate day/night mechanisms `[RUNTIME]` 2026-08-20
-
-The single biggest source of confusion in this document — and in the sections above — is
-that "night mode" on this unit is **at least three independent things**. They do not move
-together, and only one of them is `wits_night_mode`'s business.
-
-| # | Mechanism | What it changes | Keys | State on this unit |
-|---|---|---|---|---|
-| 1 | **Theme** (`UiModeManager` uiMode night bit) | Dark theme in apps that honour it — including the companion's own palette | `wits_night_mode`, `UiSettings` | **Locked on night.** `mNightMode=2`, `mNightModeLocked=true`. Never observed to move. |
-| 2 | **Backlight** | Panel brightness | `screen_brightness`, `screen_brightness_day` (255), `screen_brightness_night` (75) | **Follows the headlights.** Confirmed in both directions — see §3.2b. |
-| 3 | **Launcher skin** | The stock launcher going black-ish | `ID8UG_SKIN_MODEL` (`daytime` observed), `wits_skin` (unset), `ID8_skin` (`blue`) | **Reported to follow the headlights**; not yet sampled in both states. |
-
-What the driver calls "night mode" is (2) and (3). What `wits_night_mode` controls is (1),
-which is pinned and invisible to them. Every earlier conclusion in this document that
-reasoned from `dumpsys uimode` alone was reading the one mechanism that does not move.
-
-Mechanism (3) is unconfirmed: `ID8UG_SKIN_MODEL` read `daytime` with the headlights **off**,
-which is consistent with it flipping, but the lights-on sample was never taken. See the
-backlog for the two-state capture that settles it.
-
-## 3.2b The mechanism: it is the **backlight**, not the theme `[RUNTIME]` 2026-08-20
-
-The user's report — *"switching the headlights from auto to always-on visibly changes
-day/night"* — looked at first like it contradicted §3.2's locked `mNightMode`. It does not.
-They are two different mechanisms, and only one of them moves:
-
-| | `wits.ill` | `Settings.System.screen_brightness` | `dumpsys uimode` |
-|---|---|---|---|
-| headlights **on** | `1` | **75** | `mNightMode=2 (yes)` |
-| headlights **off** | `0` | **255** | `mNightMode=2 (yes)`, `mNightModeLocked=true` |
-
-And the stored endpoints, from the same capture:
-
-```
-screen_brightness_day   = 255
-screen_brightness_night = 75
-screen_brightness       = 255   (with the lights off; 75 with them on)
-screen_brightness_mode  = 0     (manual — no ambient sensor involved)
-```
-
-So the illumination line drives the **panel backlight**, swapping `screen_brightness`
-between the two stored endpoints. That is the change you see. The dark *theme* is constant
-because `UiModeManager` is pinned (§3.2), which is also why every companion screenshot is
-dark regardless of the headlight state — the app's palette reads the `uiMode` night bit,
-and that bit never moves on this unit.
-
-This is `BacklightControl` doing what its name says. §3.1 read that class looking for the
-theme lock and found one; the class's *other* job — the day/night backlight swap — is the
-part the user actually experiences as "night mode".
-
-### Consequence for the companion's brightness control
-
-`BrightnessController` writes `Settings.System.screen_brightness`. So does BacklightControl,
-on every headlight transition, from values the user never set through us. **A brightness
-adjustment made in the Cockpit survives only until the next headlight change**, at which
-point it is overwritten with `screen_brightness_day`/`_night`. Anyone reporting "the
-brightness buttons don't stick" is seeing this, not a bug in our writer.
-
-Writing `screen_brightness_day` / `screen_brightness_night` instead of (or as well as)
-`screen_brightness` would make an adjustment persist — untested, and it changes a vendor
-setting the vendor UI also owns, so probe before adopting.
-
-## 3.3 The problem that is actually left: the engine-off flip `[RUNTIME]` 2026-08-20
-
-With the headlights on **auto** the original complaint is gone — night and tunnels behave
-correctly. The user reports what remains:
-
-> Switch the engine off → the car drops the headlights → the unit flips to **day** mode and
-> the screen goes bright, at night, while you are still sitting in the car.
-
-**Explained by §3.2b, and it is the backlight.** Engine off → the car drops the headlights →
-`wits.ill` goes `0` → BacklightControl writes `screen_brightness = screen_brightness_day`
-(255). The screen goes to full brightness, at night, while you are still in the car. Nothing
-to do with `UiModeManager`, which stays locked on night throughout.
-
-The earlier note here — "headlights off alone does not cause the flip" — was reasoning from
-`mNightMode` only, and `mNightMode` is the one thing that never moves on this unit. The
-backlight was the signal to watch.
-
-Candidate levers, none yet tried:
-
-| Approach | Notes |
-|---|---|
-| Lower `screen_brightness_day` | The bluntest fix: if the "day" endpoint were not 255, the engine-off jump would not blind you. Costs real daytime brightness, so probably too blunt on its own. |
-| `wits_backlight_control_mode = 1` | Documented as *time-based* backlight control, with `wits_backlight_start/end_hour`. Would decouple the backlight from the headlights entirely — the right shape of fix. Those keys are **absent** on this unit, so this is untested and may need all four written together. |
-| `wits_night_mode = 1` (schedule) | Sibling of the above for the *theme*; irrelevant while the theme is locked, but worth understanding. Note `UiModeManager` already carries `customStart=22:00 customEnd=06:00` from somewhere — find out what wrote it. |
-| Companion-driven | The app already observes ACC and illumination and owns a guarded, rate-limited brightness writer. Re-asserting the night brightness across an ACC-off transition fits what it already does — and unlike the `wits_night_mode` route it acts on the setting that demonstrably moves. |
-
-Do **not** reach for `wits_night_mode` at all for this problem. It governs the theme, and the
-theme is both locked and not what changes. The signal to act on is `screen_brightness`.
+**Superseded: "Force day (`wits_night_mode = 3`) is the fix."** That answered the original
+always-on-headlights framing, which the driver solved at the vehicle instead. It is the wrong
+lever for the engine-off jump, and its effect against the theme lock is untested.

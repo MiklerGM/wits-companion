@@ -689,13 +689,17 @@ activity recreation (e.g. a day/night flip). Now the floating package is remembe
   51/255, floor holds at 12, label tracks. `WRITE_SETTINGS` is already declared (granted by
   signature on the platform build; on the emulator granted via `appops set … WRITE_SETTINGS
   allow`). Covered by `BrightnessControllerTest`.
-  - **On-car check that remains:** does this panel's backlight actually follow the framework
-    `SCREEN_BRIGHTNESS`, or the vendor MCU (day/night tracks the illumination line)? Tap the
-    tiles in the car — if the panel dims/brightens, done; if it snaps back on the next
-    illumination event, the MCU owns it and we'd need the vendor channel instead.
+  - **On-car check — ANSWERED 2026-08-20.** The framework `SCREEN_BRIGHTNESS` is the right
+    channel: `screen_brightness` measurably tracks the headlights (75 with them on, 255 off),
+    so the vendor writes the same key we do rather than owning a private MCU path. But the
+    second half of the old question was the real one — it *does* "snap back on the next
+    illumination event", because `BacklightControl` overwrites `screen_brightness` from
+    `screen_brightness_day`/`_night` on every headlight transition. Our writes are correct and
+    land; they simply do not survive the next transition. See § docs/night-mode.md 5.
 - **No ambient-light sensor to auto-tune from.** These units have no photodiode; day/night
-  comes from the car's illumination (headlight) line over CAN, which is why the theme flips
-  with the headlights, not the clock. `SensorManager` has no `TYPE_LIGHT` on the hardware
+  comes from the car's illumination (headlight) line over CAN, not the clock. *(Correction
+  2026-08-20: what the headlights move is the **backlight**, not the theme — the theme is
+  locked on night on this unit and never flips. See § docs/night-mode.md.)* `SensorManager` has no `TYPE_LIGHT` on the hardware
   (the emulator's "Goldfish Light sensor" is virtual and irrelevant). Worth a one-line
   `getSensorList` confirmation on the car, but the absence is expected — which is exactly why
   a manual ± control is the right call rather than an auto-brightness curve.
@@ -761,4 +765,6 @@ activity recreation (e.g. a day/night flip). Now the floating package is remembe
 - Side-by-side tiling via the privileged `resizeTask` / freeform-launch path, offset correct
   under the 99 px status bar.
 - Cockpit opens with the map floating and in-panel app switching.
-- Dark theme follows the system setting.
+- Dark theme follows the system setting — *but note this was never exercised in both states:
+  `UiModeManager` is locked on night on this unit, so the app is always dark and the light
+  palette has effectively never run on the car. See § docs/night-mode.md 2.*

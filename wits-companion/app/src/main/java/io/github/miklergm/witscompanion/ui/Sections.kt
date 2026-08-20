@@ -664,7 +664,10 @@ class SettingsSection(private val app: WitsCompanionApp) : MainActivity.Section 
         c.addView(activity.heading("Day / night mode"))
         c.addView(activity.body(
             "Writes Settings.System/wits_night_mode only. It never changes screen " +
-                "brightness or MCU dimming — those are separate mechanisms."
+                "brightness or MCU dimming — those are separate mechanisms.\n\n" +
+                "On this unit it may have no visible effect: the theme is locked on night " +
+                "by the vendor (UiModeManager mNightModeLocked), and what actually changes " +
+                "with the headlights is the backlight, not the theme."
         ))
 
         status = activity.body("—", mono = true)
