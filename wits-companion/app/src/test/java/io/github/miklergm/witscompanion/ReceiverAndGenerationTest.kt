@@ -125,6 +125,9 @@ class ReceiverAndGenerationTest {
 
     private fun engineSource(): String = sourceOf("layout/LayoutEngine.kt")
 
+    /** Occurrences of a literal substring — these tests count call sites. */
+    private fun String.occurrences(needle: String): Int = split(needle).size - 1
+
     private fun sourceOf(relative: String): String {
         val candidates = listOf(
             "src/main/java/io/github/miklergm/witscompanion/$relative",
@@ -203,6 +206,47 @@ class ReceiverAndGenerationTest {
         // branch); the preserve short-circuit must sit before the FALLBACK launchIntoFreeform.
         assertTrue("preserve must short-circuit before the fallback launchIntoFreeform",
             place.indexOf("PreservedInPlace") in 0 until place.lastIndexOf("launchIntoFreeform"))
+    }
+
+    /**
+     * Parking and removal are delayed mutations that outlive the apply which scheduled them.
+     * A rapid A-then-B switch must not let A's cleanup tear down B's tiles.
+     */
+    @Test
+    fun `stale-window cleanup is gated on the transaction generation`() {
+        val src = engineSource()
+        val park = src.substringAfter("private fun parkStaleWindows(").substringBefore("\n    }")
+
+        // Both cleanup paths — privileged removal and the in-place park — are delayed.
+        assertTrue("the privileged path removes tasks", park.contains("removeTask(task.taskId)"))
+        assertTrue("the unprivileged path re-parks in place", park.contains("WindowRequest(pkg, parkBounds, parkMode)"))
+
+        // Neither may fire unguarded: stillValid() re-checks both the generation and the
+        // vehicle state at fire time.
+        val delayed = park.occurrences("handler.postDelayed")
+        assertEquals("every delayed mutation must be gated", delayed, park.occurrences("stillValid("))
+
+        // ...and each must be cancellable by the next apply, which clears RETRY_TOKEN.
+        assertEquals("every delayed mutation must carry the retry token", delayed, park.occurrences("RETRY_TOKEN"))
+
+        // The generation has to reach the helper at all.
+        assertTrue("the helper takes the generation", park.contains("myGeneration: Long"))
+    }
+
+    /** "Applied" must not claim windows that were never placed. */
+    @Test
+    fun `apply reports the tiles it actually dispatched`() {
+        val src = engineSource()
+        val apply = src.substringAfter("        scheduleVerification(preset, expected,")
+
+        assertTrue(
+            "the count comes from what was dispatched, not from the preset",
+            apply.contains("Result.Applied(expected.size"),
+        )
+        assertTrue(
+            "a layout with nothing launchable must refuse, not report success",
+            apply.contains("expected.isEmpty()") && apply.contains("Result.Refused("),
+        )
     }
 
     /**

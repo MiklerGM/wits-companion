@@ -180,11 +180,15 @@ class LayoutEngine(
         // tile for an anchored layout (the panel is a tile now, so a fullscreen park would
         // fill the screen), or fullscreen for a tiled layout.
         val parked = if (preset.kind == PresetKind.ANCHORED && floatingBounds != null) {
-            parkStaleWindows(ordered.map { it.packageName }.toSet(), floatingBounds, WitsWindowMode.FREEFORM)
+            parkStaleWindows(
+                ordered.map { it.packageName }.toSet(), floatingBounds,
+                WitsWindowMode.FREEFORM, myGeneration,
+            )
         } else {
             parkStaleWindows(
                 ordered.map { it.packageName }.toSet(),
                 windowController.fullDisplayArea(appContext), WitsWindowMode.FULLSCREEN,
+                myGeneration,
             )
         }
 
@@ -302,7 +306,21 @@ class LayoutEngine(
         }
         scheduleVerification(preset, expected, ordered.size, myGeneration, verifyAttempt)
 
-        return Result.Applied(ordered.size, warnings)
+        // Report what was actually dispatched, not what the preset asked for. `expected` is
+        // exactly the set of tiles this apply put on screen — launchable windows, plus the
+        // panel an anchored preset does not carry as a window — so a preset whose apps are
+        // all missing no longer reports a cheerful "Applied 2 window(s)" while nothing moved.
+        if (expected.isEmpty()) {
+            logger?.log(
+                "layout", "apply", extras = mapOf("preset" to preset.id),
+                result = "nothing_launchable",
+            )
+            return Result.Refused(
+                "nothing to place: no app in this layout is installed with a launcher activity"
+            )
+        }
+
+        return Result.Applied(expected.size, warnings)
     }
 
     /**
@@ -533,9 +551,19 @@ class LayoutEngine(
      *    one stretched full-screen over the panel). They park to the **floating tile's bounds**
      *    instead, so a switched-away app sits hidden behind the new one in the same tile.
      *
+     * Every delayed mutation here is gated on [myGeneration] and tagged with `RETRY_TOKEN`, like
+     * the placement sends: parking and removal outlive the call that scheduled them, so without
+     * the gate a superseded apply could still remove or reposition tiles belonging to the layout
+     * that replaced it.
+     *
      * @return how many packages were parked, so the caller can offset what follows
      */
-    private fun parkStaleWindows(keep: Set<String>, parkBounds: android.graphics.Rect, parkMode: Int): Int {
+    private fun parkStaleWindows(
+        keep: Set<String>,
+        parkBounds: android.graphics.Rect,
+        parkMode: Int,
+        myGeneration: Long,
+    ): Int {
         // Everything to clear away: what we last placed, plus — on the privileged path —
         // any live freeform tile at all that is not part of the incoming layout. Rapid
         // taps can leave freeform tasks we never recorded in lastAppliedPackages; without
@@ -562,7 +590,12 @@ class LayoutEngine(
             // returns (the removal is posted), like the Settings button.
             val toRemove = liveTasks.filter { it.packageName !in keep }
             toRemove.forEachIndexed { index, task ->
-                handler.postDelayed({ windowController.removeTask(task.taskId) }, index * PARK_DELAY_MS)
+                val pkg = task.packageName ?: "task:${task.taskId}"
+                handler.postDelayed(
+                    { if (stillValid(myGeneration, "remove_stale", pkg)) windowController.removeTask(task.taskId) },
+                    RETRY_TOKEN,
+                    index * PARK_DELAY_MS,
+                )
             }
             logger?.log(
                 "layout", "remove_stale",
@@ -578,10 +611,12 @@ class LayoutEngine(
         stale.forEachIndexed { index, pkg ->
             if (!windowController.isLaunchable(pkg)) return@forEachIndexed
             handler.postDelayed({
-                windowController.applyWindow(
-                    WitsWindowController.WindowRequest(pkg, parkBounds, parkMode)
-                )
-            }, index * PARK_DELAY_MS)
+                if (stillValid(myGeneration, "park_stale", pkg)) {
+                    windowController.applyWindow(
+                        WitsWindowController.WindowRequest(pkg, parkBounds, parkMode)
+                    )
+                }
+            }, RETRY_TOKEN, index * PARK_DELAY_MS)
         }
         logger?.log(
             "layout", "park_stale",
