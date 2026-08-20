@@ -162,6 +162,23 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       protects against may not be reachable from the UI at all; provoking it probably needs
       two applies driven programmatically rather than by tapping.
   - [ ] **Hotspot-only boot restore** — needs a reboot with the layout opt-in *off*.
+- [ ] **Verify the Cockpit panel after the ViewModel refactor** — *offline-verified only;
+      this is the one refactor that changes the panel's window handling.* `DashboardActivity`
+      now extends `androidx.activity.ComponentActivity` instead of plain `Activity`, and its
+      state comes from `CockpitViewModel` collected with `repeatOnLifecycle`.
+      `ComponentActivity` is a thin subclass of `Activity` and adds no decor behaviour of its
+      own, but the panel's insets, immersive handling and freeform self-resize are the most
+      on-car-tuned code in the project and none of it can be exercised offline. Check, in this
+      order, and stop at the first thing that looks wrong:
+  - the panel comes up as a **tile** beside the map, not full-screen (the failure mode that
+    took several sessions to get right the first time);
+  - the vendor top strip is present beside a tile and hidden in the hidden/full state;
+  - content is not double-padded at the top (the "everything slid too far down" report);
+  - the rail highlight is correct immediately after a day/night flip and after a freeform
+    resize — this is what the ViewModel is *meant* to improve, since the state now survives
+    the recreation instead of being rebuilt;
+  - media transport still enables/greys correctly, especially **play with no live session**,
+    which must stay tappable so the media-key fallback is reachable.
 - [ ] **Day/night: settle mechanism (3), the launcher skin** — *needs the car; everything
       else here is already answered.* "Night mode" on this unit is three independent things
       (§ docs/night-mode.md 3.2a): the **theme** is locked on and never moves, the **backlight**

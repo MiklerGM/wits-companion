@@ -97,7 +97,12 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
+    // Not referenced directly: material 1.12 depends on constraintlayout, and declaring it
+    // here pins that transitive to 2.1.4 instead of the 2.0.1 Material asks for. Removing it
+    // does not shrink the APK, it silently downgrades a library that ships in it.
     implementation(libs.androidx.constraintlayout)
+    implementation(libs.androidx.activity)
+    implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
 

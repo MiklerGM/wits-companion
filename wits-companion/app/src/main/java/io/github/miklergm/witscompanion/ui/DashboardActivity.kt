@@ -1,6 +1,11 @@
 package io.github.miklergm.witscompanion.ui
 
-import android.app.Activity
+import androidx.activity.ComponentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.launch
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
@@ -49,9 +54,20 @@ import java.util.Locale
  * PDC and door state are intentionally absent: they are already on the instrument cluster
  * and the HUD, and reversing switches the head unit to the OEM source anyway.
  */
-class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionRepository.Listener {
+/**
+ * Extends `androidx.activity.ComponentActivity` rather than plain `Activity` for the
+ * ViewModelStore and `lifecycleScope` — deliberately not `AppCompatActivity`, which adds a
+ * view-inflation layer this screen does not use (every view here is built in code) and which
+ * would put more between us and the decor. The panel's window handling is the most
+ * on-car-tuned part of the app, so the base class change is kept as small as it can be.
+ */
+class DashboardActivity : ComponentActivity() {
 
     private lateinit var app: WitsCompanionApp
+
+    private val model: CockpitViewModel by lazy {
+        ViewModelProvider(this, CockpitViewModel.Factory(app))[CockpitViewModel::class.java]
+    }
 
     private lateinit var clockView: TextView
     private lateinit var stateView: TextView
@@ -96,6 +112,17 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
         // would double it (the "everything slid too far down" report in the full-screen state).
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(buildRoot())
+
+        // One subscription for the panel's whole lifetime. repeatOnLifecycle already suspends
+        // the collection between STOPPED and STARTED, so this belongs in onCreate — launching
+        // it from onStart would add a fresh collector on every start, and lifecycleScope only
+        // cancels at DESTROY, so they would accumulate. Lint's RepeatOnLifecycleWrongUsage
+        // caught exactly that.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                model.state.collect { render(it) }
+            }
+        }
     }
 
     // ------------------------------------------------------------------ layout
@@ -451,25 +478,21 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
 
     override fun onStart() {
         super.onStart()
-        app.carStateRepository.addObserver(this)
         // Start/refresh observation on open: notification access may have been granted since
         // the process started, and the repository is not started elsewhere.
         app.mediaRepository.start()
         app.mediaRepository.ensureObserving()
-        app.mediaRepository.addListener(this)
-        if (hotspotTile != null) {
-            app.hotspotController.observe(hotspotListener)
-            renderHotspot(app.hotspotController.state())
-        }
-        // Re-read the brightness and follow live changes: the system moves SCREEN_BRIGHTNESS on
-        // a day/night switch, and the label would otherwise keep showing the value we last set.
-        renderBrightness()
+        if (hotspotTile != null) app.hotspotController.observe(hotspotListener)
+        // Follow live brightness changes: the system moves SCREEN_BRIGHTNESS on a day/night
+        // switch, and the label would otherwise keep showing the value we last set.
         contentResolver.registerContentObserver(
             android.provider.Settings.System.getUriFor(android.provider.Settings.System.SCREEN_BRIGHTNESS),
             false, brightnessObserver,
         )
         ui.post(clockTick)
-        onCarState(app.carStateRepository.state)
+        // The window may have been resized while stopped (the Cockpit resizes constantly), and
+        // only the Activity can answer whether the panel now fills the display.
+        model.refresh(fillsDisplay())
     }
 
     private val brightnessObserver = object : android.database.ContentObserver(ui) {
@@ -478,8 +501,6 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
 
     override fun onStop() {
         runCatching { contentResolver.unregisterContentObserver(brightnessObserver) }
-        app.carStateRepository.removeObserver(this)
-        app.mediaRepository.removeListener(this)
         if (hotspotTile != null) app.hotspotController.stopObserving()
         ui.removeCallbacks(clockTick)
         super.onStop()
@@ -552,16 +573,21 @@ class DashboardActivity : Activity(), CarStateRepository.Observer, MediaSessionR
     // ----------------------------------------------------------------- updates
 
     /** Delivered on the main thread by [CarStateRepository]. */
-    override fun onCarState(state: CarState) {
-        stateView.text = buildString {
-            append(state.sourceName)
-            append("   ACC ").append(state.acc.display())
-            if (state.reverseActive == true) append("   REVERSE")
-        }
+    /**
+     * Applies one published state. The single place the panel is driven from — previously the
+     * work was split across two repository callbacks and several direct reads scattered
+     * through the render helpers, so what the panel showed depended on which arrived last.
+     */
+    private fun render(state: CockpitUiState) {
+        stateView.text = state.statusText
+        state.media.raw?.let { onMedia(it) }
+        renderHotspot(state.hotspot.state)
+        renderBrightness()
+        refreshRailSelection()
     }
 
-    /** Delivered on the main thread by [MediaSessionRepository]. */
-    override fun onMedia(snapshot: MediaSnapshot) {
+    /** Delivered on the main thread by [MediaSessionRepository], via the ViewModel. */
+    private fun onMedia(snapshot: MediaSnapshot) {
         if (!snapshot.permissionGranted) {
             trackView.text = "Media access not granted"
             artistView.text = "Settings → Media, or grant notification access"
