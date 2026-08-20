@@ -68,6 +68,11 @@ tools/deploy.sh platform <serial|ip:port>  # -> the head unit, platform-signed
 JDK 17 and Android SDK platform 35. Always use the wrapper — AGP 8.x does not work
 with a system Gradle 9.x.
 
+CI runs the same four commands on every push: unit tests, lint for both modules, and both
+debug assemblies. Tagging `v*` additionally builds the platform-signed APK and attaches it
+to a GitHub release — deliberately only on a tag, because that artifact is an installable,
+system-privileged app rather than source and notes.
+
 The platform keystore is read from `WITS_PLATFORM_KEYSTORE`, or
 `tools/platform-key/platform.keystore.p12` — a path that is git-ignored.
 

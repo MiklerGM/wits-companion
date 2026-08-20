@@ -1,0 +1,56 @@
+name: CI
+
+# Verification only. Nothing here needs the platform key, and nothing here produces an
+# installable privileged build — see release.yml for that.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # JDK 17: AGP 8.x requires it, and the wrapper pins Gradle 8.13. Do not switch to a
+      # system Gradle — Gradle 9.x does not work with this AGP.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests
+        working-directory: wits-companion
+        # Includes the safety suite (reverse guard freshness, transport trust), the recorder
+        # concurrency tests, and the consistency gates that hold the docs to the code:
+        # WitsProfileTest (car-state.md) and ManifestPolicyTest (security.md §3.6).
+        run: ./gradlew :app:testDebugUnitTest
+
+      - name: Lint
+        working-directory: wits-companion
+        # Both modules are at 0 errors. The probe's ProtectedPermissions findings are
+        # suppressed per-tag with a rationale rather than by a baseline, so a genuinely new
+        # finding still fails here.
+        run: ./gradlew :app:lintDebug :probe:lintDebug
+
+      - name: Assemble
+        working-directory: wits-companion
+        run: ./gradlew :app:assembleDebug :probe:assembleDebug
+
+      - name: Upload reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports
+          path: |
+            wits-companion/app/build/reports/
+            wits-companion/probe/build/reports/
+          retention-days: 7

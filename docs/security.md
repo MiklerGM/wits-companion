@@ -174,15 +174,39 @@ Prevents both user-driven and bug-driven ping-pong.
 
 ### 3.6 Permissions actually requested
 
+Every `uses-permission` in the app manifest, with nothing omitted — a test enforces that
+this table and the manifest agree, because a security document that under-states what the
+app asks for is worse than none.
+
+**Signature-level.** Granted only when the APK is signed with the platform key. A debug
+build does not receive them and degrades to the vendor hook; each is declared so the
+platform build *can* use it, and is inert otherwise.
+
+| Permission | Why | Degrades to |
+|---|---|---|
+| `MANAGE_ACTIVITY_TASKS` | `resizeTask` (reposition a tile without fronting it) and `getAllRootTaskInfos` (read real window state) | vendor `CHANGE_WINDOW` hook |
+| `REMOVE_TASKS` | `removeTask` specifically requires it; clears stale freeform tiles, which this ROM cannot un-freeform (`setTaskWindowingMode` is absent) | parking stale windows out of sight |
+| `WRITE_SECURE_SETTINGS` | self-granting the media notification-listener access only — the vendor's system menu for it is unreachable on this unit and the grant is lost on every reinstall | the system settings intent |
+| `TETHER_PRIVILEGED` | toggling the Wi-Fi hotspot | status shown, toggle unavailable |
+
+**Normal / user-granted.**
+
 | Permission | Why | Optional? |
 |---|---|---|
 | `RECEIVE_BOOT_COMPLETED` | opt-in layout restore at boot | yes (feature off by default) |
 | `WRITE_SETTINGS` | `wits_night_mode` only | yes (appop, user-granted) |
-| `BIND_NOTIFICATION_LISTENER_SERVICE` | media panel only | yes |
-| `<queries>` for 4 packages | package visibility | — |
+| `ACCESS_WIFI_STATE` | reading hotspot state | — |
+| `CHANGE_WIFI_STATE` | hotspot toggle | — |
+| `BIND_NOTIFICATION_LISTENER_SERVICE` | media panel only (declared on the service, not as a `uses-permission`) | yes |
+| `<queries>` for 4 packages | package visibility without `QUERY_ALL_PACKAGES` | — |
 
 **Not requested:** `INTERNET`, `SYSTEM_ALERT_WINDOW`, `QUERY_ALL_PACKAGES`,
 `ACCESS_FINE_LOCATION`, Accessibility, `FOREGROUND_SERVICE` (MVP), storage.
+
+**Signature-level and deliberately declined:** `INTERNAL_SYSTEM_WINDOW`,
+`STATUS_BAR_SERVICE`. The probe established that this firmware would grant them to a
+platform-signed APK; the companion needs neither, and each is a capability worth not
+holding.
 
 ### 3.7 Logging and redaction
 

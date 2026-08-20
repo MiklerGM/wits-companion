@@ -1,0 +1,100 @@
+name: Release
+
+# Builds the platform-signed APK and attaches it to a GitHub release.
+#
+# On tags only, never on push: a signed platform build is an installable, system-privileged
+# app for these head units, and that is a different artifact from source and docs. Producing
+# one should be a deliberate act with a version attached to it.
+#
+# On the key: this repository signs with the **public AOSP platform test key**
+# (build/target/product/security/platform.pk8, CN=Android, in every AOSP checkout since 2008).
+# It is held as a repository secret for hygiene and to keep it out of the tree, not because it
+# is confidential — it is not. The security-relevant fact is about the firmware: this ROM
+# grants signature-level permissions to an APK signed with a publicly known key. See
+# docs/security.md and the probe module.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # to create the release and upload the APK
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Re-verify rather than trusting that CI passed on the same commit: a tag can point at
+      # anything, including a commit that never ran CI.
+      - name: Verify
+        working-directory: wits-companion
+        run: ./gradlew :app:testDebugUnitTest :app:lintDebug :probe:lintDebug
+
+      - name: Restore the platform keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.PLATFORM_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_B64:-}" ]; then
+            echo "!! PLATFORM_KEYSTORE_B64 is not set."
+            echo "!! Add it with:  base64 -w0 tools/platform-key/platform.keystore.p12"
+            exit 1
+          fi
+          mkdir -p "${RUNNER_TEMP}/signing"
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "${RUNNER_TEMP}/signing/platform.keystore.p12"
+
+      - name: Build the platform APK
+        working-directory: wits-companion
+        env:
+          WITS_PLATFORM_KEYSTORE: ${{ runner.temp }}/signing/platform.keystore.p12
+          WITS_PLATFORM_STORE_PASSWORD: ${{ secrets.PLATFORM_STORE_PASSWORD }}
+          WITS_PLATFORM_KEY_ALIAS: ${{ secrets.PLATFORM_KEY_ALIAS }}
+          WITS_PLATFORM_KEY_PASSWORD: ${{ secrets.PLATFORM_KEY_PASSWORD }}
+        run: ./gradlew :app:assemblePlatform
+
+      # Without a usable key the build silently succeeds and emits
+      # app-platform-UNSIGNED.apk instead. That is a safe fallback locally, but shipping it as
+      # a release would hand people an APK that cannot get the privileges the release claims.
+      - name: Refuse to publish an unsigned build
+        working-directory: wits-companion
+        run: |
+          set -euo pipefail
+          out=app/build/outputs/apk/platform
+          if [ ! -f "$out/app-platform.apk" ]; then
+            echo "!! signing did not take — produced:"; ls -1 "$out"
+            exit 1
+          fi
+          # Newest installed build-tools, rather than pinning a version the runner image
+          # may not carry.
+          apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$apksigner" verify --print-certs "$out/app-platform.apk" | tee /tmp/certs.txt
+          grep -qi "CN=Android" /tmp/certs.txt || {
+            echo "!! not signed with the expected platform certificate"; exit 1; }
+
+      - name: Always remove the keystore
+        if: always()
+        run: rm -rf "${RUNNER_TEMP}/signing"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: wits-companion/app/build/outputs/apk/platform/app-platform.apk
+          generate_release_notes: true
+          body: |
+            Platform-signed build for Witstek / XTRONS head units.
+
+            **This APK is signed with the public AOSP platform test key.** On a unit whose
+            firmware trusts that key it receives signature-level permissions
+            (`MANAGE_ACTIVITY_TASKS`, `REMOVE_TASKS`, `WRITE_SECURE_SETTINGS`,
+            `TETHER_PRIVILEGED`) — see `docs/security.md` §3.6 for what each is used for and
+            what the app degrades to without them.
+
+            Behaviour is specific to one vendor's firmware, verified on one vehicle. No
+            warranty: this drives a device in a car.

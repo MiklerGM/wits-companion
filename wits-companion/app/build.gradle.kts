@@ -26,8 +26,10 @@ android {
     // above all — with a plain adb install and no flashing.
     //
     // The keystore is not in the repo; point to it with -PplatformKeystore=... or the
-    // WITS_PLATFORM_KEYSTORE env var. Without it, the `platform` build type falls back to
-    // the debug signature and the app simply runs unprivileged.
+    // WITS_PLATFORM_KEYSTORE env var. Without it no signing config is created and the build
+    // emits `app-platform-unsigned.apk` — a different filename, so tools/deploy.sh (which
+    // looks for `app-platform.apk`, and checks for the keystore first) cannot ship it by
+    // accident, and .github/workflows/release.yml refuses to publish it.
     val platformKeystore = (findProperty("platformKeystore") as String?)
         ?: System.getenv("WITS_PLATFORM_KEYSTORE")
 
