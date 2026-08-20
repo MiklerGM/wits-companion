@@ -35,17 +35,47 @@ class SessionRecorder(
     }
 
     private val appContext = context.applicationContext
+
+    /**
+     * The actor thread. Everything below marked *actor-owned* is touched **only** here, which
+     * is what replaced three overlapping concurrency strategies: a lock for the ring, a second
+     * for the pending markers, an unsynchronized list for the markers themselves, and a
+     * non-atomic `eventCount++` — all reached from several probe threads at once.
+     */
     private val io = Executors.newSingleThreadExecutor { r -> Thread(r, "wits-session") }
+
+    /**
+     * Sequence numbers are handed out on the *calling* thread, not the actor.
+     *
+     * [record] must return the event it created — callers correlate on it — so the identity
+     * has to exist before the work is queued. An atomic counter is the one piece of shared
+     * state that genuinely needs to be, and it is lock-free.
+     */
     private val seq = AtomicLong(0)
     private val listeners = CopyOnWriteArrayList<Listener>()
 
-    /** Recent events, for pre-marker context and the live timeline. */
+    // --- actor-owned: never touch these off the `io` thread ---------------------
     private val ring = ArrayDeque<SessionEvent>(ringCapacity)
-    private val ringLock = Any()
-
     private val markers = mutableListOf<MarkerRecord>()
     private val pendingMarkers = mutableListOf<Pair<MarkerRecord, Long>>()   // marker, closeAtElapsedMs
-    val catalogDelta = CatalogDelta()
+    private val delta = CatalogDelta()
+
+    // --- published snapshots: written by the actor, read from anywhere ----------
+
+    /**
+     * Immutable views the UI and the marker pre-window read instead of touching the live
+     * collections. Republished after each event, so a reader can be at most one event behind
+     * — which for a timeline and an approximate pre-window is not a meaningful difference,
+     * and is a far better trade than a lock held across IO.
+     */
+    @Volatile
+    private var ringSnapshot: List<SessionEvent> = emptyList()
+
+    @Volatile
+    private var markerSnapshot: List<MarkerRecord> = emptyList()
+
+    /** The catalog delta, safe to read once [finalized]; mutated only on the actor. */
+    val catalogDelta: CatalogDelta get() = delta
 
     @Volatile
     var lastAudioSnapshot: AudioSnapshot? = null
@@ -90,6 +120,17 @@ class SessionRecorder(
 
     // ------------------------------------------------------------------ recording
 
+    /**
+     * Records one event.
+     *
+     * The event is *built* here so the caller gets it back immediately; everything that
+     * mutates shared state — ring, counters, catalog delta, listener notification, the file
+     * write, closing due markers — happens on the actor, in the order the calls arrived.
+     *
+     * Listeners are therefore invoked on the actor thread, not on whichever probe thread
+     * produced the event. That is deliberate: it gives them a single-threaded, ordered view,
+     * and stops a probe thread running listener code that was written expecting otherwise.
+     */
     fun record(
         kind: EventKind,
         payload: EventPayload,
@@ -106,34 +147,49 @@ class SessionRecorder(
             sourceState = sourceState,
             payload = payload,
         )
-        eventCount++
+        submit { ingest(event) }
+        return event
+    }
 
-        synchronized(ringLock) {
-            ring.addLast(event)
-            while (ring.size > ringCapacity) ring.removeFirst()
-        }
+    /** Actor-side handling of one event. */
+    private fun ingest(event: SessionEvent) {
+        ring.addLast(event)
+        while (ring.size > ringCapacity) ring.removeFirst()
+        ringSnapshot = ring.toList()
+        // Safe unsynchronized: the actor is the only writer. The ring is capped, so this
+        // counts everything ever recorded, not what is still buffered.
+        eventCount += 1
 
-        if (payload is EventPayload.Broadcast) {
-            catalogDelta.record(
+        when (val payload = event.payload) {
+            is EventPayload.Broadcast -> delta.record(
                 payload.action, payload.extras, payload.unexpectedExtras, payload.typeMismatches
             )
-        }
-        if (payload is EventPayload.AudioSnapshotPayload) {
-            lastAudioSnapshot = payload.snapshot
+            is EventPayload.AudioSnapshotPayload -> lastAudioSnapshot = payload.snapshot
+            else -> Unit
         }
 
-        io.execute {
-            runCatching { appendRedacted(eventsFile, event.toJson()) }
-                .onFailure { Log.w(TAG, "event write failed: ${it.message}") }
-        }
-        listeners.forEach { runCatching { it.onEvent(event) } }
+        runCatching { appendRedacted(eventsFile, event.toJson()) }
+            .onFailure { Log.w(TAG, "event write failed: ${it.message}") }
+
         closeDuePendingMarkers(event.seq)
-        return event
+        listeners.forEach { runCatching { it.onEvent(event) } }
     }
 
     fun recordSnapshot(json: JSONObject) {
         if (!active) return
-        io.execute { runCatching { appendRedacted(snapshotsFile, json) } }
+        submit { runCatching { appendRedacted(snapshotsFile, json) } }
+    }
+
+    /**
+     * Queues actor work, tolerating the window after [stop] has shut the executor down.
+     *
+     * A probe that has not stopped yet can still call in; dropping that event is correct —
+     * the session is closing — but a RejectedExecutionException propagating into a probe
+     * thread is not.
+     */
+    private fun submit(work: () -> Unit) {
+        runCatching { io.execute(work) }
+            .onFailure { Log.w(TAG, "dropped work after shutdown: ${it.javaClass.simpleName}") }
     }
 
     /**
@@ -182,9 +238,11 @@ class SessionRecorder(
     ): MarkerRecord {
         val nowNanos = SystemClock.elapsedRealtimeNanos()
         val cutoff = nowNanos - preWindowMs * 1_000_000L
-        val firstSeq = synchronized(ringLock) {
-            ring.firstOrNull { it.elapsedRealtimeNanos >= cutoff }?.seq ?: seq.get()
-        }
+        // Read the published snapshot rather than the live ring: the pre-window is an
+        // approximate span of context, and being at most one event behind cannot change which
+        // physical action it captures.
+        val firstSeq = ringSnapshot.firstOrNull { it.elapsedRealtimeNanos >= cutoff }?.seq
+            ?: seq.get()
         val marker = MarkerRecord(
             markerType = type,
             note = note,
@@ -194,45 +252,48 @@ class SessionRecorder(
             sourceAtMarker = sourceState.source,
             steeringSchemeRaw = steeringSchemeRaw,
         )
-        markers += marker
-        synchronized(pendingMarkers) {
-            pendingMarkers += marker to (SystemClock.elapsedRealtime() + postWindowMs)
+        val closeAt = SystemClock.elapsedRealtime() + postWindowMs
+        // Registered before the marker event is queued, so the actor sees them in that order.
+        submit {
+            markers += marker
+            markerSnapshot = markers.toList()
+            pendingMarkers += marker to closeAt
         }
         record(EventKind.MARKER, EventPayload.MarkerPayload(marker), sourceState)
         return marker
     }
 
+    /** Actor-side. Closes any marker whose post-window has elapsed. */
     private fun closeDuePendingMarkers(currentSeq: Long) {
         val now = SystemClock.elapsedRealtime()
-        val closed = synchronized(pendingMarkers) {
-            val due = pendingMarkers.filter { it.second <= now }
-            pendingMarkers.removeAll(due.toSet())
-            due.map { it.first }
-        }
-        closed.forEach { m ->
-            m.postSeqTo = currentSeq
-            io.execute { runCatching { appendRedacted(markersFile, m.toJson()) } }
+        val due = pendingMarkers.filter { it.second <= now }
+        if (due.isEmpty()) return
+        pendingMarkers.removeAll(due.toSet())
+        due.forEach { (marker, _) ->
+            marker.postSeqTo = currentSeq
+            runCatching { appendRedacted(markersFile, marker.toJson()) }
         }
     }
 
     /** Attaches the tester's answers to the most recent marker. */
     fun attachObservations(observations: UserObservations): MarkerRecord? {
-        val marker = markers.lastOrNull() ?: return null
+        val marker = markerSnapshot.lastOrNull() ?: return null
         marker.userObservations = observations
-        io.execute { runCatching { appendRedacted(markersFile, marker.toJson()) } }
+        submit { runCatching { appendRedacted(markersFile, marker.toJson()) } }
         return marker
     }
 
-    fun markerCount(): Int = markers.size
-    fun allMarkers(): List<MarkerRecord> = markers.toList()
+    fun markerCount(): Int = markerSnapshot.size
+    fun allMarkers(): List<MarkerRecord> = markerSnapshot
 
     // -------------------------------------------------------------------- access
 
+    // Snapshot reads — no lock, and none of them can block a probe thread behind file IO.
     fun recentEvents(limit: Int = 200): List<SessionEvent> =
-        synchronized(ringLock) { ring.toList().takeLast(limit).asReversed() }
+        ringSnapshot.takeLast(limit).asReversed()
 
     fun eventsInRange(fromSeq: Long, toSeq: Long): List<SessionEvent> =
-        synchronized(ringLock) { ring.filter { it.seq in fromSeq..toSeq } }
+        ringSnapshot.filter { it.seq in fromSeq..toSeq }
 
     fun addListener(l: Listener) { listeners += l }
     fun removeListener(l: Listener) { listeners -= l }
@@ -260,19 +321,19 @@ class SessionRecorder(
         }
         active = false   // producers stop here; record() and recordSnapshot() are now no-ops
 
-        // Close any marker still waiting for its post-window.
-        val remaining = synchronized(pendingMarkers) {
-            val all = pendingMarkers.map { it.first }; pendingMarkers.clear(); all
-        }
         val last = seq.get()
-        remaining.forEach { m ->
-            m.postSeqTo = last
-            io.execute { runCatching { appendRedacted(markersFile, m.toJson()) } }
-        }
         io.execute {
+            // Close any marker still waiting for its post-window. Actor-side like every other
+            // mutation, and ordered after whatever events were already queued.
+            pendingMarkers.forEach { (marker, _) ->
+                marker.postSeqTo = last
+                runCatching { appendRedacted(markersFile, marker.toJson()) }
+            }
+            pendingMarkers.clear()
+
             runCatching {
                 File(sessionDir, "catalog-delta.json")
-                    .writeText(catalogDelta.toJson(catalog).toString(2))
+                    .writeText(delta.toJson(catalog).toString(2))
             }.onFailure { Log.w(TAG, "catalog delta write failed: ${it.message}") }
             finalized = true
             runCatching { onFinalized?.invoke() }
@@ -280,6 +341,23 @@ class SessionRecorder(
         }
         // Accept no further work; everything already queued still runs.
         io.shutdown()
+    }
+
+    /**
+     * Blocks until every event queued *so far* has been ingested and written.
+     *
+     * Recording is asynchronous, so a caller that records and then immediately reads
+     * [recentEvents] can legitimately see the event missing. This is the barrier for the cases
+     * where that matters — tests, and anything about to read the files directly. It does not
+     * end the session; use [stop] for that.
+     *
+     * @return false on timeout, or once the actor has been shut down by [stop]
+     */
+    fun flush(timeoutMs: Long = 5_000L): Boolean {
+        val done = java.util.concurrent.CountDownLatch(1)
+        val queued = runCatching { io.execute { done.countDown() } }.isSuccess
+        if (!queued) return false
+        return runCatching { done.await(timeoutMs, TimeUnit.MILLISECONDS) }.getOrDefault(false)
     }
 
     /**

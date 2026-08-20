@@ -41,24 +41,27 @@ class SignalExplorerSection(private val app: WitsCompanionApp) : MainActivity.Se
 
     private val ui = android.os.Handler(android.os.Looper.getMainLooper())
 
-    @Volatile
-    private var refreshQueued = false
+    private val refreshQueued = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /**
-     * Events arrive on the probe threads (`wits-propprobe`, `wits-settingsprobe`), so the
+     * Events arrive on the recorder's actor thread (`wits-session`), never on this one, so the
      * refresh must be marshalled to the UI thread.
      *
-     * `SessionRecorder.record()` notifies listeners synchronously and wraps each in
-     * `runCatching`, so touching a View from here threw `CalledFromWrongThreadException`
-     * that was then swallowed: recording worked, but the live timeline never updated once
-     * and gave no hint why. `[RUNTIME]` 2026-07-31, reported as "nothing happened".
+     * The original failure is worth keeping in view: listener callbacks are wrapped in
+     * `runCatching`, so touching a View from here threw `CalledFromWrongThreadException` that
+     * was then swallowed — recording worked, the live timeline never updated once, and nothing
+     * said why. `[RUNTIME]` 2026-07-31, reported as "nothing happened". The wrapping still
+     * hides such mistakes, so the marshalling below is load-bearing, not defensive.
      *
      * Coalesced, because a burst of property changes would otherwise post one relayout each.
+     * `compareAndSet` rather than a plain flag: the producer is one thread and the clearer is
+     * another, so a non-atomic check-then-set can drop a refresh or post duplicates.
      */
     private val recorderListener = SessionRecorder.Listener {
-        if (!refreshQueued) {
-            refreshQueued = true
-            ui.postDelayed({ refreshQueued = false; refreshStatus(); refreshTimeline() }, REFRESH_MS)
+        if (refreshQueued.compareAndSet(false, true)) {
+            ui.postDelayed({
+                refreshQueued.set(false); refreshStatus(); refreshTimeline()
+            }, REFRESH_MS)
         }
     }
 
