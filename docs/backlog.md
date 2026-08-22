@@ -211,9 +211,18 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       skin=$(settings get system ID8UG_SKIN_MODEL)"; sleep 1; done' | tee garage.txt
       ```
 
-      - all three move together, `ill` leading → hypothesis confirmed, close this;
+      - all three move together, `ill` leading → the *signals* are settled; the remaining
+        question is the launcher, not the sensing;
       - `skin` moves while `ill` and `br` do not → a second input exists, and then the
         launcher dive below is the way in.
+
+      **Separately, and probably the real question:** the setting moves but the visible UI
+      does not repaint with it (2026-08-22). Hold the lights in one state and **watch for
+      several minutes** — the two candidate mechanisms are "only repaints when the launcher
+      starts" and "repaints after a delay longer than anyone has waited", and the garage case
+      showed a minute-scale delay, so the second is quite plausible. Distinguish them by
+      leaving the lights on, waiting, and if nothing changes, backgrounding and re-opening the
+      launcher: if it comes back dark, it is a start-time read.
 
       While there, settle the sensor question directly rather than by inference:
       `adb shell dumpsys sensorservice | grep -i light` and
