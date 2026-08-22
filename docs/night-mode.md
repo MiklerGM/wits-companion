@@ -86,6 +86,24 @@ path section 7.2 already establishes is *not live* here (its gate is false). Loo
 `wits_skin` is why this mechanism stayed unidentified for so long: the decompiled code names a
 key this profile does not use. `ID8_skin` (`blue`) never moved either and appears unrelated.
 
+## 3.1 Open: a dark garage in daylight `[RUNTIME]` 2026-08-22
+
+Starting the car in a dark parking garage during the day, headlights on **auto**, brought the
+UI up in **night** mode; it stayed dark for roughly a minute after leaving, then switched to
+day.
+
+That is most likely the same single mechanism rather than a new one — **the ambient sensor is
+in the car, not the head unit.** Auto headlights come on in the garage, `wits.ill` goes `1`,
+and everything follows; outside they switch off after the usual auto-light delay. It explains
+the minute of lag without inventing anything, and it fits the absence of a `TYPE_LIGHT` sensor
+on the hardware.
+
+It is recorded as open because one detail does not obviously fit: the report was that the
+theme switch seemed *independent of the brightness switch*, while section 1 measured the two
+moving in the same second. If `ID8UG_SKIN_MODEL` can change while `screen_brightness` does
+not, there is a second input this document does not know about. The backlog carries the
+capture that separates the two cases.
+
 ## 4. The problem that is actually left: the engine-off brightness jump
 
 > Switch the engine off -> the car drops the headlights -> the screen goes to full brightness,
