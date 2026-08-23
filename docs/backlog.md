@@ -184,57 +184,14 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
     the recreation instead of being rebuilt;
   - media transport still enables/greys correctly, especially **play with no live session**,
     which must stay tappable so the media-key fallback is reachable.
-- [ ] **Day/night changed in a dark garage — is it the car's sensor, or a second input?**
-      *Observed 2026-08-22.* Started the car in a dark parking garage **during the day**,
-      headlights on **auto**: the UI came up in **night** mode, stayed dark for about a minute
-      after leaving the garage, then switched to **day**.
-
-      **Leading hypothesis — no new mechanism needed.** The ambient sensing is in the *car*,
-      not the head unit: auto headlights come on in the garage → `wits.ill=1` → night;
-      daylight outside turns them off → `wits.ill=0` → day. The ~1 minute lag is ordinary
-      auto-headlight hysteresis (cars delay switching off so bridges and trees do not cause
-      flicker). This needs nothing beyond the illumination line we already measured, and is
-      consistent with there being no `TYPE_LIGHT` sensor on the hardware.
-
-      **What would disprove it**, and the reason this is still open: the observation was that
-      the theme switch seemed *independent of the brightness switch*. On 2026-08-20 they moved
-      in the same second (`ill=1` → `br=75` + `skin=night`). If the skin can change while
-      `screen_brightness` does not, there is a second input and the hypothesis is wrong.
-
-      **The discriminating capture** — sample while driving into and out of a dark area:
-
-      ```sh
-      D=<ip:5555>
-      adb -s $D shell 'for i in $(seq 1 400); do
-        echo "$(date +%H:%M:%S) ill=$(getprop wits.ill) \
-      br=$(settings get system screen_brightness) \
-      skin=$(settings get system ID8UG_SKIN_MODEL)"; sleep 1; done' | tee garage.txt
-      ```
-
-      - all three move together, `ill` leading → the *signals* are settled; the remaining
-        question is the launcher, not the sensing;
-      - `skin` moves while `ill` and `br` do not → a second input exists, and then the
-        launcher dive below is the way in.
-
-      **Separately, and probably the real question:** the setting moves but the visible UI
-      does not repaint with it (2026-08-22). Hold the lights in one state and **watch for
-      several minutes** — the two candidate mechanisms are "only repaints when the launcher
-      starts" and "repaints after a delay longer than anyone has waited", and the garage case
-      showed a minute-scale delay, so the second is quite plausible. Distinguish them by
-      leaving the lights on, waiting, and if nothing changes, backgrounding and re-opening the
-      launcher: if it comes back dark, it is a start-time read.
-
-      While there, settle the sensor question directly rather than by inference:
-      `adb shell dumpsys sensorservice | grep -i light` and
-      `adb shell getprop | grep -iE 'lux|ambient|light'`. docs/night-mode.md 7.1 records
-      `[NOTFOUND]` for any ambient value in CenterService, but that was a code search, not a
-      runtime one.
-
-      **If a second input turns out to exist:** decompile the launcher
-      (`com.wits.launcher`, and `ID8UG_SKIN_MODEL` is its key) and find what writes that
-      setting. The key name is the thread to pull — SystemUI's documented `wits_skin` is never
-      written on this profile, so the launcher owns this independently of the SystemUI path
-      in night-mode.md 7.2.
+- [x] **Day/night is a single switch — settled 2026-08-23.** A dark garage during the day
+      (headlights on auto) brought the UI up in night mode and it went day about a minute
+      after leaving, which looked like a head-unit ambient sensor. It is not: the sensor is in
+      the *car*. Auto headlights drive `wits.ill`, which drives the backlight **and** the
+      launcher skin together, and the minute of lag is auto-headlight hysteresis. A brief
+      counter-report that the UI does not repaint with the lights was withdrawn — when the
+      brightness drops automatically the launcher goes dark with it. See § docs/night-mode.md
+      3 and 3.1; the history is in section 8. No launcher decompile needed.
 - [ ] **A fullscreen app cannot be placed into its tile — and `verify` says it worked**
       *Found on-car 2026-08-20, reproduced and worked around; not fixed.* After a reinstall,
       Maps was running **fullscreen** when the autostart applied the anchored preset.

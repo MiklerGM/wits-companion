@@ -9,7 +9,7 @@
 > |---|---|---|---|
 > | 1 | **Theme** — `UiModeManager` night bit | Dark theme in apps that honour it, including the companion | **No — locked on night**, never observed to move |
 > | 2 | **Backlight** — `screen_brightness` | Panel brightness, 255 <-> 75 | **Yes**, confirmed both directions |
-> | 3 | **Launcher skin** — `ID8UG_SKIN_MODEL` | Stock launcher goes black-ish | The **setting** yes, both directions. The **repaint** apparently only at launcher start — see section 3 |
+> | 3 | **Launcher skin** — `ID8UG_SKIN_MODEL` | Stock launcher goes black-ish | **Yes**, both the setting and the repaint |
 >
 > `wits_night_mode` — the key the companion writes — governs **(1) only**, and (1) is pinned
 > on this unit. So the companion's day/night control may have no visible effect here. What
@@ -67,7 +67,7 @@ Two facts here are unexplained and worth chasing before relying on the override:
 `customStart=22:00 customEnd=06:00` means a custom schedule is configured in `UiModeManager`
 even though the `wits_backlight_*` keys are absent from this unit.
 
-## 3. The launcher skin — the *setting* tracks the lights; the UI does not repaint `[RUNTIME]`
+## 3. The launcher skin — confirmed `[RUNTIME]` 2026-08-23
 
 `ID8UG_SKIN_MODEL` is the launcher skin driver, and it moves with the headlights in the same
 second as the backlight. Sampled once a second across two switch changes, engine running:
@@ -78,27 +78,10 @@ second as the backlight. Sampled once a second across two switch changes, engine
 17:28:39   ill=0   screen_brightness=255   ID8UG_SKIN_MODEL=daytime    lights off
 ```
 
-So the **setting** moves with `wits.ill`, in the same second as the backlight.
-
-**But the visible UI does not follow.** Reported 2026-08-22: toggling the headlights changes
-the brightness while the UI stays in its light appearance — it is not repainted dark. Both
-observations are consistent, and the gap between them is the interesting part:
-
-> The 2026-08-20 capture measured `ID8UG_SKIN_MODEL` changing while the **Cockpit was on
-> screen**, so the launcher was in the background and was never observed repainting. Calling
-> that "the launcher skin follows the headlights" was an inference from a settings value, not
-> an observation of the UI. It is corrected here.
-
-The shape that fits both: the setting is updated live, and the launcher applies it **later than
-the toggle** — at start, or on some delayed trigger. That also explains the dark-garage case in
-section 3.1, where the unit *started* with the lights on and came up dark: a start-time read and
-a live read look identical on that path.
-
-Note the limit of the evidence: the report is that the UI did not repaint **within the time
-observed**, and that window may have been short. "Never repaints" and "repaints after a delay
-longer than I waited" are different mechanisms and are not yet distinguished. The garage case
-in fact showed a *minute-scale* delay before a switch, so a delayed repaint is entirely
-plausible and is the more likely of the two.
+And the visible UI follows it: when the brightness drops automatically, the launcher goes dark
+with it `[RUNTIME]` 2026-08-23. So mechanisms (2) and (3) are **one switch with two effects**,
+both driven by `wits.ill` — there is no separate ambient input, and nothing reads a light
+sensor on the head unit.
 
 **`wits_skin` stayed `null` throughout** — it is never written on this profile. Section 7.2
 shows SystemUI setting `wits_skin` to `0`/`1` inside `setThemeByIll`, and that is exactly the
@@ -106,27 +89,21 @@ path section 7.2 already establishes is *not live* here (its gate is false). Loo
 `wits_skin` is why this mechanism stayed unidentified for so long: the decompiled code names a
 key this profile does not use. `ID8_skin` (`blue`) never moved either and appears unrelated.
 
-## 3.1 Open: a dark garage in daylight `[RUNTIME]` 2026-08-22
+## 3.1 Explained: a dark garage in daylight `[RUNTIME]` 2026-08-23
 
 Starting the car in a dark parking garage during the day, headlights on **auto**, brought the
 UI up in **night** mode; it stayed dark for roughly a minute after leaving, then switched to
 day.
 
-That is most likely the same single mechanism rather than a new one — **the ambient sensor is
-in the car, not the head unit.** Auto headlights come on in the garage, `wits.ill` goes `1`,
-and everything follows; outside they switch off after the usual auto-light delay. It explains
-the minute of lag without inventing anything, and it fits the absence of a `TYPE_LIGHT` sensor
-on the hardware.
+This needs no mechanism beyond section 3, because **the ambient sensor is in the car, not the
+head unit**. Auto headlights come on in the garage, `wits.ill` goes `1`, and the backlight and
+the launcher skin follow together; outside, the car switches them off and everything follows
+back. The minute of lag is ordinary auto-headlight hysteresis — cars delay switching off so
+that bridges and tree cover do not cause flicker — and it is a property of the vehicle, not of
+this firmware.
 
-This now looks like the *only* case where the skin visibly changes, because the launcher
-appears to read `ID8UG_SKIN_MODEL` at start rather than on change (section 3). Starting in
-the garage is exactly a launcher start with the lights on.
-
-What remains unexplained is the tail: the UI stayed dark for about a minute after leaving and
-*then* switched to day. If the launcher only reads the setting at start, something repainted
-it later — an activity restart, a configuration change, or a trigger this document has not
-identified. That is the thread worth pulling, and it is a launcher question rather than a
-signal question: `wits.ill` and the brightness were almost certainly already correct.
+It is worth keeping as a worked example: it is the case that most *looks* like a head-unit
+light sensor, and is not one.
 
 ## 4. The problem that is actually left: the engine-off brightness jump
 
@@ -319,6 +296,23 @@ from a single sample — `ill=1` with `night=yes` — while the other state was 
 `mNightMode`, wrong about the phenomenon, because `mNightMode` is the one mechanism that never
 moves here. The backlight was the signal to watch. This is what motivated the three-mechanism
 split at the top.
+
+**Superseded: "the setting moves but the launcher does not repaint."** Held for one day
+(2026-08-22 to 23) and withdrawn. It arose from two things compounding: the 2026-08-20 capture
+measured `ID8UG_SKIN_MODEL` while the **Cockpit was on screen**, so the launcher was in the
+background and its repaint was never actually observed — that finding was written up as
+confirmed when it was an inference from a settings value. A report that the UI stayed light
+while the headlights were toggled then appeared to corroborate it, and that report was
+withdrawn: when the brightness drops automatically, the launcher does go dark with it.
+
+Two lessons, both worth more than the finding:
+
+- *Measuring the setting is not observing the UI.* The value changing tells you what was
+  written, not what anybody saw. Say which one you have.
+- *A correction can be wrong too.* The retraction was accepted quickly because it fitted a
+  plausible story (start-time reads, delayed triggers), and it took a second report to notice
+  that the original measurement had been right all along. Corrections deserve the same
+  scepticism as the claims they replace.
 
 **Superseded: "Force day (`wits_night_mode = 3`) is the fix."** That answered the original
 always-on-headlights framing, which the driver solved at the vehicle instead. It is the wrong
