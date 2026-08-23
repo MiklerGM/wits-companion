@@ -85,29 +85,61 @@ class NavigationRepository {
         listeners -= l
     }
 
+    /**
+     * Live guidance notifications, keyed by [StatusBarNotification.getKey].
+     *
+     * Keyed rather than tracked as a single current package, because a package is not an
+     * identity. Maps can have more than one notification alive at once, and comparing packages
+     * meant the removal of *any* of them blanked the instruction from another. The key is the
+     * only thing that identifies the notification we are actually showing.
+     *
+     * Access is confined to the listener's own thread; the published snapshot is what other
+     * threads read.
+     */
+    private val active = LinkedHashMap<String, NavigationSnapshot>()
+
     /** Called by the listener service for every posted notification. */
     fun onPosted(sbn: StatusBarNotification) {
-        if (!isNavigation(sbn)) return
+        val key = sbn.key ?: return
+        if (!isNavigation(sbn)) {
+            // An update can *stop* being guidance — the route ends and the notification becomes
+            // an ordinary one under the same key. Treating that as a removal is what stops a
+            // finished manoeuvre sitting on the panel indefinitely.
+            if (active.remove(key) != null) reselect()
+            return
+        }
         val extras = sbn.notification?.extras ?: return
+        active[key] = parse(sbn.packageName, extras)
         lastRawExtras = describe(extras)
-        publish(parse(sbn.packageName, extras))
+        reselect()
     }
 
     /** Called by the listener service when a notification goes away. */
     fun onRemoved(sbn: StatusBarNotification) {
-        if (!isNavigation(sbn)) return
-        // Only clear if the app that ended is the one we were showing, so a stale removal from
-        // a different navigator cannot blank a live instruction.
-        if (sbn.packageName == snapshot.packageName) {
-            lastRawExtras = emptyMap()
-            publish(NavigationSnapshot())
-        }
+        val key = sbn.key ?: return
+        // No isNavigation() test here: a notification that has already been declassified would
+        // fail it, and we would then never forget the key we are still showing.
+        if (active.remove(key) != null) reselect()
     }
 
     /** Drops everything; used when the listener disconnects. */
     fun clear() {
+        active.clear()
         lastRawExtras = emptyMap()
         publish(NavigationSnapshot())
+    }
+
+    /**
+     * Publishes whichever tracked notification should be on screen.
+     *
+     * The most recently posted one wins — with two navigators running, the one still updating
+     * is the one being followed. When nothing is left the panel goes empty rather than keeping
+     * the last instruction.
+     */
+    private fun reselect() {
+        val chosen = active.values.lastOrNull()
+        if (chosen == null) lastRawExtras = emptyMap()
+        publish(chosen ?: NavigationSnapshot())
     }
 
     private fun publish(next: NavigationSnapshot) {
@@ -142,11 +174,18 @@ class NavigationRepository {
             if (sbn.packageName !in NAVIGATION_PACKAGES) return false
             val n = sbn.notification ?: return false
             if (!sbn.isOngoing) return false
-            // Prefer the declared category, but do not require it: not every navigator sets it.
-            val category = n.category
-            return category == null || category == Notification.CATEGORY_NAVIGATION ||
-                category == Notification.CATEGORY_SERVICE ||
-                category == Notification.CATEGORY_TRANSPORT
+            // CATEGORY_NAVIGATION is required, not preferred.
+            //
+            // Accepting a null/SERVICE/TRANSPORT category as well was too loose: those cover
+            // ordinary background-service and media notifications, which allowlisted apps post
+            // routinely. Maps' own media notification would have qualified — overwriting live
+            // guidance and copying unrelated text into lastRawExtras.
+            //
+            // A navigator that does not set the category will simply not be read. That is the
+            // right default while the extraction is still unverified: widen it per package
+            // once a real notification has been looked at, not on the assumption that one
+            // might need it.
+            return n.category == Notification.CATEGORY_NAVIGATION
         }
 
         /**

@@ -118,6 +118,97 @@ class NavigationTest {
         assertEquals("Turn right", panel.instruction)
     }
 
+    // --------------------------------------------------- posted/removed cycles
+
+    private fun sbn(
+        pkg: String = "com.google.android.apps.maps",
+        id: Int = 1,
+        title: String? = "300 m",
+        text: String? = "Turn right",
+        ongoing: Boolean = true,
+        category: String? = Notification.CATEGORY_NAVIGATION,
+        postTime: Long = 1_000L,
+    ): android.service.notification.StatusBarNotification {
+        val ctx = androidx.test.core.app.ApplicationProvider
+            .getApplicationContext<android.app.Application>()
+        val n = Notification.Builder(ctx, "chan").apply {
+            setSmallIcon(android.R.drawable.ic_menu_directions)
+            title?.let { setContentTitle(it) }
+            text?.let { setContentText(it) }
+            category?.let { setCategory(it) }
+            setOngoing(ongoing)
+        }.build()
+        return android.service.notification.StatusBarNotification(
+            pkg, pkg, id, "tag$id", 0, 0, 0, n,
+            android.os.UserHandle.getUserHandleForUid(0), postTime,
+        )
+    }
+
+    @Test
+    fun `removing one notification does not clear another`() {
+        // The bug this replaces: identity was the package, so removing any Maps notification
+        // blanked the instruction from a different one.
+        val r = NavigationRepository()
+        r.onPosted(sbn(id = 1, title = "300 m", text = "Turn right"))
+        r.onPosted(sbn(id = 2, title = "1.2 km", text = "Keep left", postTime = 2_000L))
+        assertEquals("Keep left", r.snapshot.instruction)
+
+        r.onRemoved(sbn(id = 1))
+        assertTrue("the surviving notification must still be shown", r.snapshot.hasInstruction)
+        assertEquals("Keep left", r.snapshot.instruction)
+
+        r.onRemoved(sbn(id = 2))
+        assertFalse("with none left, the row goes away", r.snapshot.hasInstruction)
+    }
+
+    @Test
+    fun `a notification that stops being navigation is dropped`() {
+        // The route ends and the same notification is reposted as an ordinary one. Ignoring it
+        // because it no longer looks like navigation left the finished manoeuvre on screen.
+        val r = NavigationRepository()
+        r.onPosted(sbn(id = 1))
+        assertTrue(r.snapshot.hasInstruction)
+
+        r.onPosted(sbn(id = 1, category = null, ongoing = false, title = "Rate your trip"))
+        assertFalse("stale guidance must not survive the route", r.snapshot.hasInstruction)
+    }
+
+    @Test
+    fun `removal is honoured even after declassification`() {
+        // onRemoved must not re-test isNavigation: a declassified notification would fail it,
+        // and the key would never be forgotten.
+        val r = NavigationRepository()
+        r.onPosted(sbn(id = 1))
+        r.onRemoved(sbn(id = 1, category = null, ongoing = false))
+        assertFalse(r.snapshot.hasInstruction)
+    }
+
+    @Test
+    fun `the most recently posted guidance wins`() {
+        val r = NavigationRepository()
+        r.onPosted(sbn(pkg = "com.google.android.apps.maps", id = 1, text = "Turn right"))
+        r.onPosted(sbn(pkg = "com.waze", id = 2, text = "Exit here", postTime = 2_000L))
+        assertEquals("Exit here", r.snapshot.instruction)
+    }
+
+    @Test
+    fun `a non-navigation notification from an allowed app is ignored`() {
+        // Maps posts media and service notifications too; those must not overwrite guidance.
+        val r = NavigationRepository()
+        r.onPosted(sbn(id = 1, text = "Turn right"))
+        r.onPosted(sbn(id = 9, category = Notification.CATEGORY_TRANSPORT, text = "Now playing"))
+        assertEquals("Turn right", r.snapshot.instruction)
+    }
+
+    @Test
+    fun `clear empties everything`() {
+        val r = NavigationRepository()
+        r.onPosted(sbn(id = 1))
+        r.clear()
+        assertFalse(r.snapshot.hasInstruction)
+        assertTrue(r.lastRawExtras.isEmpty())
+    }
+
     // ------------------------------------------------------------ allowlist
 
     @Test

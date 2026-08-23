@@ -209,7 +209,7 @@ platform build *can* use it, and is inert otherwise.
 | `WRITE_SETTINGS` | `wits_night_mode` only | yes (appop, user-granted) |
 | `ACCESS_WIFI_STATE` | reading hotspot state | — |
 | `CHANGE_WIFI_STATE` | hotspot toggle | — |
-| `BIND_NOTIFICATION_LISTENER_SERVICE` | media panel only (declared on the service, not as a `uses-permission`) | yes |
+| `BIND_NOTIFICATION_LISTENER_SERVICE` | media panel, and reading the next manoeuvre from a navigation app's ongoing notification — see §3.9 (declared on the service, not as a `uses-permission`) | yes |
 | `<queries>` for 4 packages | package visibility without `QUERY_ALL_PACKAGES` | — |
 
 **Not requested:** `INTERNET`, `SYSTEM_ALERT_WINDOW`, `QUERY_ALL_PACKAGES`,

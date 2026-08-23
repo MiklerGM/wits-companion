@@ -137,8 +137,14 @@
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboardHidden" />
 
         <!--
-          Notification listener: exists ONLY to unlock
-          MediaSessionManager.getActiveSessions(). It reads no notifications.
+          Notification listener. Enabling it is what unlocks
+          MediaSessionManager.getActiveSessions(), which is its original purpose.
+
+          It also reads ONE other thing: the next manoeuvre from an ongoing
+          CATEGORY_NAVIGATION notification posted by an allowlisted map app, so the Cockpit
+          can show it. Filtering happens in the listener itself, so nothing else is passed on
+          at all, and the text is never persisted — see docs/security.md §3.9.
+
           exported=false; the system binds it via the signature-level permission.
         -->
         <service

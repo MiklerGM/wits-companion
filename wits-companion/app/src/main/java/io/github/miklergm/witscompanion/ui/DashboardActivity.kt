@@ -196,7 +196,12 @@ class DashboardActivity : ComponentActivity() {
             visibility = View.GONE          // nothing to say until an instruction arrives
             background = android.graphics.drawable.GradientDrawable().apply {
                 cornerRadius = pad(14).toFloat()
-                setColor(Color.parseColor("#1F2A24"))
+                // Both colours come from the palette. A fixed dark green here put the day
+                // palette's #212121 text on it at roughly 1.08:1 — invisible. It went unnoticed
+                // because this unit's theme is pinned to night (docs/night-mode.md 2), so the
+                // day palette never runs on the car; that is a reason to be careful, not a
+                // reason to rely on it.
+                setColor(if (palette.night) Color.parseColor("#1F2A24") else Color.parseColor("#DCEFE4"))
             }
             layoutParams = LinearLayout.LayoutParams(MATCH, ViewGroup.LayoutParams.WRAP_CONTENT)
                 .apply { bottomMargin = pad(8) }
@@ -206,7 +211,9 @@ class DashboardActivity : ComponentActivity() {
         navDistanceView = TextView(this).apply {
             textSize = 20f
             setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.parseColor("#8FD9B6"))
+            setTextColor(
+                if (palette.night) Color.parseColor("#8FD9B6") else Color.parseColor("#136B45")
+            )
             setPadding(0, 0, pad(14), 0)
         }
         navInstructionView = TextView(this).apply {
@@ -451,9 +458,14 @@ class DashboardActivity : ComponentActivity() {
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
         setContentView(buildRoot())
+        // Re-render from the current state, not just the pieces with their own cache.
+        // buildRoot() recreates every view — navCard among them, starting GONE — and a
+        // StateFlow does not replay a value that has not changed, so guidance stayed hidden
+        // until some unrelated state happened to move. Rendering the current value covers
+        // every field at once instead of listing them here and forgetting the next one.
+        render(model.state.value)
         renderBrightness()
         if (hotspotTile != null) renderHotspot(app.hotspotController.state())
-        latestMedia?.let { onMedia(it) }
         applyImmersive()
         ui.post { ensurePanelBounds() }
     }

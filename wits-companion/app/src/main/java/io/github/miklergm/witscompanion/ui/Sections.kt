@@ -621,7 +621,11 @@ class SettingsSection(private val app: WitsCompanionApp) : MainActivity.Section 
         // ------------------------------------------------------------- media
         c.addView(activity.heading("Media"))
         c.addView(activity.body(
-            "The Cockpit's play/pause/next needs notification access to read the player."
+            "The Cockpit's play/pause/next needs notification access to read the player.\n\n" +
+                "It is also used to read the next turn from a navigation app's own " +
+                "notification, so the Cockpit can show it beside the media controls. " +
+                "Only ongoing navigation notifications from known map apps are read, " +
+                "and the text is never written to the log or included in an export."
         ))
         c.addView(activity.button("Grant notification access") {
             when {
