@@ -39,6 +39,22 @@ class WitsNotificationListenerService : NotificationListenerService() {
     private val navigation: NavigationRepository?
         get() = (application as? WitsCompanionApp)?.navigationRepository
 
+    /**
+     * Picks up navigation that was already running when we connected.
+     *
+     * [onNotificationPosted] only fires for notifications posted *after* the bind, so without
+     * this the manoeuvre row stays empty whenever a route is already under way — after an app
+     * restart, a reinstall, or any time the system rebinds the listener. Maps would eventually
+     * repost on the next distance change and fill it in, but "eventually" on a long straight
+     * stretch is a blank row for minutes.
+     */
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        runCatching {
+            activeNotifications?.forEach { navigation?.onPosted(it) }
+        }
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         val n = sbn ?: return
         runCatching { navigation?.onPosted(n) }
