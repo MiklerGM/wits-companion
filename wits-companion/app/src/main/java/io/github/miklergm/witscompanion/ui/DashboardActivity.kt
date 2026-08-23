@@ -77,6 +77,9 @@ class DashboardActivity : ComponentActivity() {
     private lateinit var prevButton: TextView
     private lateinit var nextButton: TextView
     private lateinit var mediaCard: LinearLayout
+    private lateinit var navCard: LinearLayout
+    private lateinit var navDistanceView: TextView
+    private lateinit var navInstructionView: TextView
     private var hotspotTile: LinearLayout? = null
     private var hotspotText: TextView? = null
     private var hotspotIcon: TextView? = null
@@ -182,6 +185,40 @@ class DashboardActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, MATCH, 1f)
         }
+
+        // The next manoeuvre, above the media card and only while navigating. Deliberately
+        // ABOVE: while driving it is the more urgent of the two, and putting it under the
+        // transport row would make it move whenever the media card grows or shrinks.
+        navCard = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(pad(16), pad(12), pad(16), pad(12))
+            visibility = View.GONE          // nothing to say until an instruction arrives
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = pad(14).toFloat()
+                setColor(Color.parseColor("#1F2A24"))
+            }
+            layoutParams = LinearLayout.LayoutParams(MATCH, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { bottomMargin = pad(8) }
+        }
+        // Distance leads: it is the number the driver is actually timing the manoeuvre against,
+        // and it is short enough to read at a glance.
+        navDistanceView = TextView(this).apply {
+            textSize = 20f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.parseColor("#8FD9B6"))
+            setPadding(0, 0, pad(14), 0)
+        }
+        navInstructionView = TextView(this).apply {
+            textSize = 15f
+            setTextColor(palette.foreground)
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        navCard.addView(navDistanceView)
+        navCard.addView(navInstructionView)
+        content.addView(navCard)
 
         // Media as a single rounded card, tinted by what is playing — the panel takes on
         // the album's colour (Mini AA's MediaPlayerCard in spirit). onMedia() fills in the
@@ -580,6 +617,7 @@ class DashboardActivity : ComponentActivity() {
      */
     private fun render(state: CockpitUiState) {
         stateView.text = state.statusText
+        renderNavigation(state.navigation)
         state.media.raw?.let { onMedia(it) }
         renderHotspot(state.hotspot.state)
         renderBrightness()
@@ -651,6 +689,28 @@ class DashboardActivity : ComponentActivity() {
 
         latestMedia = snapshot
         refreshProgress()
+    }
+
+    /**
+     * Shows or hides the manoeuvre row.
+     *
+     * Hidden entirely when there is nothing to say, rather than shown empty: an empty strip
+     * costs vertical space on a 900 px panel and tells the driver nothing. The distance view
+     * is dropped independently, because plenty of instructions arrive without one.
+     */
+    private fun renderNavigation(nav: CockpitUiState.NavPanel) {
+        if (!::navCard.isInitialized) return
+        if (!nav.visible) {
+            navCard.visibility = View.GONE
+            return
+        }
+        navCard.visibility = View.VISIBLE
+        navDistanceView.visibility = if (nav.distance.isNullOrBlank()) View.GONE else View.VISIBLE
+        navDistanceView.text = nav.distance.orEmpty()
+        // The ETA is appended rather than given its own view: it is context, not the
+        // instruction, and a third column would crowd a 35 % tile.
+        navInstructionView.text = listOfNotNull(nav.instruction, nav.eta)
+            .joinToString("   ·   ")
     }
 
     /** Enables/greys the three transport glyphs without the default Button wash. */

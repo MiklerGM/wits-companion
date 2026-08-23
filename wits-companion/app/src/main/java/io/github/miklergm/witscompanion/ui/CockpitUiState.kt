@@ -6,6 +6,7 @@ import io.github.miklergm.witscompanion.layout.DefaultPresets
 import io.github.miklergm.witscompanion.layout.LayoutPreset
 import io.github.miklergm.witscompanion.layout.PresetKind
 import io.github.miklergm.witscompanion.media.MediaSnapshot
+import io.github.miklergm.witscompanion.nav.NavigationSnapshot
 import io.github.miklergm.witscompanion.wits.HotspotController
 import io.github.miklergm.witscompanion.wits.WitsPackages
 
@@ -26,6 +27,7 @@ data class CockpitUiState(
     val railPackages: List<String> = emptyList(),
     val settingsTileSelected: Boolean = false,
     val media: MediaPanel = MediaPanel(),
+    val navigation: NavPanel = NavPanel(),
     val hotspot: HotspotPanel = HotspotPanel(),
     val brightnessPercent: Int? = null,
     val reservation: Reservation? = null,
@@ -63,6 +65,20 @@ data class CockpitUiState(
             return (positionMs + elapsed).coerceIn(0L, durationMs)
         }
     }
+
+    /**
+     * The next manoeuvre, shown above the media card while navigation is running.
+     *
+     * [visible] is false whenever there is nothing worth a row — no navigation, or navigation
+     * whose notification carried no readable instruction. The panel renders nothing at all in
+     * that case rather than an empty strip, so the media card keeps its position.
+     */
+    data class NavPanel(
+        val visible: Boolean = false,
+        val instruction: String? = null,
+        val distance: String? = null,
+        val eta: String? = null,
+    )
 
     data class HotspotPanel(
         val supported: Boolean = false,
@@ -178,6 +194,25 @@ object CockpitState {
         append(state.sourceName)
         append("   ACC ").append(state.acc.display())
         if (state.reverseActive == true) append("   REVERSE")
+    }
+
+    /**
+     * The navigation row.
+     *
+     * Shown only when an instruction actually arrived: a navigator that is running but whose
+     * notification we could not parse gives an empty row, which is worse than none — it takes
+     * space and tells the driver nothing. Distance and ETA are passed through exactly as the
+     * app wrote them, never reformatted; converting "300 m" into our own units is how a
+     * display starts disagreeing with the map beside it.
+     */
+    fun navigation(snapshot: NavigationSnapshot?): CockpitUiState.NavPanel {
+        if (snapshot == null || !snapshot.hasInstruction) return CockpitUiState.NavPanel()
+        return CockpitUiState.NavPanel(
+            visible = true,
+            instruction = snapshot.instruction,
+            distance = snapshot.distance,
+            eta = snapshot.eta,
+        )
     }
 
     fun hotspot(supported: Boolean, state: HotspotController.State) =

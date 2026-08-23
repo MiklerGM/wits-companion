@@ -220,6 +220,35 @@ platform build *can* use it, and is inert otherwise.
 platform-signed APK; the companion needs neither, and each is a capability worth not
 holding.
 
+### 3.9 Reading navigation notifications
+
+The notification listener existed for one reason: enabling it is what unlocks
+`MediaSessionManager.getActiveSessions()`. It read nothing. As of 2026-08-23 it also forwards
+**navigation** notifications so the Cockpit can show the next manoeuvre, which is a real
+widening of what the app touches and is documented here rather than left implicit.
+
+Why a notification at all: there is no other route. Google exposes no public API for the
+current manoeuvre, the Android Auto protocol is not open to us, and the vendor publishes no
+guidance channel (`WitsActions` has a `NAVI` *source id* and nothing else). An accessibility
+service could scrape the map and is refused by the permission policy in §3.6.
+
+Scope, and what bounds it:
+
+- **An allowlist of packages** (`NavigationRepository.NAVIGATION_PACKAGES`), *and* the
+  notification must be **ongoing**. `CATEGORY_NAVIGATION` is self-declared, so a category test
+  alone would let any app have its notification text read; both conditions must hold.
+- **Filtered at the listener**, not downstream. Nothing but an allowlisted navigation
+  notification is passed on at all, so nothing else can be stored by a later mistake.
+- **Never persisted.** The instruction is a street name and a destination — location data in
+  all but name. It is held in memory, rendered, and replaced by the next one. It does not
+  reach the event log, a Signal Explorer session, or an export. The raw extras kept for the
+  Debug screen are held in memory only, for correcting the field mapping against a real
+  device, and are dropped when navigation ends.
+- **Read-only.** Nothing is dismissed, actioned or replied to.
+
+This does not change the permission set: `BIND_NOTIFICATION_LISTENER_SERVICE` was already
+declared and granted for media.
+
 ### 3.7 Logging and redaction
 
 `logging/EventLogger.kt` writes JSON Lines locally. `LogRedactor` removes or masks:

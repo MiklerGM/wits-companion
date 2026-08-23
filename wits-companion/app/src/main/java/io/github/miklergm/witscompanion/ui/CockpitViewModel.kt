@@ -7,6 +7,7 @@ import io.github.miklergm.witscompanion.carstate.CarState
 import io.github.miklergm.witscompanion.carstate.CarStateRepository
 import io.github.miklergm.witscompanion.media.MediaSessionRepository
 import io.github.miklergm.witscompanion.media.MediaSnapshot
+import io.github.miklergm.witscompanion.nav.NavigationRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -42,15 +43,19 @@ class CockpitViewModel(
     /** True while automatic actions are permissible; the guard still has the final say. */
     val automationPermitted: Boolean get() = CockpitState.automationPermitted(carState)
 
+    private val navListener = NavigationRepository.Listener { refresh() }
+
     init {
         app.carStateRepository.addObserver(this)
         app.mediaRepository.addListener(this)
+        app.navigationRepository.addListener(navListener)
         refresh()
     }
 
     override fun onCleared() {
         app.carStateRepository.removeObserver(this)
         app.mediaRepository.removeListener(this)
+        app.navigationRepository.removeListener(navListener)
         super.onCleared()
     }
 
@@ -95,6 +100,7 @@ class CockpitViewModel(
                 settingsTileSelected =
                     repository.cockpitLeft == io.github.miklergm.witscompanion.layout.CockpitLeft.Config,
                 media = CockpitState.media(media),
+                navigation = CockpitState.navigation(app.navigationRepository.snapshot),
                 hotspot = CockpitState.hotspot(
                     supported = app.hotspotController.isSupported(),
                     state = app.hotspotController.state(),

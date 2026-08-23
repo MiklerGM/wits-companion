@@ -11,19 +11,50 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
+import android.service.notification.StatusBarNotification
+import io.github.miklergm.witscompanion.app.WitsCompanionApp
+import io.github.miklergm.witscompanion.nav.NavigationRepository
 import android.util.Log
 import android.view.KeyEvent
 import io.github.miklergm.witscompanion.wits.WitsPackages
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * Notification listener that exists solely to unlock
- * [MediaSessionManager.getActiveSessions].
+ * Notification listener.
  *
- * It reads no notifications and does nothing with them.
- * See docs/media-session.md §2.
+ * Its original and still primary job is to exist: enabling it is what unlocks
+ * [MediaSessionManager.getActiveSessions]. For a long time it did nothing else, and its doc
+ * said so.
+ *
+ * It now also forwards **navigation** notifications to [NavigationRepository], so the Cockpit
+ * can show the next manoeuvre beside the media controls. That is the only way to obtain it on
+ * this platform — see that class for why, and for how narrowly it is scoped. Every other
+ * notification is ignored here rather than filtered later: nothing else is passed on, so
+ * nothing else can be stored or leaked by a mistake further downstream.
+ *
+ * See docs/media-session.md §2 and docs/security.md §3.9.
  */
-class WitsNotificationListenerService : NotificationListenerService()
+class WitsNotificationListenerService : NotificationListenerService() {
+
+    private val navigation: NavigationRepository?
+        get() = (application as? WitsCompanionApp)?.navigationRepository
+
+    override fun onNotificationPosted(sbn: StatusBarNotification?) {
+        val n = sbn ?: return
+        runCatching { navigation?.onPosted(n) }
+    }
+
+    override fun onNotificationRemoved(sbn: StatusBarNotification?) {
+        val n = sbn ?: return
+        runCatching { navigation?.onRemoved(n) }
+    }
+
+    override fun onListenerDisconnected() {
+        // The instruction on screen would otherwise outlive our ability to update it.
+        runCatching { navigation?.clear() }
+        super.onListenerDisconnected()
+    }
+}
 
 /** What the media panel renders. Never fabricates a "0:00" placeholder track. */
 data class MediaSnapshot(

@@ -192,6 +192,26 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       counter-report that the UI does not repaint with the lights was withdrawn — when the
       brightness drops automatically the launcher goes dark with it. See § docs/night-mode.md
       3 and 3.1; the history is in section 8. No launcher decompile needed.
+- [ ] **Next-manoeuvre row: confirm the field mapping on-car** — *built 2026-08-23, extraction
+      unverified.* The Cockpit now shows the next navigation instruction above the media card,
+      read from the navigating app's own ongoing notification (there is no other route on this
+      platform — see § docs/security.md 3.9). The plumbing, the panel rules and the parsing are
+      unit-tested, but **which extra actually carries the manoeuvre is a guess** until seen on
+      the device: it varies by app and by version, and some navigators post a fully custom
+      layout with no usable text at all.
+      With Maps actively navigating, capture what it really posts:
+
+      ```sh
+      adb -s <ip:5555> shell dumpsys notification --noredact \
+        | grep -A 30 'com.google.android.apps.maps'
+      ```
+
+      Compare against `NavigationRepository.parse()`: the assumption is title=distance,
+      text=manoeuvre, sub_text=ETA, with the title used as the instruction when it does not
+      look like a distance. `NavigationRepository.lastRawExtras` holds the same data at runtime
+      for the Debug screen, so the mapping can be corrected without a rebuild-and-guess loop.
+      Also worth checking: whether the row updates often enough to be useful, and whether it
+      survives the Cockpit's freeform resizes.
 - [ ] **A fullscreen app cannot be placed into its tile — and `verify` says it worked**
       *Found on-car 2026-08-20, reproduced and worked around; not fixed.* After a reinstall,
       Maps was running **fullscreen** when the autostart applied the anchored preset.

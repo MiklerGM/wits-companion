@@ -13,6 +13,7 @@ import io.github.miklergm.witscompanion.safety.ReverseGuard
 import io.github.miklergm.witscompanion.safety.SourceGuard
 import io.github.miklergm.witscompanion.signalexplorer.SignalExplorer
 import io.github.miklergm.witscompanion.wits.WitsNightModeController
+import io.github.miklergm.witscompanion.nav.NavigationRepository
 import io.github.miklergm.witscompanion.wits.WitsSourceController
 import io.github.miklergm.witscompanion.wits.WitsWindowController
 
@@ -44,6 +45,9 @@ class WitsCompanionApp : Application() {
         private set
     lateinit var mediaRepository: MediaSessionRepository
         private set
+
+    /** Next-manoeuvre text for the Cockpit, fed by the notification listener. */
+    val navigationRepository = NavigationRepository()
     lateinit var hotspotController: io.github.miklergm.witscompanion.wits.HotspotController
         private set
     lateinit var brightnessController: io.github.miklergm.witscompanion.wits.BrightnessController
