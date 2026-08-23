@@ -86,6 +86,9 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: wits-companion/app/build/outputs/apk/platform/app-platform.apk
+          # Without this the release is titled with the bare tag. The name is the first thing
+          # on the downloads page, so it should say what the thing is.
+          name: ${{ github.ref_name }} — Cockpit
           generate_release_notes: true
           body: |
             Platform-signed build for Witstek / XTRONS head units.
