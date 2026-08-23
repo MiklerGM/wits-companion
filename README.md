@@ -76,6 +76,25 @@ system-privileged app rather than source and notes.
 The platform keystore is read from `WITS_PLATFORM_KEYSTORE`, or
 `tools/platform-key/platform.keystore.p12` — a path that is git-ignored.
 
+### When to cut a release
+
+**After the car, not after the merge.** Tag when a batch of work has actually been driven
+with — not when it compiles, not when CI is green, and not per feature.
+
+Almost everything here is behaviour the unit tests cannot reach: window placement through a
+vendor hook, what the firmware does with a setting, whether a guard releases promptly enough
+to feel right. Green tests mean the logic is consistent with itself; they say nothing about
+whether the Cockpit came up as a tile. Several changes that passed everything offline were
+wrong on the vehicle, and at least one shipped-looking feature turned out to depend on a
+notification field that no one had yet looked at.
+
+So the rhythm is: build offline, verify on-car, *then* tag. A release is a statement that this
+version was driven with — which is the only claim worth making about software that runs in a
+car, and it is worth strictly more than a frequent version number.
+
+Work that has not been on the car yet stays on a branch rather than holding up a release of
+the parts that have.
+
 ## Layout
 
 ```
