@@ -78,6 +78,8 @@ data class CockpitUiState(
         val instruction: String? = null,
         val distance: String? = null,
         val eta: String? = null,
+        /** The navigator's own manoeuvre arrow, when the notification carried one. */
+        val icon: android.graphics.drawable.Icon? = null,
     )
 
     data class HotspotPanel(
@@ -212,6 +214,7 @@ object CockpitState {
             instruction = snapshot.instruction,
             distance = snapshot.distance,
             eta = snapshot.eta,
+            icon = snapshot.icon,
         )
     }
 

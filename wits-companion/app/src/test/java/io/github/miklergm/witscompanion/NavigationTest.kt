@@ -88,6 +88,38 @@ class NavigationTest {
         assertTrue(s.hasInstruction)
     }
 
+    @Test
+    fun `zero distance is shown, because it means the turn is here`() {
+        // Not a placeholder. "0 m" is the moment the manoeuvre arrives, which is exactly when
+        // the driver needs the number — suppressing it would hide the most important reading
+        // `[RUNTIME]` 2026-08-24.
+        listOf("0 m", "0,0 km").forEach { z ->
+            val s = NavigationRepository.parse(maps, extras(z, "Turn right"))
+            assertEquals("$z must be shown", z, s.distance)
+            assertEquals("Turn right", s.instruction)
+        }
+    }
+
+    @Test
+    fun `a real distance still shows`() {
+        assertEquals("300 m", NavigationRepository.parse(maps, extras("300 m", "Turn")).distance)
+        assertEquals("0.4 mi", NavigationRepository.parse(maps, extras("0.4 mi", "Turn")).distance)
+    }
+
+    @Test
+    fun `the maps notification shape seen on the vehicle parses correctly`() {
+        // Exactly what the unit posted on 2026-08-24: an empty title, the road in the text,
+        // and the trip summary in subText. The title=distance assumption does not hold here,
+        // and the fallback is what makes it work.
+        val s = NavigationRepository.parse(
+            maps, extras(title = "", text = "toward Norwegerstraße", sub = "27 min · 10 km · 10:35 ETA"),
+        )
+        assertEquals("toward Norwegerstraße", s.instruction)
+        assertNull("there is no per-manoeuvre distance in this shape", s.distance)
+        assertEquals("27 min · 10 km · 10:35 ETA", s.eta)
+        assertTrue(s.hasInstruction)
+    }
+
     // ------------------------------------------------------------- the panel
 
     @Test

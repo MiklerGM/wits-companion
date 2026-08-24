@@ -1,6 +1,7 @@
 package io.github.miklergm.witscompanion.nav
 
 import android.app.Notification
+import android.graphics.drawable.Icon
 import android.os.Bundle
 import android.service.notification.StatusBarNotification
 import java.util.concurrent.CopyOnWriteArrayList
@@ -21,6 +22,14 @@ data class NavigationSnapshot(
     val distance: String? = null,
     /** ETA / remaining, when the notification carries it. */
     val eta: String? = null,
+    /**
+     * The manoeuvre arrow the navigator drew, straight from the notification.
+     *
+     * Google Maps puts it in `android.largeIcon` as a 72×72 bitmap `[RUNTIME]` 2026-08-24.
+     * Using theirs rather than mapping instruction text onto icons of our own: the text is
+     * free-form and localised, and a wrong arrow is worse than none at a junction.
+     */
+    val icon: Icon? = null,
 ) {
     val hasInstruction: Boolean get() = available && !instruction.isNullOrBlank()
 }
@@ -204,6 +213,9 @@ class NavigationRepository {
             val title = str(Notification.EXTRA_TITLE)
             val text = str(Notification.EXTRA_TEXT)
             val sub = str(Notification.EXTRA_SUB_TEXT)
+            val icon = runCatching {
+                extras.getParcelable<Icon>(Notification.EXTRA_LARGE_ICON)
+            }.getOrNull()
 
             // The title is the distance when it reads like one; otherwise it is the manoeuvre
             // and the text is a detail line. Keeps a navigator that inverts the two readable.
@@ -212,8 +224,12 @@ class NavigationRepository {
                 available = true,
                 packageName = packageName,
                 instruction = if (titleIsDistance) text else title ?: text,
+                // "0 m" is kept, not suppressed: it means the turn is *here*, which is the
+                // single most important moment to show it. It looks like a placeholder and is
+                // the opposite of one.
                 distance = if (titleIsDistance) title else null,
                 eta = sub,
+                icon = icon,
             )
         }
 

@@ -80,6 +80,8 @@ class DashboardActivity : ComponentActivity() {
     private lateinit var navCard: LinearLayout
     private lateinit var navDistanceView: TextView
     private lateinit var navInstructionView: TextView
+    private lateinit var navEtaView: TextView
+    private lateinit var navIconView: android.widget.ImageView
     private var hotspotTile: LinearLayout? = null
     private var hotspotText: TextView? = null
     private var hotspotIcon: TextView? = null
@@ -221,10 +223,31 @@ class DashboardActivity : ComponentActivity() {
             setTextColor(palette.foreground)
             maxLines = 2
             ellipsize = android.text.TextUtils.TruncateAt.END
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
+        // The navigator's own arrow, at the size it drew it (72 px on this profile).
+        navIconView = android.widget.ImageView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(pad(34), pad(34))
+                .apply { rightMargin = pad(10) }
+            visibility = View.GONE
+        }
+        // Instruction and trip summary stack, so the ETA stops running on to the end of the
+        // manoeuvre and wrapping it onto a second line.
+        navEtaView = TextView(this).apply {
+            textSize = 12f
+            setTextColor(palette.muted)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            visibility = View.GONE
+        }
+        val navText = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            addView(navInstructionView)
+            addView(navEtaView)
+        }
+        navCard.addView(navIconView)
         navCard.addView(navDistanceView)
-        navCard.addView(navInstructionView)
+        navCard.addView(navText)
         content.addView(navCard)
 
         // Media as a single rounded card, tinted by what is playing — the panel takes on
@@ -717,12 +740,23 @@ class DashboardActivity : ComponentActivity() {
             return
         }
         navCard.visibility = View.VISIBLE
+
+        // Each part drops out on its own: Maps sends no distance at all for "continue", and
+        // a 72 px arrow only sometimes.
         navDistanceView.visibility = if (nav.distance.isNullOrBlank()) View.GONE else View.VISIBLE
         navDistanceView.text = nav.distance.orEmpty()
-        // The ETA is appended rather than given its own view: it is context, not the
-        // instruction, and a third column would crowd a 35 % tile.
-        navInstructionView.text = listOfNotNull(nav.instruction, nav.eta)
-            .joinToString("   ·   ")
+
+        if (nav.icon != null) {
+            navIconView.setImageIcon(nav.icon)
+            navIconView.visibility = View.VISIBLE
+        } else {
+            navIconView.setImageDrawable(null)
+            navIconView.visibility = View.GONE
+        }
+
+        navInstructionView.text = nav.instruction.orEmpty()
+        navEtaView.text = nav.eta.orEmpty()
+        navEtaView.visibility = if (nav.eta.isNullOrBlank()) View.GONE else View.VISIBLE
     }
 
     /** Enables/greys the three transport glyphs without the default Button wash. */
