@@ -188,9 +188,8 @@ class DashboardActivity : ComponentActivity() {
             layoutParams = LinearLayout.LayoutParams(0, MATCH, 1f)
         }
 
-        // The next manoeuvre, above the media card and only while navigating. Deliberately
-        // ABOVE: while driving it is the more urgent of the two, and putting it under the
-        // transport row would make it move whenever the media card grows or shrinks.
+        // The next manoeuvre, shown only while navigating. Built here, but added to the column
+        // AFTER the flexible spacer — see the addView below for why the position matters.
         navCard = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -206,7 +205,7 @@ class DashboardActivity : ComponentActivity() {
                 setColor(if (palette.night) Color.parseColor("#1F2A24") else Color.parseColor("#DCEFE4"))
             }
             layoutParams = LinearLayout.LayoutParams(MATCH, ViewGroup.LayoutParams.WRAP_CONTENT)
-                .apply { bottomMargin = pad(8) }
+                .apply { topMargin = pad(8) }   // it now sits below the controls, not above
         }
         // Distance leads: it is the number the driver is actually timing the manoeuvre against,
         // and it is short enough to read at a glance.
@@ -248,7 +247,6 @@ class DashboardActivity : ComponentActivity() {
         navCard.addView(navIconView)
         navCard.addView(navDistanceView)
         navCard.addView(navText)
-        content.addView(navCard)
 
         // Media as a single rounded card, tinted by what is playing — the panel takes on
         // the album's colour (Mini AA's MediaPlayerCard in spirit). onMedia() fills in the
@@ -397,6 +395,17 @@ class DashboardActivity : ComponentActivity() {
 
         // Keep the media card + toggles top-aligned in the main column.
         content.addView(View(this), LinearLayout.LayoutParams(MATCH, 0, 1f))
+
+        // Navigation goes below the spacer, pinned to the bottom of the column.
+        //
+        // The row appears and disappears with the route, so anywhere above the controls it
+        // shifts every one of them down and back up mid-drive — the play button moving under
+        // a hand that is already reaching for it. Below the spacer, the spacer absorbs the
+        // change and **nothing above ever moves**.
+        //
+        // The prominence given up is small: the map is beside it showing the same turn, so
+        // this row supplements it rather than being the primary cue.
+        content.addView(navCard)
 
         // ---------- right-hand rail: Settings (top), app switcher, Exit (bottom) ----------
         val rail = LinearLayout(this).apply {
