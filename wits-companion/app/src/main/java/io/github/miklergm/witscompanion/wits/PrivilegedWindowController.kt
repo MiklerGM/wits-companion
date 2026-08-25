@@ -73,7 +73,36 @@ class PrivilegedWindowController(
         preserve: Boolean = false,
         bringToFront: Boolean = false,
     ): PlaceResult {
-        val existing = findTask(packageName)
+        var existing = findTask(packageName)
+
+        // A live task that is NOT freeform cannot be tiled by either route: resizeTask only
+        // moves an already-freeform task, and ActivityOptions.setLaunchBounds is ignored for a
+        // task that already exists. Launching over it produces a freeform task at whatever size
+        // it had — full display — which then covers the panel, and no amount of re-applying
+        // fixes it because the stale bounds belong to the task.
+        //
+        // `[RUNTIME]` 2026-08-21: exactly this, after a reinstall left Maps fullscreen. Only a
+        // force-stop cleared it.
+        //
+        // The cost is real and worth stating: removing the task ends whatever it was doing,
+        // including a live navigation route. It is accepted because the alternative observed on
+        // the vehicle was a Cockpit that could not be used at all, and because this only fires
+        // when the task is not freeform — which means the Cockpit was not set up anyway. A
+        // freeform task is still moved in place, so the route-preserving path is untouched.
+        if (existing != null && existing.windowingMode != WitsWindowMode.FREEFORM) {
+            val removed = removeTask(existing.taskId)
+            logger?.log(
+                "window", "remove_before_launch", packageName,
+                extras = mapOf(
+                    "taskId" to existing.taskId,
+                    "mode" to WitsWindowMode.name(existing.windowingMode),
+                ),
+                result = if (removed) "removed" else "failed",
+            )
+            // Gone: the launch below now creates a fresh task, which does honour launch bounds.
+            if (removed) existing = null
+        }
+
         // Switching the Cockpit's floating app: the chosen app may already be a freeform task
         // hidden *behind* another at the same tile bounds (the previous floating app). resizeTask
         // moves it in place but never reorders, so it would stay hidden. A launch brings the task

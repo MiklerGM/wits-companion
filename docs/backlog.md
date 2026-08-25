@@ -212,23 +212,20 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       for the Debug screen, so the mapping can be corrected without a rebuild-and-guess loop.
       Also worth checking: whether the row updates often enough to be useful, and whether it
       survives the Cockpit's freeform resizes.
-- [ ] **A fullscreen app cannot be placed into its tile — and `verify` says it worked**
-      *Found on-car 2026-08-20, reproduced and worked around; not fixed.* After a reinstall,
-      Maps was running **fullscreen** when the autostart applied the anchored preset.
-      `PrivilegedWindowController.place()` cannot resize a task that is not already freeform, so
-      it launched it into freeform instead — and `ActivityOptions.setLaunchBounds` is ignored for
-      a task that already exists. The result: Maps became freeform at its previous **full-display**
-      size, was fronted, and covered the panel entirely. The Cockpit was unusable.
-      Two things make this worse than a one-off:
-  - **The post-apply verification passed.** It logged `verify -> ok tiles=2` while the screen was
-    visibly wrong — it counted two freeform tasks without checking that Maps had any bounds
-    override at all. A verifier that cannot see this failure cannot repair it, which is the
-    second audit's finding 4 (task observation must be typed and checked, not counted).
-  - **Re-applying did not fix it.** The bad bounds belong to the *task*; only `force-stop`ping
-    Maps cleared them, after which placement was correct (`[0,99][1560,900]`) on the next apply.
-      Fix direction: when a target task exists but is not freeform, remove it first (the
-      `TaskRemover` capability already exists) so the relaunch takes the launch bounds — and make
-      verification compare actual bounds against `ExpectedTile`, not merely count tiles.
+- [x] **A fullscreen app cannot be placed into its tile** — *fixed 2026-08-25, needs an
+      on-car check.* Two defects, one screen. `place()` now removes a live task that is not
+      freeform before launching, so the relaunch takes the bounds; and the post-apply
+      verification compares tile *size* as well as centre, so it can no longer report `ok`
+      over a full-display window.
+      The verifier bug was arithmetic, not a missing case: expected centre 780, actual 1200,
+      slack 780 — the 420 px difference fitted inside the tolerance. Notably it only affected
+      the *wider* tile; the narrower panel was already caught by the centre test, which is why
+      the log showed two tiles with one of them plainly wrong.
+      **The trade-off to watch on-car:** removing the task ends whatever it was doing,
+      including a live navigation route. It only fires when the task is not freeform — so the
+      Cockpit was not set up anyway — but the case to try deliberately is: start navigation
+      with Maps fullscreen, then open the Cockpit, and see whether the route survives the
+      relaunch. If it does not, the fix needs a narrower trigger.
 - [ ] **Capture the engine-off brightness jump as a live transition** — both endpoints are
       measured but the transition is not. The 2026-08-20 attempt failed by design error: the
       sequence returned the lights to **auto** before switching the engine off, and in daylight

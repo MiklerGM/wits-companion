@@ -73,7 +73,6 @@ class LayoutEngine(
     private var layoutOwned: Boolean = false
 
     /** One tile an apply intended to place, captured for [verifyPlacement]. */
-    private data class ExpectedTile(val packageName: String, val bounds: android.graphics.Rect)
 
     /**
      * @param trigger USER for a button press, AUTOMATIC for a restore
@@ -518,7 +517,7 @@ class LayoutEngine(
         }
 
         val tasks = windowController.rootTasks()
-        val wrong = expected.filter { misplaced(it, tasks) }
+        val wrong = LayoutVerification.misplacedTiles(expected, tasks)
         if (wrong.isEmpty()) {
             logger?.log(
                 "layout", "verify",
@@ -555,14 +554,6 @@ class LayoutEngine(
      * pixel accuracy here would fight apps that legitimately resize themselves (Spotify) and cause
      * endless corrections.
      */
-    private fun misplaced(tile: ExpectedTile, tasks: List<PrivilegedWindowController.TaskSnapshot>): Boolean {
-        val task = tasks.firstOrNull { it.packageName == tile.packageName } ?: return true
-        if (task.windowingMode != WitsWindowMode.FREEFORM) return true
-        if (!task.visible) return true
-        // Wrong half of the screen: centres further apart than half the intended tile width.
-        val slack = (tile.bounds.width() / 2).coerceAtLeast(MIN_CENTRE_SLACK_PX)
-        return kotlin.math.abs(task.bounds.centerX() - tile.bounds.centerX()) > slack
-    }
 
     /**
      * Parks freeform windows that are not part of the incoming layout, to [parkBounds] in
@@ -968,8 +959,6 @@ class LayoutEngine(
          */
         val VERIFY_DELAYS_MS = listOf(3_000L, 8_000L)
 
-        /** Floor for the centre tolerance, so a narrow tile still gets sane slack. */
-        const val MIN_CENTRE_SLACK_PX = 120
 
         private const val TAG = "LayoutEngine"
 
