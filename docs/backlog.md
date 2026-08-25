@@ -221,11 +221,16 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       slack 780 — the 420 px difference fitted inside the tolerance. Notably it only affected
       the *wider* tile; the narrower panel was already caught by the centre test, which is why
       the log showed two tiles with one of them plainly wrong.
-      **The trade-off to watch on-car:** removing the task ends whatever it was doing,
-      including a live navigation route. It only fires when the task is not freeform — so the
-      Cockpit was not set up anyway — but the case to try deliberately is: start navigation
-      with Maps fullscreen, then open the Cockpit, and see whether the route survives the
-      relaunch. If it does not, the fix needs a narrower trigger.
+      **Verified on-car 2026-08-25.** A reinstall — the exact trigger, since installing kills
+      the app and leaves Maps fullscreen — placed both tiles correctly with no intervention:
+      Maps `[0,99,1560,900]`, panel `[1560,99,2400,900]`. Thursday the same sequence put Maps
+      at full display over the panel.
+
+      **The route-loss trade-off is accepted, not outstanding.** Removing the task ends what it
+      was doing, a live route included — but it only fires when the task is not freeform, which
+      in practice means start-up: after a boot or a reinstall, when there is rarely a route in
+      progress. Decision 2026-08-25: leave it. If it does backfire in real use the trigger can
+      be narrowed then, with an actual case to narrow it against rather than an imagined one.
 - [ ] **Capture the engine-off brightness jump as a live transition** — both endpoints are
       measured but the transition is not. The 2026-08-20 attempt failed by design error: the
       sequence returned the lights to **auto** before switching the engine off, and in daylight
