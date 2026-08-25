@@ -26,10 +26,11 @@ panel — media, brightness, hotspot, app switcher — in the other, side by sid
 ## What it looks like
 
 The Cockpit: a floating app in one tile, the control panel in the other. The panel carries
-media transport, brightness, the hotspot toggle, shortcuts into the vendor's car settings and
-plain Android settings, and a rail to switch the floating app.
+media transport with a save-to-collection button, brightness, the hotspot toggle, shortcuts
+into the vendor's car settings and plain Android settings, and a rail to switch the floating
+app. While a route is running, the next manoeuvre sits along the bottom.
 
-![The Cockpit — Maps in the left tile, control panel in the right](docs/images/cockpit.png)
+![The Cockpit — Maps navigating in the left tile, control panel in the right](docs/images/cockpit.png)
 
 Tapping the lit rail tile hides the floating app. The panel takes the whole display and paints
 the freed strip black, keeping its controls where your hand already expects them.
@@ -37,7 +38,9 @@ the freed strip black, keeping its controls where your hand already expects them
 ![The Cockpit with the floating app hidden](docs/images/cockpit-hidden.png)
 
 The gear opens the configuration in the Cockpit's *left* tile — the slot the map usually
-occupies — so the panel stays live beside it and nothing goes full-screen.
+occupies — so the panel stays live beside it and nothing goes full-screen. The manoeuvre row
+is pinned below the controls rather than above them, so a route starting or ending never
+shifts the buttons under your hand.
 
 ![Configuration open as the Cockpit's left tile](docs/images/cockpit-settings.png)
 
