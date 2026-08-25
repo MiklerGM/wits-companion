@@ -90,7 +90,24 @@ data class MediaSnapshot(
     val canPause: Boolean = false,
     val canSkipNext: Boolean = false,
     val canSkipPrevious: Boolean = false,
+    /**
+     * Extra actions the player advertises beyond the standard transport — Spotify's
+     * "Add to Liked Songs" and similar.
+     *
+     * Read but not yet acted on: which action a given player exposes, and under what id, is
+     * not something to guess at. The Debug screen lists them so the answer comes from a real
+     * session rather than an assumption.
+     */
+    val customActions: List<MediaCustomAction> = emptyList(),
 )
+
+/**
+ * One [PlaybackState.CustomAction] the current player offers.
+ *
+ * @param action the id to send back with [MediaSessionRepository.sendCustomAction]
+ * @param name   the player's own label — user-facing text, so localised and not an identifier
+ */
+data class MediaCustomAction(val action: String, val name: String)
 
 /**
  * Wraps [MediaSessionManager] and exposes the currently interesting session.
@@ -296,6 +313,10 @@ class MediaSessionRepository(
                 canPause = actions and PlaybackState.ACTION_PAUSE != 0L,
                 canSkipNext = actions and PlaybackState.ACTION_SKIP_TO_NEXT != 0L,
                 canSkipPrevious = actions and PlaybackState.ACTION_SKIP_TO_PREVIOUS != 0L,
+                customActions = ps?.customActions.orEmpty().mapNotNull { a ->
+                    val id = a.action?.toString()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    MediaCustomAction(id, a.name?.toString().orEmpty())
+                },
             )
         )
     }
@@ -324,6 +345,22 @@ class MediaSessionRepository(
         } else {
             c.transportControls.play()
         }
+    }
+
+    /**
+     * Fires one of the player's own custom actions.
+     *
+     * There is no fallback: unlike play, a custom action has no media-key equivalent, so with
+     * no live session there is nothing to send and nothing sensible to invent.
+     *
+     * @return false when there was no session, or the player rejected it
+     */
+    fun sendCustomAction(action: String, extras: android.os.Bundle? = null): Boolean {
+        val c = controller ?: return false
+        return runCatching {
+            c.transportControls.sendCustomAction(action, extras)
+            true
+        }.getOrDefault(false)
     }
 
     fun next() {

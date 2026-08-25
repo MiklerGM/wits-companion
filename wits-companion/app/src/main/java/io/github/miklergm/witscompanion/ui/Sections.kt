@@ -831,6 +831,12 @@ class DebugSection(private val app: WitsCompanionApp) : MainActivity.Section {
             appendLine("Launcher present  : ${wc.isLaunchable(WitsPackages.WITS_LAUNCHER)}")
             appendLine()
             appendLine("notification access: ${app.mediaRepository.isPermissionGranted()}")
+            // What the current player offers beyond play/pause/next. This is how the answer to
+            // "does Spotify expose a like action, and under what id" gets found — by reading a
+            // real session rather than guessing at the id.
+            val custom = app.mediaRepository.snapshot.customActions
+            appendLine("player custom actions: ${custom.size}")
+            custom.forEach { appendLine("   ${it.action}  —  ${it.name}") }
             appendLine("WRITE_SETTINGS     : ${app.nightModeController.canWrite()}")
             appendLine()
             appendLine("freeform (global)  : ${readGlobal(ctx, WitsSettingsKeys.ENABLE_FREEFORM_SUPPORT)}")

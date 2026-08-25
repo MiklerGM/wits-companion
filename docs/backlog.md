@@ -231,6 +231,33 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       in practice means start-up: after a boot or a reinstall, when there is rarely a route in
       progress. Decision 2026-08-25: leave it. If it does backfire in real use the trigger can
       be narrowed then, with an actual case to narrow it against rather than an imagined one.
+- [ ] **Like button for the current track** — *groundwork done 2026-08-25; needs one capture.*
+      The panel should be able to save the playing track. Routes considered:
+  - **MediaSession custom action** — the one to use. `PlaybackState.getCustomActions()` lists
+    what the player offers beyond play/pause/next, and `transportControls.sendCustomAction()`
+    fires one. No new permissions: the controller is already held for the transport.
+  - *Spotify Web API* — **ruled out.** The app has no `INTERNET` permission by design
+    (§ docs/security.md 3.3), and a like button is not worth trading that for.
+  - *App Remote SDK* — needs an app registration, OAuth and almost certainly network. Same
+    objection.
+  - *Spotify's notification action* — possible, but the notification listener is deliberately
+    scoped to navigation packages; widening it is a posture change and a last resort.
+
+      **What is built:** `MediaSnapshot.customActions` now carries whatever the player
+      advertises, `MediaSessionRepository.sendCustomAction()` can fire one, and the Debug
+      screen lists them.
+
+      **The one capture needed** — with Spotify playing, open Debug and read "player custom
+      actions", or from a terminal:
+
+      ```sh
+      adb -s <ip:5555> shell dumpsys media_session | grep -A 5 -i "custom"
+      ```
+
+      If a save/like action is listed, wiring the button is minutes. If Spotify exposes none,
+      the fallback is its notification action and that decision gets made with evidence.
+      Deliberately not guessed at: the navigation field mapping was assumed and was wrong, and
+      a wrong custom-action id fails silently, which is harder to notice.
 - [ ] **Capture the engine-off brightness jump as a live transition** — both endpoints are
       measured but the transition is not. The 2026-08-20 attempt failed by design error: the
       sequence returned the lights to **auto** before switching the engine off, and in daylight
