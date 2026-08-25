@@ -239,6 +239,73 @@ class CockpitStateTest {
         assertEquals(0L, m.positionAt(now = 5_000L))
     }
 
+    // ------------------------------------------------------------- collection
+
+    private fun action(id: String, name: String = "") =
+        io.github.miklergm.witscompanion.media.MediaCustomAction(id, name)
+
+    @Test
+    fun `the collection action is found among the player's other custom actions`() {
+        // Exactly what Spotify advertised on the unit `[RUNTIME]` 2026-08-25.
+        val actions = listOf(
+            action("TURN_SHUFFLE_ON", "Toggle shuffle"),
+            action("CHECK_FILL", "Remove from collection"),
+            action("START_RADIO", "Start radio"),
+            action("TURN_REPEAT_ALL_ON", "Start repeating all tracks"),
+        )
+        val c = CockpitState.collectionAction(actions)!!
+        assertEquals("CHECK_FILL", c.action)
+        assertEquals("Remove from collection", c.label)
+        assertTrue("a filled icon means the track is already saved", c.saved)
+    }
+
+    @Test
+    fun `the two halves of the real Spotify toggle both resolve`() {
+        // Both read off the device. They follow no common scheme — one is semantic, the other
+        // is an icon name — which is why this is a list and not a rule `[RUNTIME]` 2026-08-25.
+        val notSaved = CockpitState.collectionAction(listOf(action("ADD_TO", "Add to collection")))!!
+        assertEquals("ADD_TO", notSaved.action)
+        assertFalse(notSaved.saved)
+
+        val saved = CockpitState.collectionAction(listOf(action("CHECK_FILL", "Remove from collection")))!!
+        assertTrue(saved.saved)
+    }
+
+    @Test
+    fun `an unsaved track yields the same button in the other state`() {
+        // The id changes with state — matching one constant would work on saved tracks and
+        // silently fail on the rest.
+        listOf("CHECK", "CHECK_ALT", "PLUS_ALT", "HEART").forEach { id ->
+            val c = CockpitState.collectionAction(listOf(action(id, "Add to collection")))!!
+            assertEquals(id, c.action)
+            assertFalse("$id is the not-yet-saved icon", c.saved)
+        }
+    }
+
+    @Test
+    fun `filled and active variants both read as saved`() {
+        listOf("CHECK_FILL", "CHECK_ALT_FILL", "HEART_FILL", "HEART_ACTIVE").forEach { id ->
+            assertTrue(id, CockpitState.collectionAction(listOf(action(id)))!!.saved)
+        }
+    }
+
+    @Test
+    fun `an unrecognised action set yields no button rather than a guess`() {
+        // Firing "Start radio" because it happened to be first would be worse than no button.
+        assertNull(CockpitState.collectionAction(emptyList()))
+        assertNull(
+            CockpitState.collectionAction(
+                listOf(action("START_RADIO", "Start radio"), action("TURN_SHUFFLE_ON", "Toggle shuffle")),
+            ),
+        )
+    }
+
+    @Test
+    fun `matching ignores case but not meaning`() {
+        assertNotNull(CockpitState.collectionAction(listOf(action("check_fill"))))
+        assertNull(CockpitState.collectionAction(listOf(action("CHECKOUT"))))
+    }
+
     // ---------------------------------------------------------------- hotspot
 
     @Test

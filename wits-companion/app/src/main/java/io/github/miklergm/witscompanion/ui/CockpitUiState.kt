@@ -5,6 +5,7 @@ import io.github.miklergm.witscompanion.layout.CockpitLeft
 import io.github.miklergm.witscompanion.layout.DefaultPresets
 import io.github.miklergm.witscompanion.layout.LayoutPreset
 import io.github.miklergm.witscompanion.layout.PresetKind
+import io.github.miklergm.witscompanion.media.MediaCustomAction
 import io.github.miklergm.witscompanion.media.MediaSnapshot
 import io.github.miklergm.witscompanion.nav.NavigationSnapshot
 import io.github.miklergm.witscompanion.wits.HotspotController
@@ -46,6 +47,8 @@ data class CockpitUiState(
         val durationMs: Long = 0L,
         val positionMs: Long = 0L,
         val positionUpdatedElapsedMs: Long = 0L,
+        /** The player's add/remove-from-collection action, when it offers one. */
+        val collection: CollectionAction? = null,
         /** The snapshot this was derived from, for the view-only concerns: art and tinting. */
         val raw: MediaSnapshot? = null,
     ) {
@@ -73,6 +76,15 @@ data class CockpitUiState(
      * whose notification carried no readable instruction. The panel renders nothing at all in
      * that case rather than an empty strip, so the media card keeps its position.
      */
+    /**
+     * The "save this track" action, as the player currently offers it.
+     *
+     * @param action  the id to send back — note it changes with state, see [CockpitState.collectionAction]
+     * @param label   the player's own wording, e.g. "Add to collection"
+     * @param saved   whether the track is already in the collection
+     */
+    data class CollectionAction(val action: String, val label: String, val saved: Boolean)
+
     data class NavPanel(
         val visible: Boolean = false,
         val instruction: String? = null,
@@ -181,6 +193,7 @@ object CockpitState {
             durationMs = snapshot.durationMs,
             positionMs = snapshot.positionMs,
             positionUpdatedElapsedMs = snapshot.positionUpdatedElapsedMs,
+            collection = collectionAction(snapshot.customActions),
             raw = snapshot,
         )
     }
@@ -217,6 +230,64 @@ object CockpitState {
             icon = snapshot.icon,
         )
     }
+
+    /**
+     * Finds the player's add/remove-from-collection action among its custom actions.
+     *
+     * Spotify names custom actions after the **icon** it wants drawn, not after what they do
+     * `[RUNTIME]` 2026-08-25: the observed set was `TURN_SHUFFLE_ON`, `CHECK_FILL`,
+     * `START_RADIO`, `TURN_REPEAT_ALL_ON`, where `CHECK_FILL` was "Remove from collection".
+     *
+     * Two consequences, and they drive this whole function:
+     *
+     *  - **The id changes with state.** A filled check means the track is saved; an unsaved one
+     *    advertises a different id. Matching a single constant would work on saved tracks and
+     *    quietly fail on the rest — the worst kind of failure for a button, because it looks
+     *    fine. So an id set is matched, and the `_FILL`/`ACTIVE` suffix is read as the state.
+     *  - **The name cannot be matched on.** It is user-facing text and therefore localised;
+     *    "Remove from collection" is only English. It is good enough to *display*, which is
+     *    what it is used for.
+     *
+     * Anything unrecognised yields null and no button, rather than a guess that might fire
+     * "Start radio". The Debug screen lists every action, so an unmatched id is a one-look fix.
+     */
+    fun collectionAction(actions: List<MediaCustomAction>): CockpitUiState.CollectionAction? {
+        val match = actions.firstOrNull { it.action.uppercase() in COLLECTION_ACTION_IDS } ?: return null
+        val id = match.action.uppercase()
+        val saved = id in SAVED_IDS || SAVED_SUFFIXES.any { id.endsWith(it) }
+        return CockpitUiState.CollectionAction(match.action, match.name, saved)
+    }
+
+    /**
+     * Ids Spotify uses for the collection toggle.
+     *
+     * The two halves of the same button do not follow one scheme, which is the whole reason
+     * this is a list rather than a rule `[RUNTIME]` 2026-08-25:
+     *
+     * ```
+     * ADD_TO      -> "Add to collection"        (track not saved)
+     * CHECK_FILL  -> "Remove from collection"   (track saved)
+     * ```
+     *
+     * One is semantic, the other is the icon's name. Both were read off the device; the rest
+     * are the neighbouring icon constants from the APK `[CODE]`, kept as plausible variants
+     * for other builds. An id that is not here yields no button rather than a wrong one, and
+     * the Debug screen lists whatever actually arrived — which is how `ADD_TO` was found after
+     * a first guess of icon names alone missed it entirely.
+     */
+    private val COLLECTION_ACTION_IDS = setOf(
+        "ADD_TO", "REMOVE_FROM",
+        "CHECK", "CHECK_FILL", "CHECK_ALT", "CHECK_ALT_FILL",
+        "PLUS", "PLUS_ALT", "PLUS_2PX",
+        "HEART", "HEART_FILL", "HEART_ACTIVE",
+        "ADD_TO_PLAYLIST",
+    )
+
+    /** A filled or active icon is the player saying the track is already in the collection. */
+    private val SAVED_SUFFIXES = listOf("_FILL", "_ACTIVE")
+
+    /** Ids that mean "already saved" without carrying a suffix to say so. */
+    private val SAVED_IDS = setOf("REMOVE_FROM")
 
     fun hotspot(supported: Boolean, state: HotspotController.State) =
         CockpitUiState.HotspotPanel(supported = supported, state = state)

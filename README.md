@@ -17,7 +17,8 @@ panel — media, brightness, hotspot, app switcher — in the other, side by sid
 - **Autostart** — re-apply the last layout when the unit powers up (ignition / boot),
   and optionally when the app is opened. Every automatic trigger is opt-in and refused
   while reverse is engaged.
-- **Media** — transport for whatever is playing via the standard MediaSession API,
+- **Media** — transport for whatever is playing via the standard MediaSession API, a
+  save-to-collection button when the player offers one,
   album-art tinting, and a media-key fallback that can start a player that has no live
   session yet.
 - **Panel controls** — brightness, Wi-Fi hotspot toggle with state restore, day/night.

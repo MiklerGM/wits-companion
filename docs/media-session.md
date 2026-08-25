@@ -116,6 +116,52 @@ is less reliable and can leak to the wrong app.
 
 ---
 
+## 5.1 Custom actions, and the save-to-collection button `[RUNTIME]` 2026-08-25
+
+Beyond play/pause/next a player may publish **custom actions** in its `PlaybackState`. Spotify
+does, and one of them saves the current track — which is how the Cockpit's ♡ works, with no new
+permission and without reading a single notification.
+
+What Spotify advertised on this unit, read from the app's own Debug screen:
+
+```
+TURN_SHUFFLE_ON      Toggle shuffle
+ADD_TO               Add to collection            <- track not saved
+START_RADIO          Start radio
+TURN_REPEAT_ALL_ON   Start repeating all tracks
+```
+
+and on a track already saved, the second entry becomes:
+
+```
+CHECK_FILL           Remove from collection       <- track saved
+```
+
+Three things follow, and each one cost a wrong guess to learn:
+
+1. **The id changes with state.** `ADD_TO` when unsaved, `CHECK_FILL` when saved. Matching a
+   single constant works on half the tracks and silently fails on the rest — the worst failure
+   mode for a button, because nothing looks broken.
+2. **The two ids follow no common scheme.** One is semantic, the other is the name of the icon
+   Spotify wants drawn. There is no rule to infer, which is why `CockpitState` matches a set
+   and reads `_FILL`/`_ACTIVE` as "already saved". A first attempt guessed icon names alone and
+   missed `ADD_TO` entirely.
+3. **The name cannot be matched on.** "Add to collection" is user-facing text and therefore
+   localised. It is good enough to display, and that is all it is used for.
+
+Note the wording: Spotify says **collection**, not "liked". The button is a save, not a rating.
+
+An unrecognised action set yields no button rather than a guess — firing "Start radio" because
+it happened to be first would be worse than doing nothing. The Debug screen lists every action
+the current player offers, which is how an unmatched id gets diagnosed in one look instead of a
+rebuild-and-hope cycle.
+
+**No posture change.** This route needs only the `MediaController` already held for the
+transport. Spotify also exposes the same action on its notification
+(`…NOTIFICATION_ADD_TO_COLLECTION`, found in the APK), and using that would have meant the
+notification listener reading Spotify as well as navigation apps — see docs/security.md §3.9.
+The MediaSession route avoids that entirely.
+
 ## 6. If Spotify is not running
 
 `getActiveSessions()` will not contain it. The panel then:

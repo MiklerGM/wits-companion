@@ -76,6 +76,7 @@ class DashboardActivity : ComponentActivity() {
     private lateinit var playPauseButton: TextView
     private lateinit var prevButton: TextView
     private lateinit var nextButton: TextView
+    private lateinit var collectionButton: TextView
     private lateinit var mediaCard: LinearLayout
     private lateinit var navCard: LinearLayout
     private lateinit var navDistanceView: TextView
@@ -318,9 +319,17 @@ class DashboardActivity : ComponentActivity() {
         prevButton = transportButton("⏮", emphasised = false) { app.mediaRepository.previous() }
         playPauseButton = transportButton("▶", emphasised = true) { app.mediaRepository.playPause() }
         nextButton = transportButton("⏭", emphasised = false) { app.mediaRepository.next() }
+        // Save-to-collection, when the player offers it. Sits after next rather than beside
+        // play: it is not transport, and putting it in the row's centre would make the three
+        // controls the thumb already knows shift along.
+        collectionButton = transportButton("♡", emphasised = false) {
+            val c = model.state.value.media.collection ?: return@transportButton
+            if (!app.mediaRepository.sendCustomAction(c.action)) toast("Player did not accept it")
+        }
         transport.addView(prevButton)
         transport.addView(playPauseButton)
         transport.addView(nextButton)
+        transport.addView(collectionButton)
         mediaCard.addView(transport)
 
         // (The floating-app switcher now lives in the right-hand rail, built below.)
@@ -669,6 +678,7 @@ class DashboardActivity : ComponentActivity() {
     private fun render(state: CockpitUiState) {
         stateView.text = state.statusText
         renderNavigation(state.navigation)
+        renderCollection(state.media.collection)
         state.media.raw?.let { onMedia(it) }
         renderHotspot(state.hotspot.state)
         renderBrightness()
@@ -740,6 +750,32 @@ class DashboardActivity : ComponentActivity() {
 
         latestMedia = snapshot
         refreshProgress()
+    }
+
+    /**
+     * The save-to-collection control.
+     *
+     * Hidden when the player offers no such action — most players do not, and a dead glyph in
+     * the transport row would be worse than an absent one. Filled when the track is already
+     * saved, which is the player's own state rather than anything we track.
+     */
+    private fun renderCollection(c: CockpitUiState.CollectionAction?) {
+        if (!::collectionButton.isInitialized) return
+        if (c == null) {
+            collectionButton.visibility = View.GONE
+            return
+        }
+        collectionButton.visibility = View.VISIBLE
+        // Hearts, and the saved one is deliberately the system's red emoji.
+        //
+        // U+2665 gets emoji presentation from this ROM's font, so it renders as ❤️ and ignores
+        // setTextColor `[RUNTIME]` 2026-08-25. That was going to be "fixed" to a tinted check —
+        // which is also what Spotify's own icon is, since its label says "collection" rather
+        // than "liked" — but red reads as saved at a glance from a driving position, so it
+        // stays. The tint below still applies to the outline heart, which does render as text.
+        collectionButton.text = if (c.saved) "♥" else "♡"
+        collectionButton.setTextColor(palette.foreground)
+        collectionButton.contentDescription = c.label
     }
 
     /**
