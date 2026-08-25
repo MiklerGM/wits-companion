@@ -349,7 +349,9 @@ class DashboardActivity : ComponentActivity() {
             hotspotTile = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(pad(14), pad(9), pad(16), pad(9))
+                // Taller than a phone control on purpose: this is aimed at while parked or at
+                // a standstill, with a moving car's worth of imprecision.
+                setPadding(pad(14), pad(15), pad(16), pad(15))
                 isClickable = true
                 setOnClickListener { toggleHotspot() }
                 layoutParams = LinearLayout.LayoutParams(
@@ -363,7 +365,10 @@ class DashboardActivity : ComponentActivity() {
         }
         // The vendor's car settings (CAN, camera, steering wheel, factory screens) and plain
         // Android settings — both otherwise several taps away through the launcher.
-        quickRow.addView(shortcutPill("\uD83D\uDE97", "Car") { openCarSettings() })
+        // Both buttons open a settings app, so the label names *whose* — that is the only thing
+        // distinguishing them. "Car" said nothing (the whole device is in a car) and calling
+        // one of them "Settings" would imply the other is not.
+        quickRow.addView(shortcutPill("\uD83D\uDE97", "Wits") { openCarSettings() })
         quickRow.addView(shortcutPill("\uD83E\uDD16", "Android") { openAndroidSettings() })
         content.addView(quickRow)
 
@@ -606,11 +611,13 @@ class DashboardActivity : ComponentActivity() {
         tile.background = android.graphics.drawable.GradientDrawable().apply {
             cornerRadius = pad(20).toFloat(); setColor(fill)
         }
+        // ON says nothing: the green fill already carries it, and repeating it in words made
+        // the label change width every time the hotspot toggled. The states that colour cannot
+        // express keep their words — a failure is not a shade of green, and "—" is the repo's
+        // convention for genuinely unknown rather than a quiet "off".
         label.text = when (state) {
-            HotspotController.State.ON -> "Hotspot on"
-            HotspotController.State.OFF -> "Hotspot"
-            HotspotController.State.TURNING_ON -> "Hotspot…"
-            HotspotController.State.TURNING_OFF -> "Hotspot…"
+            HotspotController.State.ON, HotspotController.State.OFF -> "Hotspot"
+            HotspotController.State.TURNING_ON, HotspotController.State.TURNING_OFF -> "Hotspot…"
             HotspotController.State.FAILED -> "Hotspot failed"
             HotspotController.State.UNKNOWN -> "Hotspot —"
         }
@@ -960,7 +967,7 @@ class DashboardActivity : ComponentActivity() {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(pad(14), pad(9), pad(16), pad(9))
+            setPadding(pad(14), pad(15), pad(16), pad(15))   // matches the hotspot tile
             isClickable = true
             setOnClickListener { onClick() }
             background = android.graphics.drawable.GradientDrawable().apply {
