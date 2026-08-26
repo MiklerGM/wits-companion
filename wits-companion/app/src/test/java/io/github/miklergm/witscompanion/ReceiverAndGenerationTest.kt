@@ -2,6 +2,7 @@ package io.github.miklergm.witscompanion
 
 import android.content.Intent
 import android.graphics.Rect
+import android.os.Looper
 import io.github.miklergm.witscompanion.carstate.Availability
 import io.github.miklergm.witscompanion.carstate.BroadcastUpdate
 import io.github.miklergm.witscompanion.carstate.CarState
@@ -25,6 +26,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows
+import java.time.Duration
 import java.io.File
 
 /**
@@ -562,6 +565,56 @@ class ReceiverAndGenerationTest {
         assertTrue("got $result", result is LayoutEngine.Result.Refused)
     }
 
+    /**
+     * The preflight is not enough on its own.
+     *
+     * The panel raise lands 250 ms after the check, and the reverse camera can come up inside
+     * that window. Only a generation check stood between the two — and the "abort the moment
+     * reverse engages" path in onCarState could not help, because it asked `pendingRetries > 0`
+     * and hideFloatingApp's own cancelPending() had just set that to zero. So the guarded call
+     * queued an unguarded full-display raise over the camera.
+     */
+    @Test
+    fun `reverse engaging after the hide was allowed still stops the panel raise`() {
+        val context = RuntimeEnvironment.getApplication()
+        val engine = LayoutEngine(
+            appContext = context,
+            windowController = WitsWindowController(context),
+            reverseGuard = ReverseGuard(releaseDelayMs = 0L, clock = { 2_000L }),
+            rateLimiter = ActionRateLimiter(),
+        )
+        Shadows.shadowOf(context).clearNextStartedActivities()
+
+        assertTrue(engine.hideFloatingApp("com.google.android.apps.maps", CarState()) is LayoutEngine.Result.Applied)
+        engine.onCarState(
+            CarState(reverse = SignalValue(true, Availability.VALID, SignalSource.PROPERTY, 1_000L, "1"))
+        )
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(500))
+
+        assertNull(
+            "the panel must not be raised over the reverse camera",
+            Shadows.shadowOf(context).nextStartedActivity,
+        )
+    }
+
+    @Test
+    fun `with the vehicle still safe the panel is raised`() {
+        // The control for the test above: without it, "nothing started" proves nothing.
+        val context = RuntimeEnvironment.getApplication()
+        val engine = LayoutEngine(
+            appContext = context,
+            windowController = WitsWindowController(context),
+            reverseGuard = ReverseGuard(releaseDelayMs = 0L, clock = { 2_000L }),
+            rateLimiter = ActionRateLimiter(),
+        )
+        Shadows.shadowOf(context).clearNextStartedActivities()
+
+        engine.hideFloatingApp("com.google.android.apps.maps", CarState())
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(500))
+
+        assertNotNull(Shadows.shadowOf(context).nextStartedActivity)
+    }
+
     @Test
     fun `the refusal happens before anything is cancelled`() {
         // A refusal that has already torn down in-flight work is not a refusal.
@@ -582,6 +635,28 @@ class ReceiverAndGenerationTest {
             body.indexOf("hideFloatingApp(current") < body.indexOf("cockpitLeft = CockpitLeft.Hidden"),
         )
         assertTrue("a refusal has to reach the user", body.contains("Result.Refused"))
+    }
+
+    /**
+     * A reading is something that was read. The poll loop used to call refreshBulk(), throw the
+     * result away, and reduce whatever the reader still held — stamping the previous dump with
+     * the current time. One successful `reverse=false` would then stay control-grade for as long
+     * as getprop kept failing, which is the exact condition the freshness rule exists to fail
+     * closed on.
+     */
+    @Test
+    fun `a failed property refresh produces no reading at all`() {
+        val src = sourceOf("carstate/CarStateRepository.kt")
+        val poll = src.substringAfter("private val pollRunnable").substringBefore("\n    }")
+
+        assertTrue(
+            "the refresh result must be examined, not discarded",
+            poll.contains("PropertyReader.BulkRefresh.Failed"),
+        )
+        assertTrue(
+            "and reducing must be the branch that did not fail",
+            poll.indexOf("BulkRefresh.Failed") < poll.indexOf("else -> pollProperties()"),
+        )
     }
 
     @Test

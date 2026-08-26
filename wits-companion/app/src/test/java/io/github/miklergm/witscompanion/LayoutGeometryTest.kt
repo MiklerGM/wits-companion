@@ -444,6 +444,43 @@ class LayoutScheduleTest {
         assertEquals("cannot exceed MAX_RETRIES", 8, LayoutSchedule.scheduleFor(2, retries = 99).size)
     }
 
+    /**
+     * The case that was actually inverted on the vehicle's own layout.
+     *
+     * Initial placement is pushed back by stale-window parking and, for an anchored preset, the
+     * anchor settle; retries and verification were measured from `apply()` regardless. One
+     * anchored window with one stale window put the first retry at 1200 ms and the launch it
+     * exists to repair at 1300 ms — a retry firing before there was anything to retry.
+     */
+    @Test
+    fun `a retry never precedes the launch it repairs, even after preparation`() {
+        val prep = LayoutSchedule.preparation(parkedWindows = 1, anchored = true)
+        assertEquals(700L, prep)
+
+        val s = LayoutSchedule.scheduleFor(windowCount = 1, retries = 2, preparationMs = prep)
+        val initial = s.take(2)
+        val retries = s.drop(2)
+
+        assertEquals(listOf(700L, 1300L), initial)
+        assertTrue("first retry at ${retries.min()}, launch at ${initial.max()}",
+            retries.min() > initial.max())
+    }
+
+    @Test
+    fun `preparation shifts the whole timeline by the same amount`() {
+        val plain = LayoutSchedule.scheduleFor(windowCount = 2, retries = 2)
+        val shifted = LayoutSchedule.scheduleFor(windowCount = 2, retries = 2, preparationMs = 700L)
+
+        assertEquals(plain.map { it + 700L }, shifted)
+    }
+
+    @Test
+    fun `preparation counts a park per window and the settle only when anchored`() {
+        assertEquals(0L, LayoutSchedule.preparation(parkedWindows = 0, anchored = false))
+        assertEquals(450L, LayoutSchedule.preparation(parkedWindows = 0, anchored = true))
+        assertEquals(500L, LayoutSchedule.preparation(parkedWindows = 2, anchored = false))
+    }
+
     @Test
     fun `single window still gets both phases`() {
         assertEquals(listOf(0L, 600L), LayoutSchedule.scheduleFor(windowCount = 1, retries = 0))

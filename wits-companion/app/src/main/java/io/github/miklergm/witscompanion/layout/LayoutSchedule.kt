@@ -73,24 +73,36 @@ object LayoutSchedule {
     fun retryPasses(retries: Int): Int = retries.coerceIn(0, MAX_RETRIES)
 
     /**
-     * Every time, in ms from the start of the pass, at which a window change is scheduled.
+     * Every time, in ms from `apply()`, at which a window change is scheduled.
      *
-     * The whole schedule as one list, for asserting the ordering properties that matter: that
-     * no launch precedes the last geometry send, and that no retry pass overlaps the pass
-     * before it.
+     * [preparationMs] is what the apply spends before the first tile is touched: parking stale
+     * windows, and the anchor settle for a preset that raises the panel first. **The whole
+     * timeline shifts by it, retries and verification included.** They did not, and the omission
+     * inverted the order in a reachable case: an anchored one-window layout with one stale
+     * window put the initial launch at 1300 ms and the first retry at 1200 ms, so the retry
+     * fired before the launch it exists to repair.
      */
-    fun scheduleFor(windowCount: Int, retries: Int): List<Long> {
+    fun scheduleFor(windowCount: Int, retries: Int, preparationMs: Long = 0L): List<Long> {
         if (windowCount <= 0) return emptyList()
         val out = mutableListOf<Long>()
         // Initial pass: geometry for every tile, then a launch for every tile.
-        repeat(windowCount) { i -> out += i * GEOMETRY_DELAY_MS }
-        val launchBase = launchPhaseStart(windowCount)
+        repeat(windowCount) { i -> out += preparationMs + i * GEOMETRY_DELAY_MS }
+        val launchBase = preparationMs + launchPhaseStart(windowCount)
         repeat(windowCount) { i -> out += launchBase + i * LAUNCH_DELAY_MS }
         // Retry passes: launches only, so a retry never hides a placed tile.
         repeat(retryPasses(retries)) { attempt ->
-            val base = retryPassStart(windowCount, attempt)
+            val base = preparationMs + retryPassStart(windowCount, attempt)
             repeat(windowCount) { i -> out += base + i * LAUNCH_DELAY_MS }
         }
         return out
     }
+
+    /**
+     * What an apply spends before the first tile is touched.
+     *
+     * One [PARK_DELAY_MS] per window it has to park, plus [ANCHOR_SETTLE_MS] when the panel is
+     * raised first. Everything the apply schedules is measured from the end of it.
+     */
+    fun preparation(parkedWindows: Int, anchored: Boolean): Long =
+        parkedWindows * PARK_DELAY_MS + if (anchored) ANCHOR_SETTLE_MS else 0L
 }

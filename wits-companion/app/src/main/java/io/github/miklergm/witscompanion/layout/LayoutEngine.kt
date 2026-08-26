@@ -11,6 +11,7 @@ import io.github.miklergm.witscompanion.safety.GuardVerdict
 import io.github.miklergm.witscompanion.safety.ReverseGuard
 import io.github.miklergm.witscompanion.safety.Trigger
 import io.github.miklergm.witscompanion.wits.PrivilegedWindowController
+import io.github.miklergm.witscompanion.wits.TaskObservation
 import io.github.miklergm.witscompanion.wits.WitsPackages
 import io.github.miklergm.witscompanion.wits.WitsWindowController
 import io.github.miklergm.witscompanion.wits.WitsWindowMode
@@ -58,6 +59,19 @@ class LayoutEngine(
     private var pendingRetries = 0
 
     /**
+     * Whether any delayed send is still queued.
+     *
+     * [onCarState] used to ask `pendingRetries > 0`, which is a different question: it is zero
+     * for every delayed send that is not a retry, and [cancelPending] sets it to zero on the way
+     * in. So the "abort the moment reverse engages" path was silently inert for exactly the
+     * sequence that needed it — [hideFloatingApp] cancels, then queues a full-display panel
+     * raise 250 ms out. Fire-time [stillValid] is what makes that safe; this is what makes the
+     * early abort real as well.
+     */
+    @Volatile
+    private var queuedWork = false
+
+    /**
      * Every scheduled broadcast belongs to a generation. A new apply, a cancel, or an
      * unsafe vehicle state bumps it, and any callback from an older generation becomes a
      * no-op.
@@ -95,8 +109,20 @@ class LayoutEngine(
      * knowing which apps are alive costs a relaunch, while assuming one is alive would resize
      * a task we never saw.
      */
-    fun livePackages(): Set<String> =
-        windowController.observeTasks().tasksOrEmpty.mapNotNull { it.packageName }.toSet()
+    fun livePackages(): Set<String> {
+        val observation = windowController.observeTasks()
+        // "This build cannot observe" is by design on the unprivileged path and needs no
+        // remark. Any other reason means a path that normally works has stopped working, and
+        // the resulting empty set is a fabrication we are choosing to act on — so say so.
+        if (observation is TaskObservation.Unavailable && observation.reason != "no_observer") {
+            logger?.log(
+                "layout", "live_packages",
+                extras = mapOf("reason" to observation.reason),
+                result = "unreadable:relaunching_instead_of_preserving",
+            )
+        }
+        return observation.tasksOrEmpty.mapNotNull { it.packageName }.toSet()
+    }
 
     /**
      * Route-safe restore: re-assert [preset] **without disturbing apps that are still
@@ -214,8 +240,11 @@ class LayoutEngine(
 
         val parked = parkStaleWindows(plan.keep, plan.park.bounds, plan.park.mode, myGeneration)
 
-        // The panel goes up first for an anchored preset, then the tiles settle beside it.
-        var base = parked * LayoutSchedule.PARK_DELAY_MS
+        // What this apply spends before touching a tile. Everything it schedules is measured
+        // from the end of it — retries and verification included, which they were not: an
+        // anchored one-window layout with one stale window put the first retry at 1200 ms and
+        // the launch it repairs at 1300 ms.
+        val base = LayoutSchedule.preparation(parked, plan.anchored)
         if (plan.anchored) {
             handler.postDelayed(
                 {
@@ -223,12 +252,12 @@ class LayoutEngine(
                         bringAnchorToFront(plan.panelBounds)
                     }
                 },
-                base,
+                parked * LayoutSchedule.PARK_DELAY_MS,
             )
-            base += LayoutSchedule.ANCHOR_SETTLE_MS
         }
 
         plan.steps.forEach { step -> dispatch(step, base, myGeneration) }
+        queuedWork = true
 
         lastAppliedPackages = plan.keep
         layoutOwned = true
@@ -244,8 +273,8 @@ class LayoutEngine(
             result = "sent", confidence = "HYP",
         )
 
-        scheduleRetries(preset, plan, LayoutSchedule.retryPasses(retries), myGeneration)
-        scheduleVerification(preset, plan.expected, plan.windowCount, myGeneration, verifyAttempt)
+        scheduleRetries(preset, plan, LayoutSchedule.retryPasses(retries), myGeneration, base)
+        scheduleVerification(preset, plan.expected, plan.windowCount, myGeneration, verifyAttempt, base)
 
         // Report what was actually dispatched, not what the preset asked for: `expected` is
         // exactly the set of tiles this apply puts on screen — launchable windows, plus the
@@ -270,6 +299,7 @@ class LayoutEngine(
         plan: LayoutPlan,
         retries: Int,
         myGeneration: Long,
+        base: Long,
     ) {
         pendingRetries = retries
         if (retries <= 0) return
@@ -281,7 +311,7 @@ class LayoutEngine(
         if (repeatable.isEmpty()) return
 
         repeat(retries) { attempt ->
-            val passStart = LayoutSchedule.retryPassStart(plan.windowCount, attempt)
+            val passStart = base + LayoutSchedule.retryPassStart(plan.windowCount, attempt)
             repeatable.forEach { step ->
                 // What a retry does depends on the path:
                 //  - Privileged: re-assert the geometry with resizeTask. Some apps (Spotify)
@@ -375,13 +405,14 @@ class LayoutEngine(
         windowCount: Int,
         myGeneration: Long,
         attempt: Int,
+        base: Long,
     ) {
         // Verification needs to read live task state; without that it could send corrections
         // but never find out whether the layout took.
         if (windowController.taskObserver == null || expected.isEmpty()) return
         if (attempt >= LayoutSchedule.VERIFY_DELAYS_MS.size) return
         // Measured from the end of the pass, like the retries, so the two never overlap.
-        val delay = LayoutSchedule.verificationAt(windowCount, attempt)
+        val delay = base + LayoutSchedule.verificationAt(windowCount, attempt)
         handler.postDelayed(
             { verifyPlacement(preset, expected, myGeneration, attempt) },
             RETRY_TOKEN,
@@ -675,7 +706,7 @@ class LayoutEngine(
      */
     fun onCarState(state: CarState) {
         latestState = state
-        if (state.reverseActive == true && pendingRetries > 0) {
+        if (state.reverseActive == true && queuedWork) {
             logger?.log("layout", "cancel_pending", result = "reverse_engaged")
             cancelPending()
         }
@@ -687,6 +718,7 @@ class LayoutEngine(
      * preset.
      */
     fun cancelPending() {
+        queuedWork = false
         generation.incrementAndGet()
         handler.removeCallbacksAndMessages(RETRY_TOKEN)
         handler.removeCallbacksAndMessages(null)
@@ -719,6 +751,11 @@ class LayoutEngine(
      */
     fun unwindowTiles(thenGoHome: Boolean) {
         cancelPending()
+        // Exit queues work too, and the abort flag has to know. Deliberately not given the
+        // fire-time safety guard: this *removes* our windows, so it fails toward the vendor
+        // screen — which is where the reverse camera is drawn. Refusing it during reverse would
+        // leave our tiles on top, the opposite of what the guard is for.
+        queuedWork = true
         // The user is taking the screen back: stop owning it, so no verification "repairs" the
         // layout they just exited (the last preset is still remembered).
         layoutOwned = false
@@ -820,6 +857,9 @@ class LayoutEngine(
         }
 
         cancelPending()
+        // The fire-time re-check reads these, so a hide is judged as the user action it is.
+        latestState = state
+        applyTrigger = Trigger.USER
         val myGeneration = generation.get()
         val full = windowController.fullDisplayArea(appContext)
 
@@ -841,10 +881,20 @@ class LayoutEngine(
 
         // 2. Grow the panel to the full display. Passing full bounds (not null) keeps it a
         //    freeform tile that draws over the app below; the panel then reserves the strip itself.
+        //
+        //    Guarded at fire time, not only at the preflight. This raise lands 250 ms later, and
+        //    the reverse camera can come up inside that window — a generation check alone would
+        //    then paint the panel over it. Every other delayed send in this class goes through
+        //    stillValid for the same reason.
         handler.postDelayed(
-            { if (myGeneration == generation.get()) bringAnchorToFront(full) },
+            {
+                if (stillValid(myGeneration, "hide_anchor", WitsPackages.SELF)) {
+                    bringAnchorToFront(full)
+                }
+            },
             LayoutSchedule.PARK_DELAY_MS,
         )
+        queuedWork = true
         lastAppliedPackages = setOf(WitsPackages.SELF)
         logger?.log(
             "layout", "hide_floating",
