@@ -47,7 +47,7 @@ class WitsWindowController(
 
     /** Live task state, or null when this build cannot observe tasks at all. */
     val taskObserver: TaskObserver? by lazy {
-        if (isPrivileged) TaskObserver { privileged.rootTasks() } else null
+        if (isPrivileged) TaskObserver { privileged.observeRootTasks() } else null
     }
 
     /** In-place task movement that does not front the window, or null when unavailable. */
@@ -73,9 +73,15 @@ class WitsWindowController(
         }
     }
 
-    /** Real task state, or empty when this build cannot observe tasks. */
-    fun rootTasks(): List<PrivilegedWindowController.TaskSnapshot> =
-        taskObserver?.rootTasks() ?: emptyList()
+    /**
+     * What is on screen, or why that is unknown.
+     *
+     * Returns [TaskObservation] rather than a list on purpose; see that type. On the
+     * unprivileged build there is no observer at all, which is an honest `Unavailable` and not
+     * an empty screen.
+     */
+    fun observeTasks(): TaskObservation =
+        taskObserver?.rootTasks() ?: TaskObservation.Unavailable("no_observer")
 
     /**
      * The usable display area in pixels: full display minus system bar insets.

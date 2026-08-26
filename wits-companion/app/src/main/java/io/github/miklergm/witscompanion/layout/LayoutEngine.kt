@@ -82,9 +82,13 @@ class LayoutEngine(
      * Packages that already have a live task, so a restore can tell "reposition" from
      * "launch". Only meaningful on the privileged path; empty otherwise, which makes the
      * caller fall back to the normal apply — no worse than before.
+     *
+     * An unreadable screen degrades the same way, and that is the right direction here: not
+     * knowing which apps are alive costs a relaunch, while assuming one is alive would resize
+     * a task we never saw.
      */
     fun livePackages(): Set<String> =
-        windowController.rootTasks().mapNotNull { it.packageName }.toSet()
+        windowController.observeTasks().tasksOrEmpty.mapNotNull { it.packageName }.toSet()
 
     /**
      * Route-safe restore: re-assert [preset] **without disturbing apps that are still
@@ -516,15 +520,27 @@ class LayoutEngine(
             return
         }
 
-        val tasks = windowController.rootTasks()
-        val wrong = LayoutVerification.misplacedTiles(expected, tasks)
-        if (wrong.isEmpty()) {
-            logger?.log(
-                "layout", "verify",
-                extras = mapOf("preset" to preset.id, "attempt" to attempt, "tiles" to expected.size),
-                result = "ok",
-            )
-            return
+        val wrong = when (val verdict = LayoutVerification.verdict(expected, windowController.observeTasks())) {
+            is LayoutVerdict.Ok -> {
+                logger?.log(
+                    "layout", "verify",
+                    extras = mapOf("preset" to preset.id, "attempt" to attempt, "tiles" to expected.size),
+                    result = "ok",
+                )
+                return
+            }
+            // The screen was never read. Re-asserting here would tear down and relaunch a
+            // layout that is very likely correct — ending a live route — on no evidence at all.
+            // Stop, and leave the log saying which it was.
+            is LayoutVerdict.Unverifiable -> {
+                logger?.log(
+                    "layout", "verify",
+                    extras = mapOf("preset" to preset.id, "attempt" to attempt),
+                    result = "skipped:unverifiable:${verdict.reason}",
+                )
+                return
+            }
+            is LayoutVerdict.Misplaced -> verdict.tiles
         }
 
         Log.i(TAG, "verify: ${preset.id} attempt=$attempt misplaced=${wrong.map { it.packageName }} -> re-assert")
@@ -583,11 +599,13 @@ class LayoutEngine(
         myGeneration: Long,
     ): Int {
         // Everything to clear away: what we last placed, plus — on the privileged path —
-        // any live freeform tile at all that is not part of the incoming layout. Rapid
+        // any live freeform tile at all that is not part of the incoming layout. An unreadable
+        // screen contributes nothing here and leaves the recorded set to do the work, which is
+        // exactly what happened before tasks could be observed at all. Rapid
         // taps can leave freeform tasks we never recorded in lastAppliedPackages; without
         // this they float over the new layout (e.g. a leftover fullscreen Spotify when the
         // Cockpit is opened). SELF is never parked: the companion is the anchor/panel.
-        val liveTasks = windowController.rootTasks()
+        val liveTasks = windowController.observeTasks().tasksOrEmpty
             .filter { it.windowingMode == WitsWindowMode.FREEFORM }
         val liveFreeform = liveTasks.mapNotNull { it.packageName }
         val stale = (lastAppliedPackages + liveFreeform - keep) - WitsPackages.SELF
@@ -850,7 +868,7 @@ class LayoutEngine(
 
         // Unprivileged (emulator): no removeRootTasks reach — un-window each tile via the hook.
         val full = windowController.fullDisplayArea(appContext)
-        val liveTiles = windowController.rootTasks()
+        val liveTiles = windowController.observeTasks().tasksOrEmpty
             .filter { it.windowingMode == WitsWindowMode.FREEFORM }
             .mapNotNull { it.packageName }
         val tiles = (liveTiles + lastAppliedPackages).toSet()

@@ -2,12 +2,18 @@ package io.github.miklergm.witscompanion
 
 import android.graphics.Rect
 import io.github.miklergm.witscompanion.layout.ExpectedTile
+import io.github.miklergm.witscompanion.layout.LayoutVerdict
 import io.github.miklergm.witscompanion.layout.LayoutVerification
 import io.github.miklergm.witscompanion.wits.PrivilegedWindowController.TaskSnapshot
+import io.github.miklergm.witscompanion.wits.TaskObservation
+import io.github.miklergm.witscompanion.wits.WitsWindowController
 import io.github.miklergm.witscompanion.wits.WitsWindowMode
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.robolectric.RuntimeEnvironment
+import java.io.File
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
@@ -129,5 +135,80 @@ class LayoutVerificationTest {
     fun `an app with no task needs no teardown`() {
         // Nothing to remove; the launch will carry the bounds itself.
         assertFalse(LayoutVerification.needsRelaunch(maps, emptyList()))
+    }
+
+    // ------------------------------ not observing vs observing nothing
+
+    /**
+     * The second defect in this area, and the reason [LayoutVerdict] exists.
+     *
+     * `rootTasks()` returned a plain list, and returned an empty one for three different
+     * answers: this build cannot observe tasks, the reflective call threw, and the platform
+     * looked and found nothing. verify() read all three as the third — so a reflection failure
+     * reported every tile missing and triggered a full re-apply, which on the privileged path
+     * removes and relaunches tasks. A correct layout torn down, and a live route with it, on
+     * the strength of a reading that never happened.
+     */
+    @Test
+    fun `a screen that was never read is unverifiable, not wrong`() {
+        val verdict = LayoutVerification.verdict(
+            listOf(leftTile),
+            TaskObservation.Unavailable("reflection:NoSuchMethodException"),
+        )
+
+        assertTrue("got $verdict", verdict is LayoutVerdict.Unverifiable)
+        assertEquals(
+            "the reason has to survive, or the log cannot tell the two cases apart",
+            "reflection:NoSuchMethodException",
+            (verdict as LayoutVerdict.Unverifiable).reason,
+        )
+    }
+
+    @Test
+    fun `an empty screen that was actually read is wrong`() {
+        // Byte for byte the task list the failed read used to produce — opposite conclusion.
+        val verdict = LayoutVerification.verdict(listOf(leftTile), TaskObservation.Observed(emptyList()))
+
+        assertEquals(listOf(maps), (verdict as LayoutVerdict.Misplaced).tiles.map { it.packageName })
+    }
+
+    @Test
+    fun `a correctly placed layout verifies ok`() {
+        assertEquals(
+            LayoutVerdict.Ok,
+            LayoutVerification.verdict(listOf(leftTile), TaskObservation.Observed(listOf(task()))),
+        )
+    }
+
+    @Test
+    fun `a build with no observer reports unavailable rather than an empty screen`() {
+        // The unprivileged path holds no MANAGE_ACTIVITY_TASKS, so it can never see a task.
+        // That must not read as "the screen is empty".
+        val controller = WitsWindowController(RuntimeEnvironment.getApplication())
+
+        assertTrue(controller.observeTasks() is TaskObservation.Unavailable)
+    }
+
+    /**
+     * Structural guard: the engine verifies through [LayoutVerification.verdict], which cannot
+     * drop the unreadable case, and never through the list-shaped primitive, which can.
+     */
+    @Test
+    fun `the engine does not verify through the list-shaped primitive`() {
+        val engine = listOf(
+            File("src/main/java/io/github/miklergm/witscompanion/layout/LayoutEngine.kt"),
+            File("app/src/main/java/io/github/miklergm/witscompanion/layout/LayoutEngine.kt"),
+        ).firstOrNull { it.isFile }
+        assertTrue("LayoutEngine.kt not found (cwd=${File(".").absolutePath})", engine != null)
+
+        val body = engine!!.readText()
+            .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), " ")
+            .lines().joinToString("\n") { it.substringBefore("//") }
+
+        assertFalse(
+            "LayoutEngine must call LayoutVerification.verdict(), not misplacedTiles() — the "
+                + "latter cannot tell an unread screen from an empty one",
+            body.contains("misplacedTiles("),
+        )
     }
 }

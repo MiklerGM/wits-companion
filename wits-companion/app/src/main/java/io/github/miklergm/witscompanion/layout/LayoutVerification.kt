@@ -2,10 +2,32 @@ package io.github.miklergm.witscompanion.layout
 
 import android.graphics.Rect
 import io.github.miklergm.witscompanion.wits.PrivilegedWindowController
+import io.github.miklergm.witscompanion.wits.TaskObservation
 import io.github.miklergm.witscompanion.wits.WitsWindowMode
 
 /** One tile an apply intended to place, and where it intended to put it. */
 data class ExpectedTile(val packageName: String, val bounds: Rect)
+
+/**
+ * What a post-apply check concluded.
+ *
+ * [Unverifiable] is the member that has to exist. Without it "the screen is wrong" and "the
+ * screen could not be read" are the same value, and a verifier that cannot see reaches for the
+ * repair it would use if everything were missing — a full re-apply, which on the privileged
+ * path removes and relaunches tasks. Correcting on the strength of a reading that never
+ * happened is worse than not correcting.
+ */
+sealed interface LayoutVerdict {
+
+    /** Every expected tile is where the apply meant to put it. */
+    data object Ok : LayoutVerdict
+
+    /** These tiles are not. Re-asserting is warranted. */
+    data class Misplaced(val tiles: List<ExpectedTile>) : LayoutVerdict
+
+    /** The screen was not read, for [reason]. Nothing is known; correct nothing. */
+    data class Unverifiable(val reason: String) : LayoutVerdict
+}
 
 /**
  * Deciding whether the screen matches what an apply intended.
@@ -49,7 +71,21 @@ object LayoutVerification {
         return false
     }
 
-    /** Which of [expected] are not where they should be. */
+    /**
+     * Whether the screen matches [expected], given whatever the platform actually said.
+     *
+     * The entry point for anything that will *act* on the answer. [misplacedTiles] takes a
+     * plain list and so cannot distinguish an empty screen from an unread one; this can, and
+     * refuses to call an unread screen wrong.
+     */
+    fun verdict(expected: List<ExpectedTile>, observation: TaskObservation): LayoutVerdict =
+        when (observation) {
+            is TaskObservation.Unavailable -> LayoutVerdict.Unverifiable(observation.reason)
+            is TaskObservation.Observed -> misplacedTiles(expected, observation.tasks)
+                .let { wrong -> if (wrong.isEmpty()) LayoutVerdict.Ok else LayoutVerdict.Misplaced(wrong) }
+        }
+
+    /** Which of [expected] are not where they should be, given a reading that did happen. */
     fun misplacedTiles(
         expected: List<ExpectedTile>,
         tasks: List<PrivilegedWindowController.TaskSnapshot>,

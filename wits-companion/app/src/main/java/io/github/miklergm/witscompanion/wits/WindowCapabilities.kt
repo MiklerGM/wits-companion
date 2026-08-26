@@ -39,6 +39,48 @@ sealed interface WindowOutcome {
 }
 
 /**
+ * What the platform said when asked which tasks exist.
+ *
+ * The distinction is the whole type. A plain `List` collapsed three different answers into an
+ * empty list — *this build cannot observe tasks*, *the reflective call failed*, and *the
+ * platform looked and there is genuinely nothing there* — and callers could not tell them
+ * apart. [LayoutEngine][io.github.miklergm.witscompanion.layout.LayoutEngine]`.verify()` read
+ * the first two as the third: a reflection failure meant every expected tile was reported
+ * missing, which made it tear down and relaunch a layout that was very possibly correct,
+ * ending a live navigation route on the strength of a reading that never happened.
+ *
+ * Not observing and observing nothing are opposite conclusions. One says *do not act*; the
+ * other says *act, everything is gone*.
+ */
+sealed interface TaskObservation {
+
+    /** The platform answered. An empty [tasks] is a real reading: there is nothing there. */
+    data class Observed(val tasks: List<PrivilegedWindowController.TaskSnapshot>) : TaskObservation
+
+    /**
+     * No reading happened, for [reason]. Nothing may be concluded about the screen — in
+     * particular not that a window is missing.
+     */
+    data class Unavailable(val reason: String) : TaskObservation
+
+    /**
+     * The tasks, with "could not look" flattened to "nothing there".
+     *
+     * Deliberately verbose, and deliberately the only way to get that flattening: a caller
+     * asking for it is stating that the two mean the same thing *for this decision*, and every
+     * such claim is greppable by name. Legitimate where the fallback is to act on our own
+     * recorded state — the unprivileged un-window path never has an observer at all, and
+     * `parkStaleWindows` falls back to what it last applied. Not legitimate where the reading
+     * is the evidence for a correction; use [Observed] explicitly there.
+     */
+    val tasksOrEmpty: List<PrivilegedWindowController.TaskSnapshot>
+        get() = when (this) {
+            is Observed -> tasks
+            is Unavailable -> emptyList()
+        }
+}
+
+/**
  * Reads live task state.
  *
  * Required by anything that verifies rather than assumes — the post-apply check, and deciding
@@ -46,7 +88,7 @@ sealed interface WindowOutcome {
  * whether they took.
  */
 fun interface TaskObserver {
-    fun rootTasks(): List<PrivilegedWindowController.TaskSnapshot>
+    fun rootTasks(): TaskObservation
 }
 
 /**

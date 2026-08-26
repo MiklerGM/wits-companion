@@ -162,22 +162,35 @@ class PrivilegedWindowController(
         }
     }
 
-    /** All root tasks, or an empty list if the read failed. */
-    fun rootTasks(): List<TaskSnapshot> {
-        val svc = service() ?: return emptyList()
+    /**
+     * All root tasks, or *why not*.
+     *
+     * Every way this can fail returns [TaskObservation.Unavailable] with a distinguishable
+     * reason rather than an empty list. Absence of a reading and a reading of absence lead
+     * callers to opposite actions, and this is the only place that knows which one happened.
+     */
+    fun observeRootTasks(): TaskObservation {
+        val svc = service() ?: return TaskObservation.Unavailable("no_service")
         return runCatching {
             @Suppress("UNCHECKED_CAST")
             val infos = svc.javaClass.getMethod("getAllRootTaskInfos").invoke(svc) as? List<Any?>
-                ?: return emptyList()
-            infos.mapNotNull { info -> info?.let { readSnapshot(it) } }
+                ?: return TaskObservation.Unavailable("not_a_list")
+            TaskObservation.Observed(infos.mapNotNull { info -> info?.let { readSnapshot(it) } })
         }.getOrElse {
             Log.d(TAG, "getAllRootTaskInfos failed: ${it.javaClass.simpleName}")
-            emptyList()
+            TaskObservation.Unavailable("reflection:${it.javaClass.simpleName}")
         }
     }
 
+    /**
+     * The task hosting [packageName], or null — *including* when the screen could not be read.
+     *
+     * [place] treats null as "no task to reuse" and launches instead of resizing, which is the
+     * safe reading of an unknown: a launch creates a task at the requested bounds, where acting
+     * on a task we only assume exists could resize or remove the wrong window.
+     */
     fun findTask(packageName: String): TaskSnapshot? =
-        rootTasks().firstOrNull { it.packageName == packageName }
+        observeRootTasks().tasksOrEmpty.firstOrNull { it.packageName == packageName }
 
     // ------------------------------------------------------------------ internals
 

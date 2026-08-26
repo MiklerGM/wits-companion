@@ -25,6 +25,7 @@ import io.github.miklergm.witscompanion.safety.Trigger
 import io.github.miklergm.witscompanion.wits.WitsNightModeController
 import io.github.miklergm.witscompanion.wits.WitsPackages
 import io.github.miklergm.witscompanion.wits.WitsSettingsKeys
+import io.github.miklergm.witscompanion.wits.TaskObservation
 import io.github.miklergm.witscompanion.wits.WitsWindowMode
 import io.github.miklergm.witscompanion.wits.currentWindowBounds
 
@@ -816,11 +817,19 @@ class DebugSection(private val app: WitsCompanionApp) : MainActivity.Section {
             val wc = app.windowController
             appendLine("window path    : ${if (wc.isPrivileged) "PRIVILEGED (resizeTask, no flicker)" else "vendor CHANGE_WINDOW hook"}")
             if (wc.isPrivileged) {
-                val tasks = wc.rootTasks().filter { it.packageName != null }
-                appendLine("root tasks     : ${tasks.size}")
-                tasks.take(6).forEach {
-                    appendLine("  #${it.taskId} ${it.packageName?.substringAfterLast('.')} " +
-                        "mode=${WitsWindowMode.name(it.windowingMode)} vis=${it.visible}")
+                // "could not read" and "read, nothing there" print differently on purpose —
+                // this screen is where an observation failure gets noticed.
+                when (val observation = wc.observeTasks()) {
+                    is TaskObservation.Unavailable ->
+                        appendLine("root tasks     : UNREADABLE (${observation.reason})")
+                    is TaskObservation.Observed -> {
+                        val tasks = observation.tasks.filter { it.packageName != null }
+                        appendLine("root tasks     : ${tasks.size}")
+                        tasks.take(6).forEach {
+                            appendLine("  #${it.taskId} ${it.packageName?.substringAfterLast('.')} " +
+                                "mode=${WitsWindowMode.name(it.windowingMode)} vis=${it.visible}")
+                        }
+                    }
                 }
             }
             appendLine("property strategy : ${app.propertyReader.activeStrategy}")
