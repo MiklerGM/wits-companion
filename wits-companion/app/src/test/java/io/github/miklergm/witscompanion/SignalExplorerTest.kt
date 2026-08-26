@@ -248,6 +248,49 @@ class SignalExplorerTest {
         assertTrue("followed $deepest levels", deepest <= BroadcastProbe.MAX_DEPTH + 1)
     }
 
+    @Test(timeout = 10_000)
+    fun `a cyclic collection is traversed, not rendered`() {
+        // LinkedList is Serializable, so a sender can put one in an extra, and Java
+        // serialization carries cycles faithfully. It is not an ArrayList, so it fell through to
+        // toString() — and AbstractCollection.toString on two mutually referencing lists
+        // recurses until the stack goes, on the main thread, inside a receiver any installed app
+        // can reach. Reproduced directly before this change.
+        val a = java.util.LinkedList<Any>()
+        val b = java.util.LinkedList<Any>()
+        a.add(b)
+        b.add(a)
+
+        val extras = BroadcastProbe.describe("cycle", a)
+
+        assertTrue("the depth limit must cut the cycle", extras.any { it.name == BroadcastProbe.TRUNCATION_MARKER })
+        assertTrue("and it must not have been rendered whole", extras.none { (it.value?.length ?: 0) > BroadcastProbe.MAX_VALUE_CHARS })
+    }
+
+    @Test
+    fun `sets and maps are traversed too`() {
+        val b = Bundle().apply {
+            putSerializable("set", java.util.LinkedHashSet(listOf("x", "y")))
+            putSerializable("map", java.util.LinkedHashMap(mapOf("k" to 1, "j" to 2)))
+        }
+        val names = BroadcastProbe.flatten(b).map { it.name }
+
+        assertTrue("$names", "set[0]" in names && "set[1]" in names)
+        assertTrue("$names", "map{k}" in names && "map{j}" in names)
+    }
+
+    @Test
+    fun `a bundle stopped at the reading cap says it was truncated`() {
+        // Exactly at the boundary the top-level walk used to break out silently: the marker is
+        // added by the budget, and breaking before ever calling emit() never told it.
+        val b = Bundle().apply {
+            repeat(BroadcastProbe.MAX_EXTRAS + 1) { i -> putInt("k$i", i) }
+        }
+        val extras = BroadcastProbe.flatten(b)
+
+        assertTrue(extras.any { it.name == BroadcastProbe.TRUNCATION_MARKER })
+        assertEquals(BroadcastProbe.MAX_EXTRAS + 1, extras.size)
+    }
+
     @Test
     fun `the session-long catalogue summary is bounded and says when it was cut`() {
         // The delta is not part of the ring, so no per-event cap bounds it. Extra keys are

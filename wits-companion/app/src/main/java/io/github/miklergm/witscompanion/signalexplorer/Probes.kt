@@ -142,7 +142,7 @@ class BroadcastProbe(
             // keySet() is ordered, so a truncated capture is a prefix of the full one rather
             // than an arbitrary subset.
             for (key in bundle.keySet()) {
-                if (budget.exhausted) break
+                if (budget.exhausted) { budget.note("count"); break }
                 val name = if (prefix.isEmpty()) key else "$prefix.$key"
                 val value = runCatching {
                     @Suppress("DEPRECATION")
@@ -174,7 +174,7 @@ class BroadcastProbe(
 
         /** Containers that can hold another container, and so make depth a real limit. */
         private val Any?.isRecursiveContainer: Boolean
-            get() = this is Bundle || this is Array<*> || this is ArrayList<*>
+            get() = this is Bundle || this is Array<*> || this is Collection<*> || this is Map<*, *>
 
         private fun describeValue(
             name: String,
@@ -218,14 +218,51 @@ class BroadcastProbe(
             is BooleanArray -> budget.each(value.size) { i ->
                 budget.emit(CapturedExtra("$name[$i]", "boolean", value[i].toString()))
             }
-            is ArrayList<*> -> budget.each(value.size) { i ->
-                describe("$name[$i]", value[i], budget, depth + 1)
+            // Every Collection, not only ArrayList. LinkedList is the one that mattered: it is
+            // Serializable, so a sender can put one in an extra, and Java serialization carries
+            // cycles faithfully. It is not an ArrayList, so it used to fall through to the
+            // `else` branch below and be rendered with toString() — and AbstractCollection's
+            // toString on a pair of mutually referencing lists recurses until the stack goes.
+            // On the main thread, in a receiver any installed app can reach.
+            is Collection<*> -> {
+                val items = value.toList()
+                budget.each(items.size) { i -> describe("$name[$i]", items[i], budget, depth + 1) }
+            }
+
+            is Map<*, *> -> {
+                val entries = value.entries.toList()
+                budget.each(entries.size) { i ->
+                    describe("$name{${safeKey(entries[i].key, i)}}", entries[i].value, budget, depth + 1)
+                }
             }
 
             else -> budget.emit(
-                CapturedExtra(name, value.javaClass.name, budget.shorten(value.toString()))
+                CapturedExtra(name, value.javaClass.name, budget.shorten(render(value)))
             )
         }
+
+        /**
+         * A map key, rendered only when rendering it is safe.
+         *
+         * Anything else is referred to by position: a key is sender-supplied too, and calling
+         * toString() on an arbitrary one is the same hazard as calling it on a value.
+         */
+        private fun safeKey(key: Any?, index: Int): String = when (key) {
+            is String, is Number, is Boolean, is Char -> key.toString()
+            null -> "null"
+            else -> "#$index"
+        }
+
+        /**
+         * Last-resort rendering for a value that is not a container we traverse.
+         *
+         * The traversal above covers what can hold a cycle, so this should never be handed one.
+         * The guard is here because the input is chosen by another process and the cost of being
+         * wrong is a StackOverflowError inside onReceive: some other JDK type with a recursive
+         * toString would take the app down rather than produce a poor capture.
+         */
+        private fun render(value: Any): String =
+            runCatching { value.toString() }.getOrElse { "<unrenderable ${value.javaClass.name}>" }
 
         /**
          * What is left to spend on one capture.
