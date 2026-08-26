@@ -76,8 +76,27 @@ jobs:
           # may not carry.
           apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
           "$apksigner" verify --print-certs "$out/app-platform.apk" | tee /tmp/certs.txt
-          grep -qi "CN=Android" /tmp/certs.txt || {
-            echo "!! not signed with the expected platform certificate"; exit 1; }
+
+          # Pin the certificate, not its name. "CN=Android" is a subject line, and anyone can
+          # put it on a self-signed key in one keytool command — so the old check confirmed
+          # only that the APK was signed by something *claiming* to be the platform. What has
+          # to be true is narrower: signed by the certificate this ROM grants signature-level
+          # permissions to. A wrong PLATFORM_KEYSTORE secret would otherwise publish an APK
+          # that installs and then silently has none of the privileges the release claims.
+          #
+          # Digest of the platform certificate on the unit, which signs `android` and every
+          # Wits app (docs/architecture.md §5). It is the public AOSP platform test key, so
+          # this is a published constant, not a secret.
+          expected=c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8
+          actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' /tmp/certs.txt | tr 'A-Z' 'a-z')
+          if [ "$actual" != "$expected" ]; then
+            echo "!! wrong signing certificate"
+            echo "   expected $expected"
+            echo "   got      ${actual:-<none found>}"
+            echo "   The PLATFORM_KEYSTORE secret is not the key this ROM trusts."
+            exit 1
+          fi
+          echo "signing certificate matches the platform key"
 
       - name: Always remove the keystore
         if: always()
