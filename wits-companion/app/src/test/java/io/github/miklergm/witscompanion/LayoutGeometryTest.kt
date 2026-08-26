@@ -2,8 +2,10 @@ package io.github.miklergm.witscompanion
 
 import android.graphics.Rect
 import io.github.miklergm.witscompanion.layout.DefaultPresets
+import io.github.miklergm.witscompanion.layout.LayoutGeometry
 import io.github.miklergm.witscompanion.layout.LayoutIssue
 import io.github.miklergm.witscompanion.layout.LayoutPreset
+import io.github.miklergm.witscompanion.layout.LayoutSchedule
 import io.github.miklergm.witscompanion.layout.LayoutValidator
 import io.github.miklergm.witscompanion.layout.LayoutWindow
 import io.github.miklergm.witscompanion.layout.PresetKind
@@ -207,6 +209,134 @@ class LayoutGeometryTest {
             assertEquals(a.bounds.right, b.bounds.right, 0.0001f)
         }
     }
+    // ------------------------------------------------- the two tiles, together
+
+    /**
+     * The invariant nothing checked before the geometry came out of [LayoutEngine].
+     *
+     * The engine places the floating app in the app tile while the panel resizes *its own*
+     * task to the complement, from two different call paths at two different moments. If they
+     * disagree by a pixel it shows as a seam or an overlap on a display where both are visible
+     * at once — and the only way to find that out was to look at the screen.
+     */
+    @Test
+    fun `the app tile and the panel exactly cover the display, at every split`() {
+        val area = Rect(0, 99, 2400, 900)
+        for (step in 0..LayoutPreset.SPLIT_STEPS) {
+            val split = LayoutPreset.progressToSplit(step)
+            listOf(false, true).forEach { swapped ->
+                val app = LayoutGeometry.appBounds(split, swapped, area)
+                val panel = LayoutGeometry.panelBounds(
+                    split, swapped, hidden = false, area = area, full = display2400x900,
+                )
+                val where = "split=$split swapped=$swapped"
+
+                assertEquals("$where: same height", area.top, minOf(app.top, panel.top))
+                assertEquals("$where: same bottom", area.bottom, maxOf(app.bottom, panel.bottom))
+                assertEquals("$where: they cover the width", area.width(), app.width() + panel.width())
+                assertTrue(
+                    "$where: they must meet exactly, not overlap or leave a gap",
+                    app.right == panel.left || panel.right == app.left,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `swapping puts the panel on the other side and nothing else changes`() {
+        val area = Rect(0, 99, 2400, 900)
+        val normal = LayoutGeometry.appBounds(0.65f, swapped = false, area = area)
+        val mirrored = LayoutGeometry.appBounds(0.65f, swapped = true, area = area)
+
+        assertEquals(normal.width(), mirrored.width())
+        assertEquals(area.left, normal.left)
+        assertEquals(area.right, mirrored.right)
+    }
+
+    @Test
+    fun `a hidden app gives the panel the whole display, status bar included`() {
+        // Not the usable area: the hidden state paints the freed strip itself, and a panel
+        // stopping at the inset would leave the vendor bar showing through.
+        assertEquals(
+            display2400x900,
+            LayoutGeometry.panelBounds(
+                0.65f, swapped = false, hidden = true,
+                area = Rect(0, 99, 2400, 900), full = display2400x900,
+            ),
+        )
+    }
+
+    @Test
+    fun `a window that is not flush to an edge has no complement`() {
+        // Nothing sensible to give the panel, so the caller keeps it fullscreen.
+        assertNull(
+            LayoutGeometry.panelComplement(
+                NormalizedBounds(0.2f, 0f, 0.8f, 1f), Rect(0, 99, 2400, 900),
+            ),
+        )
+    }
+
+    @Test
+    fun `the tile geometry clamps the split to the allowed range`() {
+        val area = Rect(0, 0, 1000, 100)
+        assertEquals(
+            (LayoutPreset.MIN_SPLIT * 1000).toInt(),
+            LayoutGeometry.appBounds(0.01f, swapped = false, area = area).width(),
+        )
+        assertEquals(
+            (LayoutPreset.MAX_SPLIT * 1000).toInt(),
+            LayoutGeometry.appBounds(0.99f, swapped = false, area = area).width(),
+        )
+    }
+
+    // ------------------------------------------------------- the split scale
+
+    /**
+     * The slider round-trip, which used to lose a percent per visit.
+     *
+     * `(0.65f - 0.25f) * 100` is 39.999996 in float, so truncating put the default split on
+     * step 39. Opening the layout settings therefore showed "64 / 36" for a stored 0.65, and
+     * releasing the slider without moving it wrote 0.64 back — a percent gone each time, and
+     * nothing on screen to suggest the widget rather than the setting was at fault.
+     */
+    @Test
+    fun `the default split survives the slider round trip`() {
+        val step = LayoutPreset.splitToProgress(LayoutPreset.DEFAULT_SPLIT)
+
+        assertEquals(40, step)
+        assertEquals(
+            65,
+            LayoutPreset.splitPercent(LayoutPreset.progressToSplit(step)),
+        )
+    }
+
+    @Test
+    fun `every whole percent in range round trips to itself`() {
+        for (step in 0..LayoutPreset.SPLIT_STEPS) {
+            val split = LayoutPreset.progressToSplit(step)
+            assertEquals(
+                "step $step -> $split -> back",
+                step,
+                LayoutPreset.splitToProgress(split),
+            )
+        }
+    }
+
+    @Test
+    fun `the scale spans the allowed range and clamps outside it`() {
+        assertEquals(55, LayoutPreset.SPLIT_STEPS)
+        assertEquals(LayoutPreset.MIN_SPLIT, LayoutPreset.progressToSplit(0))
+        assertEquals(LayoutPreset.MAX_SPLIT, LayoutPreset.progressToSplit(LayoutPreset.SPLIT_STEPS), 0.0001f)
+        assertEquals(0, LayoutPreset.splitToProgress(0.10f))
+        assertEquals(LayoutPreset.SPLIT_STEPS, LayoutPreset.splitToProgress(0.99f))
+    }
+
+    @Test
+    fun `split percent rounds rather than truncating`() {
+        assertEquals(65, LayoutPreset.splitPercent(0.65f))
+        assertEquals(64, LayoutPreset.splitPercent(0.6449f))
+        assertEquals(50, LayoutPreset.splitPercent(0.5f))
+    }
 }
 
 /**
@@ -216,18 +346,10 @@ class LayoutGeometryTest {
  * passes used to fire every window back to back, which thrashes the task stack because
  * each CHANGE_WINDOW ends in startActivityFromRecents and pulls that task to the front.
  */
-@RunWith(RobolectricTestRunner::class)
 class LayoutScheduleTest {
 
-    private fun engine(): io.github.miklergm.witscompanion.layout.LayoutEngine {
-        val ctx = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
-        return io.github.miklergm.witscompanion.layout.LayoutEngine(
-            appContext = ctx,
-            windowController = io.github.miklergm.witscompanion.wits.WitsWindowController(ctx),
-            reverseGuard = io.github.miklergm.witscompanion.safety.ReverseGuard(),
-            rateLimiter = io.github.miklergm.witscompanion.safety.ActionRateLimiter(),
-        )
-    }
+    // Plain JUnit: the schedule is arithmetic, and since it moved out of LayoutEngine it no
+    // longer needs a Context, a window controller and two guards constructed to ask about it.
 
     // Each pass has two phases: CHANGE_WINDOW for every tile, then a launch for every
     // tile. scheduleFor() emits a pass as [geometry..., launches...] in that order.
@@ -235,7 +357,7 @@ class LayoutScheduleTest {
     @Test
     fun `a pass sends all geometry before any launch`() {
         val n = 2
-        val s = engine().scheduleFor(windowCount = n, retries = 0)
+        val s = LayoutSchedule.scheduleFor(windowCount = n, retries = 0)
         val geometry = s.take(n)
         val launches = s.drop(n)
         assertTrue(
@@ -251,9 +373,8 @@ class LayoutScheduleTest {
      */
     @Test
     fun `phases never interleave, for any window count`() {
-        val engine = engine()
         listOf(1, 2, 3, 4).forEach { n ->
-            val s = engine.scheduleFor(windowCount = n, retries = 2)
+            val s = LayoutSchedule.scheduleFor(windowCount = n, retries = 2)
             val geometryEnd = s.take(n).max()
             val firstLaunch = s.drop(n).min()
             assertTrue(
@@ -271,9 +392,8 @@ class LayoutScheduleTest {
     @Test
     fun `retry passes contain launches only`() {
         val n = 2
-        val engine = engine()
-        val noRetry = engine.scheduleFor(windowCount = n, retries = 0)
-        val oneRetry = engine.scheduleFor(windowCount = n, retries = 1)
+        val noRetry = LayoutSchedule.scheduleFor(windowCount = n, retries = 0)
+        val oneRetry = LayoutSchedule.scheduleFor(windowCount = n, retries = 1)
         assertEquals(
             "a retry pass must add exactly one send per window",
             noRetry.size + n,
@@ -283,20 +403,20 @@ class LayoutScheduleTest {
 
     @Test
     fun `two windows with no retries are staggered`() {
-        val s = engine().scheduleFor(windowCount = 2, retries = 0)
+        val s = LayoutSchedule.scheduleFor(windowCount = 2, retries = 0)
         // geometry 0, 250 ; launch phase opens at 250+600=850, then 850+700=1550
         assertEquals(listOf(0L, 250L, 850L, 1550L), s)
     }
 
     @Test
     fun `no two broadcasts are ever scheduled at the same instant`() {
-        val s = engine().scheduleFor(windowCount = 2, retries = 2)
+        val s = LayoutSchedule.scheduleFor(windowCount = 2, retries = 2)
         assertEquals("every send must have its own slot", s.size, s.distinct().size)
     }
 
     @Test
     fun `sends inside a pass are staggered, not fired back to back`() {
-        val s = engine().scheduleFor(windowCount = 2, retries = 1).sorted()
+        val s = LayoutSchedule.scheduleFor(windowCount = 2, retries = 1).sorted()
         s.zipWithNext { a, b ->
             assertTrue("gap between $a and $b is too small", b - a >= 250L)
         }
@@ -304,9 +424,8 @@ class LayoutScheduleTest {
 
     @Test
     fun `a retry pass never overlaps the initial pass`() {
-        val engine = engine()
         listOf(2, 3).forEach { n ->
-            val s = engine.scheduleFor(windowCount = n, retries = 2)
+            val s = LayoutSchedule.scheduleFor(windowCount = n, retries = 2)
             val initialEnd = s.take(2 * n).max()
             val firstRetry = s.drop(2 * n).min()
             assertTrue(
@@ -318,17 +437,16 @@ class LayoutScheduleTest {
 
     @Test
     fun `retries are bounded and default to one pass`() {
-        val engine = engine()
         // Initial pass is 2 sends per window (geometry + launch); each retry adds 1.
-        assertEquals(4, engine.scheduleFor(2, retries = 0).size)
-        assertEquals(6, engine.scheduleFor(2, retries = 1).size)
-        assertEquals(8, engine.scheduleFor(2, retries = 2).size)
-        assertEquals("cannot exceed MAX_RETRIES", 8, engine.scheduleFor(2, retries = 99).size)
+        assertEquals(4, LayoutSchedule.scheduleFor(2, retries = 0).size)
+        assertEquals(6, LayoutSchedule.scheduleFor(2, retries = 1).size)
+        assertEquals(8, LayoutSchedule.scheduleFor(2, retries = 2).size)
+        assertEquals("cannot exceed MAX_RETRIES", 8, LayoutSchedule.scheduleFor(2, retries = 99).size)
     }
 
     @Test
     fun `single window still gets both phases`() {
-        assertEquals(listOf(0L, 600L), engine().scheduleFor(windowCount = 1, retries = 0))
+        assertEquals(listOf(0L, 600L), LayoutSchedule.scheduleFor(windowCount = 1, retries = 0))
     }
 }
 
@@ -580,52 +698,4 @@ class PresetKindAndCustomisationTest {
         assertEquals(LayoutPreset.MAX_ANCHOR_RESERVED, p.anchorReservedLeftFraction(), 0.001f)
     }
 
-    // ------------------------------------------------------- the split scale
-
-    /**
-     * The slider round-trip, which used to lose a percent per visit.
-     *
-     * `(0.65f - 0.25f) * 100` is 39.999996 in float, so truncating put the default split on
-     * step 39. Opening the layout settings therefore showed "64 / 36" for a stored 0.65, and
-     * releasing the slider without moving it wrote 0.64 back — a percent gone each time, and
-     * nothing on screen to suggest the widget rather than the setting was at fault.
-     */
-    @Test
-    fun `the default split survives the slider round trip`() {
-        val step = LayoutPreset.splitToProgress(LayoutPreset.DEFAULT_SPLIT)
-
-        assertEquals(40, step)
-        assertEquals(
-            65,
-            LayoutPreset.splitPercent(LayoutPreset.progressToSplit(step)),
-        )
-    }
-
-    @Test
-    fun `every whole percent in range round trips to itself`() {
-        for (step in 0..LayoutPreset.SPLIT_STEPS) {
-            val split = LayoutPreset.progressToSplit(step)
-            assertEquals(
-                "step $step -> $split -> back",
-                step,
-                LayoutPreset.splitToProgress(split),
-            )
-        }
-    }
-
-    @Test
-    fun `the scale spans the allowed range and clamps outside it`() {
-        assertEquals(55, LayoutPreset.SPLIT_STEPS)
-        assertEquals(LayoutPreset.MIN_SPLIT, LayoutPreset.progressToSplit(0))
-        assertEquals(LayoutPreset.MAX_SPLIT, LayoutPreset.progressToSplit(LayoutPreset.SPLIT_STEPS), 0.0001f)
-        assertEquals(0, LayoutPreset.splitToProgress(0.10f))
-        assertEquals(LayoutPreset.SPLIT_STEPS, LayoutPreset.splitToProgress(0.99f))
-    }
-
-    @Test
-    fun `split percent rounds rather than truncating`() {
-        assertEquals(65, LayoutPreset.splitPercent(0.65f))
-        assertEquals(64, LayoutPreset.splitPercent(0.6449f))
-        assertEquals(50, LayoutPreset.splitPercent(0.5f))
-    }
 }

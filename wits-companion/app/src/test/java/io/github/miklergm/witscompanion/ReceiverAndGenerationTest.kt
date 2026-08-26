@@ -1,16 +1,21 @@
 package io.github.miklergm.witscompanion
 
 import android.content.Intent
+import android.graphics.Rect
 import io.github.miklergm.witscompanion.carstate.Availability
 import io.github.miklergm.witscompanion.carstate.BroadcastUpdate
 import io.github.miklergm.witscompanion.carstate.CarState
 import io.github.miklergm.witscompanion.carstate.SignalSource
 import io.github.miklergm.witscompanion.carstate.SignalValue
 import io.github.miklergm.witscompanion.carstate.WitsBroadcastReceiver
+import io.github.miklergm.witscompanion.layout.DefaultPresets
 import io.github.miklergm.witscompanion.layout.LayoutEngine
+import io.github.miklergm.witscompanion.layout.LayoutPlan
+import io.github.miklergm.witscompanion.layout.LayoutPlanner
 import io.github.miklergm.witscompanion.safety.ActionRateLimiter
 import io.github.miklergm.witscompanion.safety.ReverseGuard
 import io.github.miklergm.witscompanion.wits.WitsActions
+import io.github.miklergm.witscompanion.wits.WitsPackages
 import io.github.miklergm.witscompanion.wits.WitsWindowController
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -137,6 +142,19 @@ class ReceiverAndGenerationTest {
     /** Occurrences of a literal substring — these tests count call sites. */
     private fun String.occurrences(needle: String): Int = split(needle).size - 1
 
+    /** The anchored Maps preset the layout tests use, planned against a 2400x900 display. */
+    private fun planFor(
+        preserveLive: Set<String>,
+        isLaunchable: (String) -> Boolean = { true },
+    ): LayoutPlan = LayoutPlanner.plan(
+        preset = DefaultPresets.anchoredFor(WitsPackages.MAPS, "Maps")
+            .withGeometry(split = 0.65f, swapped = false),
+        area = Rect(0, 99, 2400, 900),
+        fullDisplay = Rect(0, 0, 2400, 900),
+        preserveLive = preserveLive,
+        isLaunchable = isLaunchable,
+    )
+
     private fun sourceOf(relative: String): String {
         val candidates = listOf(
             "src/main/java/io/github/miklergm/witscompanion/$relative",
@@ -185,22 +203,25 @@ class ReceiverAndGenerationTest {
      */
     @Test
     fun `a preserved-live package is repositioned but never relaunched`() {
-        val src = engineSource()
-        // The guarantee lives in the launch phase and the retry pass, keyed on preserveLive.
-        assertTrue(
-            "the launch phase must skip preserved-live packages",
-            src.contains("window.packageName in preserveLive"),
-        )
-        // reassert() is the route-safe entry point and must compute the live set.
-        val reassert = src.substringAfter("fun reassert(").substringBefore("\n    }")
-        assertTrue("reassert must feed livePackages into preserveLive", reassert.contains("livePackages()"))
+        // This used to be a grep. The plan makes it a fact: a live package gets geometry with
+        // the preserve flag set and no visibility step at all, so nothing can send it a MAIN
+        // intent — not the initial pass, and not a retry, which only repeats launch steps.
+        val plan = planFor(preserveLive = setOf(WitsPackages.MAPS))
+        val mapsSteps = plan.steps.filter { it.packageName == WitsPackages.MAPS }
 
-        // The geometry phase must pass the preserve flag through, so a live non-freeform
-        // task is left as-is rather than relaunched by place().
-        assertTrue(
-            "the geometry phase must thread preserveLive into applyWindow",
-            src.contains("preserveLive = preserve"),
+        assertEquals(listOf(LayoutPlan.Phase.GEOMETRY), mapsSteps.map { it.phase })
+        assertTrue("the preserve flag has to reach applyWindow", mapsSteps.single().preserveLive)
+
+        val fresh = planFor(preserveLive = emptySet())
+        assertEquals(
+            "without it the same package is launched as well",
+            listOf(LayoutPlan.Phase.GEOMETRY, LayoutPlan.Phase.LAUNCH),
+            fresh.steps.filter { it.packageName == WitsPackages.MAPS }.map { it.phase },
         )
+
+        // reassert() is the route-safe entry point and must compute the live set.
+        val reassert = engineSource().substringAfter("fun reassert(").substringBefore("\n    }")
+        assertTrue("reassert must feed livePackages into preserveLive", reassert.contains("livePackages()"))
     }
 
     /**
@@ -248,16 +269,38 @@ class ReceiverAndGenerationTest {
     /** "Applied" must not claim windows that were never placed. */
     @Test
     fun `apply reports the tiles it actually dispatched`() {
-        val src = engineSource()
-        val apply = src.substringAfter("        scheduleVerification(preset, expected,")
+        // The count is the plan's expected set — launchable windows plus the panel an anchored
+        // preset does not carry as a window — so a preset whose apps are all missing can no
+        // longer report a cheerful "Applied 2 window(s)" while nothing moved.
+        // An anchored preset still places something with nothing installed — the panel is the
+        // Cockpit and comes up either way — so it reports one tile, not two, and says which
+        // window it could not place.
+        val anchoredMissing = planFor(preserveLive = emptySet(), isLaunchable = { false })
+        assertEquals(listOf(WitsPackages.MAPS), anchoredMissing.skipped)
+        assertEquals(listOf(WitsPackages.SELF), anchoredMissing.expected.map { it.packageName })
 
+        // A tiled preset carries no panel, so with nothing installed it places nothing at all.
+        // This is the case the old preflight could not see, and the reason it refused twice.
+        val tiledMissing = LayoutPlanner.plan(
+            preset = DefaultPresets.tiledFor(
+                WitsPackages.MAPS, WitsPackages.CHROME, "Maps", "Chrome",
+            ),
+            area = Rect(0, 99, 2400, 900),
+            fullDisplay = Rect(0, 0, 2400, 900),
+            preserveLive = emptySet(),
+            isLaunchable = { false },
+        )
+        assertTrue("nothing installed means nothing is dispatched", tiledMissing.placesNothing)
+
+        val src = engineSource()
+        val apply = src.substringAfter("        scheduleVerification(preset, plan.expected,")
         assertTrue(
             "the count comes from what was dispatched, not from the preset",
-            apply.contains("Result.Applied(expected.size"),
+            apply.contains("Result.Applied(plan.expected.size"),
         )
         assertTrue(
-            "a layout with nothing launchable must refuse, not report success",
-            apply.contains("expected.isEmpty()") && apply.contains("Result.Refused("),
+            "and the refusal for it is a preflight, before anything is mutated",
+            src.indexOf("plan.placesNothing") < src.indexOf("generation.incrementAndGet()"),
         )
     }
 
@@ -272,7 +315,7 @@ class ReceiverAndGenerationTest {
         val schedule = src.substringAfter("private fun scheduleVerification(").substringBefore("\n    }")
         assertTrue(
             "bounded by the number of verify delays",
-            schedule.contains("attempt >= VERIFY_DELAYS_MS.size"),
+            schedule.contains("attempt >= LayoutSchedule.VERIFY_DELAYS_MS.size"),
         )
         assertTrue(
             "requires task observation specifically — it must be able to read back what it sent",
@@ -393,13 +436,24 @@ class ReceiverAndGenerationTest {
      */
     @Test
     fun `the visibility phase is scheduled independently, not nested in the geometry send`() {
-        val src = engineSource()
-        val geometryCallback = src
-            .substringAfter("stillValid(myGeneration, \"geometry\"")
-            .substringBefore("offset + index * GEOMETRY_DELAY_MS")
+        val plan = planFor(preserveLive = emptySet())
+        val geometry = plan.steps.filter { it.phase == LayoutPlan.Phase.GEOMETRY }
+        val launches = plan.steps.filter { it.phase == LayoutPlan.Phase.LAUNCH }
+
+        assertTrue("both phases must be present", geometry.isNotEmpty() && launches.isNotEmpty())
+        assertTrue(
+            "every launch must be planned after the last geometry send",
+            launches.minOf { it.offsetMs } > geometry.maxOf { it.offsetMs },
+        )
+
+        // And the dispatcher must keep them apart: a launch fired from inside the geometry
+        // callback would interleave the phases however the plan is ordered.
+        val geometryBranch = engineSource()
+            .substringAfter("LayoutPlan.Phase.GEOMETRY -> {")
+            .substringBefore("LayoutPlan.Phase.LAUNCH ->")
         assertTrue(
             "launchPackage must not be nested inside the geometry callback",
-            !geometryCallback.contains("launchPackage"),
+            !geometryBranch.contains("launchPackage"),
         )
     }
 

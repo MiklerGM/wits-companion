@@ -17,14 +17,28 @@ import io.github.miklergm.witscompanion.wits.WitsWindowMode
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Applies a [LayoutPreset] by sending one CHANGE_WINDOW broadcast per tile.
+ * Carries out a [LayoutPreset]: the part of applying a layout that has to touch the device.
  *
- * Ordering rules (docs/window-management.md §6):
- *  - tiles are applied in ascending [LayoutWindow.focusOrder],
- *  - so the highest focusOrder is applied last and ends up focused,
- *  - a deep link, when present and the task is missing, is fired first.
+ * The decisions are elsewhere, and deliberately so. This class owns a Handler, a generation
+ * counter, the last known vehicle state and whether we still own the screen — none of which a
+ * test can hold still — and it used to own the reasoning as well, interleaved with the
+ * `postDelayed` calls that acted on it. What an apply *would* do could then only be discovered
+ * by watching what it did.
  *
- * Retries are bounded — never an infinite loop.
+ *  - [LayoutPlanner] decides: which windows can be placed, where stale ones are parked, whether
+ *    the panel gets a complement tile, which window is fronted, and what the result will be
+ *    compared against. Pure; takes rects and a predicate.
+ *  - [LayoutSchedule] decides when each send fires. Pure arithmetic.
+ *  - [LayoutGeometry] decides where the two Cockpit tiles go. Pure.
+ *  - [LayoutVerification] decides whether what landed matches what was intended. Pure.
+ *
+ * What is left here is the execution and the state that makes it safe: every delayed send is
+ * gated on the generation *and* on the vehicle still being safe at fire time ([stillValid]),
+ * refusals happen before anything is mutated, and retries are bounded — never a loop.
+ *
+ * Ordering rules (docs/window-management.md §6): tiles are placed in ascending
+ * [LayoutWindow.focusOrder], so the highest ends up focused, and a deep link is fired before
+ * its task is positioned.
  */
 class LayoutEngine(
     private val appContext: Context,
@@ -111,7 +125,7 @@ class LayoutEngine(
         preset: LayoutPreset,
         state: CarState,
         trigger: Trigger,
-        retries: Int = DEFAULT_RETRIES,
+        retries: Int = LayoutSchedule.DEFAULT_RETRIES,
         preserveLive: Set<String> = emptySet(),
         verifyAttempt: Int = 0,
     ): Result {
@@ -158,23 +172,34 @@ class LayoutEngine(
             .toMutableList()
 
         val area = windowController.usableArea(appContext)
-        val ordered = preset.windows.sortedBy { it.focusOrder }
 
-        // 4. Preflight, BEFORE anything is mutated.
+        // 4. Decide the whole thing before doing any of it.
+        val plan = LayoutPlanner.plan(
+            preset = preset,
+            area = area,
+            fullDisplay = windowController.fullDisplayArea(appContext),
+            preserveLive = preserveLive,
+            isLaunchable = windowController::isLaunchable,
+        )
+        plan.skipped.forEach { pkg ->
+            warnings += "$pkg is not installed or has no launcher activity"
+            logger?.log("layout", "skip_window", pkg, result = "not_launchable")
+        }
+
+        // 5. Preflight, BEFORE anything is mutated. A refusal must cost nothing.
         //
-        // The refusal for "nothing launchable" used to sit at the end, after the stale-window
-        // cleanup had already been scheduled and the generation bumped. Applying a preset whose
-        // apps have since been uninstalled therefore tore down the layout that was on screen —
-        // possibly a live navigation task — and only then reported Refused. A refusal must cost
-        // nothing.
-        //
-        // An anchored preset always places something (the panel comes up whether or not the
-        // floating app is installed), so only a tiled preset can be empty.
-        val launchable = ordered.filter { windowController.isLaunchable(it.packageName) }
-        if (launchable.isEmpty() && preset.kind != PresetKind.ANCHORED) {
+        // This used to be two checks: one here for "no app in this layout is installed", and a
+        // second, identically worded one at the very *end* for the case this one could not see
+        // — an anchored preset whose panel has no bounds either, since an anchored preset was
+        // assumed always to place something. That second refusal ran after the stale-window
+        // cleanup had been scheduled and the generation bumped, so applying a preset whose apps
+        // had been uninstalled tore down the layout on screen — possibly a live navigation task
+        // — and only then reported Refused. The plan knows what would reach the screen, so one
+        // check now covers both, before anything moves.
+        if (plan.placesNothing) {
             logger?.log(
                 "layout", "apply", extras = mapOf("preset" to preset.id),
-                result = "nothing_launchable",
+                result = "nothing_to_place",
             )
             return Result.Refused(
                 "nothing to place: no app in this layout is installed with a launcher activity"
@@ -187,160 +212,45 @@ class LayoutEngine(
         applyTrigger = trigger
         handler.removeCallbacksAndMessages(RETRY_TOKEN)
 
-        // The floating app's pixel bounds (anchored presets have exactly this one foreign
-        // window), used both to park stale apps behind it and to reserve the panel strip.
-        val floatingBounds = ordered.firstOrNull { it.packageName != WitsPackages.SELF }
-            ?.bounds?.toPixels(area)
+        val parked = parkStaleWindows(plan.keep, plan.park.bounds, plan.park.mode, myGeneration)
 
-        // Windows left over from the previous layout would keep floating above the new one,
-        // because a freeform task always draws over fullscreen tasks and the vendor hook has
-        // no "close window" verb. Park them out of the way — behind the Cockpit's floating
-        // tile for an anchored layout (the panel is a tile now, so a fullscreen park would
-        // fill the screen), or fullscreen for a tiled layout.
-        val parked = if (preset.kind == PresetKind.ANCHORED && floatingBounds != null) {
-            parkStaleWindows(
-                ordered.map { it.packageName }.toSet(), floatingBounds,
-                WitsWindowMode.FREEFORM, myGeneration,
-            )
-        } else {
-            parkStaleWindows(
-                ordered.map { it.packageName }.toSet(),
-                windowController.fullDisplayArea(appContext), WitsWindowMode.FULLSCREEN,
-                myGeneration,
-            )
-        }
-
-        // An anchored preset brings the companion up as the panel tile beside the map. The panel is
-        // NOT one of the preset's windows (an anchored preset carries only the foreign app), so its
-        // bounds are computed here — and hoisted so the verification below can expect it too.
-        val panelBounds =
-            if (preset.kind == PresetKind.ANCHORED && floatingBounds != null) {
-                panelComplement(ordered.first { w -> w.packageName != WitsPackages.SELF }.bounds, area)
-            } else {
-                null
-            }
-        var offset = 0L
-        if (preset.kind == PresetKind.ANCHORED) {
-            handler.postDelayed(
-                { if (stillValid(myGeneration, "anchor", WitsPackages.SELF)) bringAnchorToFront(panelBounds) },
-                parked * PARK_DELAY_MS,
-            )
-            offset = parked * PARK_DELAY_MS + ANCHOR_SETTLE_MS
-        } else if (parked > 0) {
-            offset = parked * PARK_DELAY_MS
-        }
-
-        ordered.forEachIndexed { index, window ->
-            if (!windowController.isLaunchable(window.packageName)) {
-                warnings += "${window.packageName} is not installed or has no launcher activity"
-                logger?.log(
-                    "layout", "skip_window", window.packageName, result = "not_launchable"
-                )
-                return@forEachIndexed
-            }
-
-            // Deep link first, so the task exists before we reposition it.
-            window.launchIntentUri?.let { uri ->
-                windowController.startDeepLink(uri, window.packageName)
-            }
-
-            val pixels = window.bounds.toPixels(area)
-
-            // Phase 1 — geometry for every tile, before any of them is launched. A
-            // preserved-live tile is repositioned only if it can be moved in place; a live
-            // task in another mode is left untouched rather than relaunched.
-            val preserve = window.packageName in preserveLive
-            // The Cockpit's floating app must come to the FRONT of its tile — otherwise one that is
-            // hidden (behind the previous app, or behind the launcher after the vendor Home button)
-            // just gets resized in place and stays hidden. This holds on a route-safe reassert too:
-            // place()'s bring-to-front is a plain startActivity (launchIntoFreeform), which brings the
-            // EXISTING task forward — "brought to the front", NO relaunch, so a live Maps route
-            // survives — and is NON-exclusive, so the panel tile stays visible. `[RUNTIME]`
-            // 2026-08-12: probed on the head unit — `am start` fronts the map over the launcher
-            // without hiding the panel; `startActivityFromRecents` (tried in 732c089) is exclusive
-            // and hid the panel, so it was reverted.
-            val bringToFront = preset.kind == PresetKind.ANCHORED &&
-                window.packageName != WitsPackages.SELF
+        // The panel goes up first for an anchored preset, then the tiles settle beside it.
+        var base = parked * LayoutSchedule.PARK_DELAY_MS
+        if (plan.anchored) {
             handler.postDelayed(
                 {
-                    if (stillValid(myGeneration, "geometry", window.packageName)) {
-                        windowController.applyWindow(
-                            WitsWindowController.WindowRequest(
-                                window.packageName, pixels, window.windowMode
-                            ),
-                            preserveLive = preserve,
-                            bringToFront = bringToFront,
-                        )
+                    if (stillValid(myGeneration, "anchor", WitsPackages.SELF)) {
+                        bringAnchorToFront(plan.panelBounds)
                     }
                 },
-                offset + index * GEOMETRY_DELAY_MS,
+                base,
             )
-
-            // Phase 2 — make every tile visible, after all geometry has landed.
-            // A package that was already live is skipped here: the geometry phase has
-            // repositioned it in place, and launching it would send a MAIN intent that
-            // could reset the app (an active Maps route, an open menu). See reassert().
-            if (window.packageName in preserveLive) {
-                logger?.log("layout", "preserve_live", window.packageName, result = "no_relaunch")
-                return@forEachIndexed
-            }
-            handler.postDelayed(
-                {
-                    if (stillValid(myGeneration, "make_visible", window.packageName)) {
-                        windowController.launchPackage(window.packageName, pixels, window.windowMode)
-                    }
-                },
-                offset + launchPhaseStart(ordered.size) + index * LAUNCH_DELAY_MS,
-            )
+            base += LayoutSchedule.ANCHOR_SETTLE_MS
         }
 
-        lastAppliedPackages = ordered.map { it.packageName }.toSet()
+        plan.steps.forEach { step -> dispatch(step, base, myGeneration) }
+
+        lastAppliedPackages = plan.keep
         layoutOwned = true
         rateLimiter.record(ActionRateLimiter.KEY_LAYOUT)
         logger?.log(
             category = "layout", action = "apply",
             extras = mapOf(
                 "preset" to preset.id,
-                "windows" to ordered.size,
+                "windows" to plan.windowCount,
                 "trigger" to trigger.name,
                 "area" to area.flattenToString(),
             ),
             result = "sent", confidence = "HYP",
         )
 
-        scheduleRetries(preset, area, ordered, retries.coerceIn(0, MAX_RETRIES), myGeneration, preserveLive)
+        scheduleRetries(preset, plan, LayoutSchedule.retryPasses(retries), myGeneration)
+        scheduleVerification(preset, plan.expected, plan.windowCount, myGeneration, verifyAttempt)
 
-        // What this apply intends the screen to look like — the yardstick for the verification.
-        // Captured from the apply itself rather than derived from stored state, so "panel full-screen"
-        // is only ever wrong when THIS apply meant it to be a tile (the hidden state applies its own
-        // full-screen panel and is verified against that).
-        val expected = buildList {
-            ordered.forEach { w ->
-                if (windowController.isLaunchable(w.packageName)) {
-                    add(ExpectedTile(w.packageName, w.bounds.toPixels(area)))
-                }
-            }
-            if (panelBounds != null) add(ExpectedTile(WitsPackages.SELF, panelBounds))
-        }
-        scheduleVerification(preset, expected, ordered.size, myGeneration, verifyAttempt)
-
-        // Report what was actually dispatched, not what the preset asked for. `expected` is
-        // exactly the set of tiles this apply put on screen — launchable windows, plus the
-        // panel an anchored preset does not carry as a window — so a preset whose apps are
-        // all missing no longer reports a cheerful "Applied 2 window(s)" while nothing moved.
-        if (expected.isEmpty()) {
-            // Preflight above should have caught this; reaching here means an anchored preset
-            // produced no panel bounds either, so nothing was dispatched after all.
-            logger?.log(
-                "layout", "apply", extras = mapOf("preset" to preset.id),
-                result = "nothing_dispatched",
-            )
-            return Result.Refused(
-                "nothing to place: no app in this layout is installed with a launcher activity"
-            )
-        }
-
-        return Result.Applied(expected.size, warnings)
+        // Report what was actually dispatched, not what the preset asked for: `expected` is
+        // exactly the set of tiles this apply puts on screen — launchable windows, plus the
+        // panel an anchored preset does not carry as a window.
+        return Result.Applied(plan.expected.size, warnings)
     }
 
     /**
@@ -357,25 +267,22 @@ class LayoutEngine(
      */
     private fun scheduleRetries(
         preset: LayoutPreset,
-        area: android.graphics.Rect,
-        ordered: List<LayoutWindow>,
+        plan: LayoutPlan,
         retries: Int,
         myGeneration: Long,
-        preserveLive: Set<String>,
     ) {
         pendingRetries = retries
-        if (retries <= 0 || ordered.isEmpty()) return
+        if (retries <= 0) return
 
-        val n = ordered.size
+        // Only the windows the plan would launch: a preserved-live window is never relaunched,
+        // not even on a retry — it was already there, so there is nothing to repair and a launch
+        // would only risk resetting it. A window with nothing installed is not retried either.
+        val repeatable = plan.steps.filter { it.phase == LayoutPlan.Phase.LAUNCH }
+        if (repeatable.isEmpty()) return
 
-        RETRY_DELAYS_MS.take(retries).forEachIndexed { attempt, gap ->
-            val passStart = passDuration(n) + gap
-            ordered.forEachIndexed { index, window ->
-                // A preserved-live window is never relaunched, not even on a retry: it was
-                // already there, so there is nothing to repair and a launch would only risk
-                // resetting it.
-                if (window.packageName in preserveLive) return@forEachIndexed
-                val pixels = window.bounds.toPixels(area)
+        repeat(retries) { attempt ->
+            val passStart = LayoutSchedule.retryPassStart(plan.windowCount, attempt)
+            repeatable.forEach { step ->
                 // What a retry does depends on the path:
                 //  - Privileged: re-assert the geometry with resizeTask. Some apps (Spotify)
                 //    launch at the given bounds and then grow themselves to full width; a
@@ -386,20 +293,22 @@ class LayoutEngine(
                 //    would hide the other tiles and flash the layout — whereas an inclusive
                 //    launch carries the bounds itself and repairs a tile that never appeared.
                 handler.postDelayed({
-                    if (stillValid(myGeneration, "retry_visible", window.packageName) &&
-                        windowController.isLaunchable(window.packageName)
+                    if (stillValid(myGeneration, "retry_visible", step.packageName) &&
+                        windowController.isLaunchable(step.packageName)
                     ) {
-                        // With in-place movement available, applyWindow repositions without
-                        // fronting; without it the only way to re-place a tile is to launch it.
                         if (windowController.taskResizer != null) {
                             windowController.applyWindow(
-                                WitsWindowController.WindowRequest(window.packageName, pixels, window.windowMode)
+                                WitsWindowController.WindowRequest(
+                                    step.packageName, step.bounds, step.windowMode
+                                )
                             )
                         } else {
-                            windowController.launchPackage(window.packageName, pixels, window.windowMode)
+                            windowController.launchPackage(
+                                step.packageName, step.bounds, step.windowMode
+                            )
                         }
                     }
-                }, RETRY_TOKEN, passStart + index * LAUNCH_DELAY_MS)
+                }, RETRY_TOKEN, passStart + step.index * LayoutSchedule.LAUNCH_DELAY_MS)
             }
             handler.postDelayed({
                 if (myGeneration == generation.get()) {
@@ -414,44 +323,39 @@ class LayoutEngine(
     }
 
     /**
-     * The absolute times, in ms from `apply()`, at which each broadcast is scheduled.
-     * Exposed for tests so the schedule can be asserted without a device.
+     * Sends one planned step, gated at fire time on the generation and on the vehicle still
+     * being safe — not merely on what was true when the layout was requested.
      */
-    fun scheduleFor(windowCount: Int, retries: Int): List<Long> {
-        if (windowCount <= 0) return emptyList()
-        val out = mutableListOf<Long>()
-        // Initial pass: geometry for every tile, then a launch for every tile.
-        repeat(windowCount) { i -> out += i * GEOMETRY_DELAY_MS }
-        val launchBase = launchPhaseStart(windowCount)
-        repeat(windowCount) { i -> out += launchBase + i * LAUNCH_DELAY_MS }
-        // Retry passes: launches only, so a retry never hides a placed tile.
-        RETRY_DELAYS_MS.take(retries.coerceIn(0, MAX_RETRIES)).forEach { gap ->
-            val base = passDuration(windowCount) + gap
-            repeat(windowCount) { i -> out += base + i * LAUNCH_DELAY_MS }
+    private fun dispatch(step: LayoutPlan.Step, base: Long, myGeneration: Long) {
+        when (step.phase) {
+            LayoutPlan.Phase.GEOMETRY -> {
+                // Deep link first, and immediately, so the task exists before it is positioned.
+                step.launchIntentUri?.let { uri ->
+                    windowController.startDeepLink(uri, step.packageName)
+                }
+                if (step.preserveLive) {
+                    logger?.log("layout", "preserve_live", step.packageName, result = "no_relaunch")
+                }
+                handler.postDelayed({
+                    if (stillValid(myGeneration, "geometry", step.packageName)) {
+                        windowController.applyWindow(
+                            WitsWindowController.WindowRequest(
+                                step.packageName, step.bounds, step.windowMode
+                            ),
+                            preserveLive = step.preserveLive,
+                            bringToFront = step.bringToFront,
+                        )
+                    }
+                }, base + step.offsetMs)
+            }
+
+            LayoutPlan.Phase.LAUNCH -> handler.postDelayed({
+                if (stillValid(myGeneration, "make_visible", step.packageName)) {
+                    windowController.launchPackage(step.packageName, step.bounds, step.windowMode)
+                }
+            }, base + step.offsetMs)
         }
-        return out
     }
-
-    /**
-     * When the visibility phase starts, relative to the start of a pass: after every
-     * `CHANGE_WINDOW` has been sent, plus a settle gap.
-     *
-     * The two phases must not interleave. `CHANGE_WINDOW` takes the vendor hook's warm
-     * path (`getFreeformTaskId` → `startActivityFromRecents`), which brings its own task
-     * forward and drops every other freeform task to `visibleRequested=false`. A plain
-     * launch is inclusive — it shows a task without hiding its neighbours — but it does
-     * not set the windowing mode for a task that does not exist yet.
-     *
-     * So: all geometry first (exclusive, but only the last one's visibility survives),
-     * then all launches (inclusive, and they inherit the bounds already set).
-     * `[RUNTIME]` 2026-07-31, verified by dumpsys — see research/window-debug/.
-     */
-    private fun launchPhaseStart(windowCount: Int): Long =
-        (windowCount - 1).coerceAtLeast(0) * GEOMETRY_DELAY_MS + PHASE_GAP_MS
-
-    /** Total length of one full pass (geometry phase + visibility phase). */
-    private fun passDuration(windowCount: Int): Long =
-        launchPhaseStart(windowCount) + (windowCount - 1).coerceAtLeast(0) * LAUNCH_DELAY_MS
 
     /**
      * Schedules the post-apply verification — the "did what I just did actually take?" check.
@@ -475,9 +379,9 @@ class LayoutEngine(
         // Verification needs to read live task state; without that it could send corrections
         // but never find out whether the layout took.
         if (windowController.taskObserver == null || expected.isEmpty()) return
-        if (attempt >= VERIFY_DELAYS_MS.size) return
+        if (attempt >= LayoutSchedule.VERIFY_DELAYS_MS.size) return
         // Measured from the end of the pass, like the retries, so the two never overlap.
-        val delay = passDuration(windowCount) + VERIFY_DELAYS_MS[attempt]
+        val delay = LayoutSchedule.verificationAt(windowCount, attempt)
         handler.postDelayed(
             { verifyPlacement(preset, expected, myGeneration, attempt) },
             RETRY_TOKEN,
@@ -487,7 +391,7 @@ class LayoutEngine(
 
     /**
      * Compares the live task state with what the apply intended and, on a mismatch, re-asserts the
-     * layout once more (bounded by [VERIFY_DELAYS_MS]).
+     * layout once more (bounded by [LayoutSchedule.VERIFY_DELAYS_MS]).
      *
      * The correction is a **route-safe re-assert**, not a fresh apply: a live app is repositioned and
      * fronted rather than relaunched, so a running Maps route survives a repair. That matters because
@@ -625,7 +529,7 @@ class LayoutEngine(
                 handler.postDelayed(
                     { if (stillValid(myGeneration, "remove_stale", pkg)) remover.remove(task.taskId) },
                     RETRY_TOKEN,
-                    index * PARK_DELAY_MS,
+                    index * LayoutSchedule.PARK_DELAY_MS,
                 )
             }
             logger?.log(
@@ -647,7 +551,7 @@ class LayoutEngine(
                         WitsWindowController.WindowRequest(pkg, parkBounds, parkMode)
                     )
                 }
-            }, RETRY_TOKEN, index * PARK_DELAY_MS)
+            }, RETRY_TOKEN, index * LayoutSchedule.PARK_DELAY_MS)
         }
         logger?.log(
             "layout", "park_stale",
@@ -706,32 +610,6 @@ class LayoutEngine(
     }
 
     /**
-     * The panel's pixel bounds for an anchored layout: the strip the map does **not** cover.
-     * Null when the map is not flush to an edge (then the panel stays fullscreen).
-     */
-    private fun panelComplement(mapBounds: NormalizedBounds, area: android.graphics.Rect): android.graphics.Rect? {
-        val panel = when {
-            mapBounds.left <= 0.01f && mapBounds.right < 0.99f ->
-                NormalizedBounds(mapBounds.right, 0f, 1f, 1f)   // map left  → panel right
-            mapBounds.right >= 0.99f && mapBounds.left > 0.01f ->
-                NormalizedBounds(0f, 0f, mapBounds.left, 1f)    // map right → panel left
-            else -> return null
-        }
-        return panel.toPixels(area)
-    }
-
-    /**
-     * The Cockpit's **floating-app (left) tile** in normalized bounds: `[0,0,split,1]`, mirrored to
-     * `[1-split,0,1,1]` when [swapped]. The single split→geometry primitive both cockpit-bounds
-     * helpers (and, via the panel's [DashboardActivity.reservation], the black-strip reservation)
-     * derive from, so the app tile, the panel complement and the reserved strip can never disagree.
-     */
-    private fun appTileNormalized(split: Float, swapped: Boolean): NormalizedBounds {
-        val f = split.coerceIn(LayoutPreset.MIN_SPLIT, LayoutPreset.MAX_SPLIT)
-        return if (swapped) NormalizedBounds(1f - f, 0f, 1f, 1f) else NormalizedBounds(0f, 0f, f, 1f)
-    }
-
-    /**
      * The pixel bounds the Cockpit panel window should occupy: the complement tile beside the
      * floating app when one is showing, or the whole display when the app is hidden. The panel
      * uses this to resize **its own** task ([DashboardActivity.ensurePanelBounds]) because a
@@ -739,10 +617,11 @@ class LayoutEngine(
      * full-screen. Same geometry the anchored [apply] places the app with.
      */
     fun cockpitPanelBounds(split: Float, swapped: Boolean, hidden: Boolean): android.graphics.Rect {
-        val full = windowController.fullDisplayArea(appContext)
-        if (hidden) return full
-        val area = windowController.usableArea(appContext)
-        return panelComplement(appTileNormalized(split, swapped), area) ?: full
+        return LayoutGeometry.panelBounds(
+            split, swapped, hidden,
+            area = windowController.usableArea(appContext),
+            full = windowController.fullDisplayArea(appContext),
+        )
     }
 
     /**
@@ -753,7 +632,7 @@ class LayoutEngine(
      */
     fun cockpitAppBounds(split: Float, swapped: Boolean): android.graphics.Rect {
         val area = windowController.usableArea(appContext)
-        return appTileNormalized(split, swapped).toPixels(area)
+        return LayoutGeometry.appBounds(split, swapped, area)
     }
 
     /**
@@ -849,7 +728,7 @@ class LayoutEngine(
         if (bulkRemover != null) {
             val removed = bulkRemover.removeAllFreeform()
             if (thenGoHome) {
-                handler.postDelayed({ if (myGeneration == generation.get()) goHome() }, ANCHOR_SETTLE_MS)
+                handler.postDelayed({ if (myGeneration == generation.get()) goHome() }, LayoutSchedule.ANCHOR_SETTLE_MS)
             }
             lastAppliedPackages = emptySet()
             logger?.log(
@@ -874,13 +753,13 @@ class LayoutEngine(
                         WitsWindowController.WindowRequest(pkg, full, WitsWindowMode.FULLSCREEN)
                     )
                 }
-            }, index * PARK_DELAY_MS)
+            }, index * LayoutSchedule.PARK_DELAY_MS)
         }
 
         if (thenGoHome) {
             handler.postDelayed({
                 if (myGeneration == generation.get()) goHome()
-            }, tiles.size * PARK_DELAY_MS + ANCHOR_SETTLE_MS)
+            }, tiles.size * LayoutSchedule.PARK_DELAY_MS + LayoutSchedule.ANCHOR_SETTLE_MS)
         }
 
         lastAppliedPackages = emptySet()
@@ -964,7 +843,7 @@ class LayoutEngine(
         //    freeform tile that draws over the app below; the panel then reserves the strip itself.
         handler.postDelayed(
             { if (myGeneration == generation.get()) bringAnchorToFront(full) },
-            PARK_DELAY_MS,
+            LayoutSchedule.PARK_DELAY_MS,
         )
         lastAppliedPackages = setOf(WitsPackages.SELF)
         logger?.log(
@@ -974,36 +853,10 @@ class LayoutEngine(
         return Result.Applied(windows = 1, warnings = emptyList())
     }
 
-    companion object {
-        /** Gap between two CHANGE_WINDOW sends inside the geometry phase. */
-        const val GEOMETRY_DELAY_MS = 250L
-        /** Settle time after the last CHANGE_WINDOW, before the first launch. */
-        const val PHASE_GAP_MS = 600L
-        /** Gap between two launches inside the visibility phase. */
-        const val LAUNCH_DELAY_MS = 700L
-        const val PARK_DELAY_MS = 250L
-        const val ANCHOR_SETTLE_MS = 450L
-        const val DEFAULT_RETRIES = 1
-        const val MAX_RETRIES = 2
+    private companion object {
+        const val TAG = "LayoutEngine"
 
-        /**
-         * When the post-apply verification runs, measured from the END of the pass — and, by its
-         * length, how many corrections are allowed (2). Deliberately later than [RETRY_DELAYS_MS]:
-         * the failure it targets is "freeform was not ready yet", which the blind retries are too
-         * early to catch. Each correction relaunches nothing but does re-assert, so the budget stays
-         * small — an unbounded loop would fight the vendor stack.
-         */
-        val VERIFY_DELAYS_MS = listOf(3_000L, 8_000L)
-
-
-        private const val TAG = "LayoutEngine"
-
-        /**
-         * Gaps measured from the END of the initial pass, not from apply().
-         * docs/window-management.md §7.
-         */
-        val RETRY_DELAYS_MS = listOf(600L, 1_600L)
-
-        private val RETRY_TOKEN = Any()
+        /** Token for every delayed send that a cancel has to be able to sweep. */
+        val RETRY_TOKEN = Any()
     }
 }
