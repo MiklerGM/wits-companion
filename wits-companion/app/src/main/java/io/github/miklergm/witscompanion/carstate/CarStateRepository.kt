@@ -30,6 +30,16 @@ class CarStateRepository(
 
     fun interface Observer {
         fun onCarState(state: CarState)
+
+        /**
+         * The data source changed, **called synchronously on the switching thread**.
+         *
+         * Entering simulation is a boundary, and a boundary announced asynchronously is not one:
+         * work already queued would still fire in the gap, authorised by real telemetry the user
+         * has just replaced with a fabrication. An observer that has queued anything should
+         * cancel it here, before the first simulated snapshot exists.
+         */
+        fun onSimulationChanged(enabled: Boolean) = Unit
     }
 
     @Volatile
@@ -46,6 +56,9 @@ class CarStateRepository(
 
     private val observers = CopyOnWriteArrayList<Observer>()
     private val stateLock = Any()
+
+    /** Bumped on every simulation mode change; guarded by [stateLock]. See [publish]. */
+    private var simulationEpoch = 0L
 
     /**
      * Owns every state computation. Not thread-safe on purpose — [commit] is the lock that
@@ -112,10 +125,22 @@ class CarStateRepository(
 
     fun setSimulationEnabled(enabled: Boolean) {
         if (simulationEnabled == enabled) return
+
+        // Every publish carries the epoch it was started under, so a simulator tick already in
+        // flight when the mode changes cannot land afterwards. `quitSafely()` lets the message
+        // the looper is currently processing finish, and the simulator's own running flag can be
+        // passed a moment before stop() sets it — the epoch is the check that cannot be raced,
+        // because it is read under the lock that guards the state it would overwrite.
+        val epoch = synchronized(stateLock) { ++simulationEpoch }
         simulationEnabled = enabled
         logger?.log("carstate", if (enabled) "simulation_on" else "simulation_off")
+
+        // Synchronous, before any simulated data exists: observers with queued work cancel it now.
+        observers.forEach { runCatching { it.onSimulationChanged(enabled) } }
+
         if (enabled) {
-            simulator = CarStateSimulator { simulated -> publish(simulated) }.also { it.start() }
+            simulator = CarStateSimulator { simulated -> publish(simulated, epoch) }
+                .also { it.start() }
         } else {
             simulator?.stop()
             simulator = null
@@ -196,8 +221,14 @@ class CarStateRepository(
         notifyObservers(next)
     }
 
-    private fun publish(next: CarState) {
-        synchronized(stateLock) { state = reducer.adopt(next) }
+    /**
+     * Serves a snapshot from the simulator, provided the mode it belongs to is still current.
+     */
+    private fun publish(next: CarState, epoch: Long) {
+        synchronized(stateLock) {
+            if (epoch != simulationEpoch) return
+            state = reducer.adopt(next)
+        }
         notifyObservers(next)
     }
 

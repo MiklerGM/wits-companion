@@ -52,15 +52,20 @@ class LayoutRecoveryCoordinator(
      * rather than against fiction. The cost is that a genuine transition occurring while
      * simulation is running is missed, which is the correct trade for a debug mode.
      */
+    /**
+     * Work queued before simulation started would still fire, on the last *real* state — an
+     * automatic restore authorised by telemetry the user has since replaced with a fabrication.
+     * Cancelling on the first simulated snapshot left a gap; this runs on the switching thread,
+     * before any simulated data exists.
+     */
+    override fun onSimulationChanged(enabled: Boolean) {
+        if (enabled) engine.cancelPending()
+    }
+
     override fun onCarState(state: CarState) {
         if (state.simulated) {
             if (!announcedSimulation) {
                 announcedSimulation = true
-                // Work queued before simulation started would still fire, on the last *real*
-                // state — an automatic restore that was authorised by telemetry the user has
-                // since replaced with a fabrication. Entering simulation is a boundary, so
-                // clear what is in flight rather than letting it land during it.
-                engine.cancelPending()
                 logger?.log("layout", "auto_restore_skipped", result = "simulation")
             }
             return
