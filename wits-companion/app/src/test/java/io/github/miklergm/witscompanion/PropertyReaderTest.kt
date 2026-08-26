@@ -80,23 +80,51 @@ class PropertyReaderTest {
     }
 
     @Test(timeout = 20_000)
-    fun `a timed-out refresh leaves the previous cache intact`() {
-        // Absence of a property is *no new information* to CarSignalReducer, never a negative
-        // reading — which is what stops a wedged subprocess from being able to clear a safety
-        // signal. That only holds if a failed refresh keeps what the last good one read.
+    fun `a failed refresh reports failure and stops serving the old dump`() {
+        // The correction to my own first attempt at this. Keeping the cache looked like the
+        // conservative choice — nothing is *lost* — but every caller of get() then sees a value
+        // indistinguishable from a fresh read, and CarStateRepository turns a read into a
+        // reading stamped with the current time. A single successful `wits.reverse=0` would stay
+        // control-grade for as long as getprop kept failing, which is the exact state the
+        // freshness rule exists to fail closed on. An empty cache reads as unknown, and unknown
+        // is what the reducer and the guards are built for.
         val marker = File(temp.root, "probed")
         val firstGoodThenWedged = sh(
             """if [ -e '${marker.absolutePath}' ]; then exec sleep 30; """ +
-                """else : > '${marker.absolutePath}'; printf '[wits.reverse]: [1]\n[a.b]: [2]\n'; fi""",
+                """else : > '${marker.absolutePath}'; printf '[wits.reverse]: [0]\n[a.b]: [2]\n'; fi""",
         )
 
         val reader = PropertyReader(firstGoodThenWedged, bulkTimeoutMs = 500)
         assertEquals(PropertyReader.Strategy.GETPROP_BULK, reader.activeStrategy)
-        assertEquals("1", reader.get("wits.reverse"))
+        assertEquals("0", reader.get("wits.reverse"))
 
-        assertEquals("a wedged refresh reports nothing", 0, reader.refreshBulk())
-        assertEquals("the last good reading must survive it", "1", reader.get("wits.reverse"))
-        assertEquals("2", reader.get("a.b"))
+        val refresh = reader.refreshBulk()
+
+        assertTrue("got $refresh", refresh is PropertyReader.BulkRefresh.Failed)
+        assertNull("a stale reading must not be served as a current one", reader.get("wits.reverse"))
+        assertNull(reader.get("a.b"))
+    }
+
+    @Test
+    fun `a successful refresh reports how much it read`() {
+        val reader = PropertyReader(sh("""printf '[a.b]: [1]\n[c.d]: [2]\n'"""))
+
+        val refresh = reader.refreshBulk()
+
+        assertEquals(PropertyReader.BulkRefresh.Refreshed(2), refresh)
+        assertTrue(refresh.current)
+        assertEquals("1", reader.get("a.b"))
+    }
+
+    @Test
+    fun `output that parses but exits non-zero is not a reading`() {
+        // A dump cut short partway can still emit well-formed lines. Every property after the
+        // cut then reads as absent, which is a different claim from "not read".
+        val reader = PropertyReader(sh("""printf '[a.b]: [1]\n'; exit 3"""))
+
+        assertEquals(PropertyReader.Strategy.UNAVAILABLE, reader.activeStrategy)
+        assertNull(reader.get("a.b"))
+        assertTrue(reader.diagnostics.contains("exited 3"))
     }
 
     // ------------------------------------------------------------------ failures

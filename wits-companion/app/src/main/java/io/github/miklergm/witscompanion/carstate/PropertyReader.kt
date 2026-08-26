@@ -43,6 +43,29 @@ class PropertyReader(
 
     enum class Strategy { REFLECTION, GETPROP_BULK, UNAVAILABLE }
 
+    /**
+     * What one call to [refreshBulk] achieved.
+     *
+     * Typed because the caller has to be able to tell "these readings are current" from "these
+     * readings are whatever was here last time", and an `Int` could not. Returning 0 for a
+     * failed dump looked harmless — the cache was kept, so nothing was *lost* — but the poll
+     * loop then read that kept cache and the reducer stamped it with the current time. One
+     * successful `reverse=false` stayed control-fresh for as long as `getprop` kept failing,
+     * which is precisely the state the freshness rule exists to fail closed on.
+     */
+    sealed interface BulkRefresh {
+        /** The active strategy reads in-process; there is nothing to refresh. */
+        data object NotNeeded : BulkRefresh
+
+        data class Refreshed(val count: Int) : BulkRefresh
+
+        /** No dump was obtained. Nothing read now may be treated as a current reading. */
+        data class Failed(val reason: String) : BulkRefresh
+
+        /** True when a property read may be taken as a reading of *now*. */
+        val current: Boolean get() = this !is Failed
+    }
+
     @Volatile
     var activeStrategy: Strategy = Strategy.UNAVAILABLE
         private set
@@ -118,17 +141,24 @@ class PropertyReader(
 
     /**
      * Refreshes the bulk cache with one subprocess call.
-     * Only meaningful for [Strategy.GETPROP_BULK]; a no-op otherwise.
+     * Only meaningful for [Strategy.GETPROP_BULK]; [BulkRefresh.NotNeeded] otherwise.
+     *
+     * On failure the cache is **emptied**, not kept. A kept cache is indistinguishable from a
+     * fresh read to every caller of [get], and the poll loop turns a read into a timestamped
+     * reading — so keeping it is how a stale `reverse=false` stays control-grade forever. An
+     * empty cache reads as "unknown", which is what the reducer and the guards are built to
+     * handle.
      *
      * Must be called off the main thread.
      */
-    fun refreshBulk(): Int {
-        if (activeStrategy != Strategy.GETPROP_BULK) return 0
+    fun refreshBulk(): BulkRefresh {
+        if (activeStrategy != Strategy.GETPROP_BULK) return BulkRefresh.NotNeeded
         return try {
-            refreshBulkInternal()
+            BulkRefresh.Refreshed(refreshBulkInternal())
         } catch (t: Throwable) {
             Log.w(TAG, "refreshBulk failed: ${t.message}")
-            0
+            synchronized(bulkCache) { bulkCache.clear() }
+            BulkRefresh.Failed("${t.javaClass.simpleName}: ${t.message}")
         }
     }
 
@@ -158,7 +188,12 @@ class PropertyReader(
      * handed the write end to a grandchild would keep it open; `getprop` does not fork, and the
      * reader is a daemon thread either way, so the caller returns on schedule regardless.
      *
+     * A **non-zero exit is a failure even when the output parsed**. Plausible-looking lines
+     * followed by a bad exit code mean the dump was cut short somewhere, and a short dump is a
+     * set of properties that silently read as absent.
+     *
      * @throws TimeoutException if the dump did not complete within [bulkTimeoutMs].
+     * @throws IllegalStateException if the command exited non-zero.
      */
     private fun refreshBulkInternal(): Int {
         val process = ProcessBuilder(bulkCommand).redirectErrorStream(true).start()
@@ -193,6 +228,14 @@ class PropertyReader(
         }
         failure.get()?.let { throw it }
 
+        // The reader saw EOF, so the child has closed stdout and exiting is imminent; this wait
+        // is for the reaping, not for the work.
+        if (!process.waitFor(EXIT_GRACE_MS, TimeUnit.MILLISECONDS)) {
+            throw IllegalStateException("bulk property dump did not exit after closing stdout")
+        }
+        val exit = process.exitValue()
+        if (exit != 0) throw IllegalStateException("bulk property dump exited $exit")
+
         // `parsed` is only read after await() returned true, which orders the reader's writes
         // before this thread — no lock needed on it, and none taken inside the loop.
         synchronized(bulkCache) {
@@ -220,6 +263,9 @@ class PropertyReader(
          * reflection is blocked — this one reads properties in-process, so it never gets here.
          */
         const val DEFAULT_BULK_TIMEOUT_MS = 2_000L
+
+        /** How long to wait for the child to be reaped once it has closed its output. */
+        const val EXIT_GRACE_MS = 250L
         val GETPROP_LINE = Regex("""\[([^\]]*)]:\s*\[(.*)]""")
     }
 }

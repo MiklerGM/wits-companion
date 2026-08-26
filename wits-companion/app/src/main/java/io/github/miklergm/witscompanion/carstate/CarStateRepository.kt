@@ -131,8 +131,19 @@ class CarStateRepository(
             if (!running) return
             if (!simulationEnabled) {
                 try {
-                    propertyReader.refreshBulk()
-                    pollProperties()
+                    // Only a dump that actually happened is a reading. Reducing regardless would
+                    // re-stamp whatever the reader still held with the current time, which is how
+                    // a single successful `reverse=false` could stay control-grade for as long as
+                    // `getprop` kept failing — exactly the case the freshness rule exists for. A
+                    // skipped round leaves the last reading at its own timestamp, so it ages and
+                    // automatic actions fail closed.
+                    when (val refresh = propertyReader.refreshBulk()) {
+                        is PropertyReader.BulkRefresh.Failed -> logger?.log(
+                            "carstate", "poll_skipped",
+                            extras = mapOf("reason" to refresh.reason), result = "no_reading",
+                        )
+                        else -> pollProperties()
+                    }
                 } catch (t: Throwable) {
                     logger?.log("carstate", "poll_error", result = t.javaClass.simpleName)
                 }
