@@ -142,6 +142,13 @@ object CockpitState {
     /**
      * The rail's app tiles: the vendor's own preferred slots first, then the usual suspects,
      * filtered to what is actually installed and capped at four so the rail stays reachable.
+     *
+     * The companion is never one of them. The rail chooses which app *floats beside the
+     * panel*, and the panel is the companion — a tile for it would offer to float the Cockpit
+     * over itself. Nothing else filters it out: the vendor slots are plain `Settings.System`
+     * strings, `isLaunchable` is perfectly happy with our own package, and binding the Cockpit
+     * to the vendor's NaviApp slot is a change this project actually intends to make, which is
+     * precisely when the value would appear here.
      */
     fun railPackages(
         vendorNavigation: String?,
@@ -152,7 +159,10 @@ object CockpitState {
     ): List<String> = listOfNotNull(
         vendorNavigation, vendorMusic, vendorVideo,
         WitsPackages.MAPS, WitsPackages.CHROME, WitsPackages.SPOTIFY,
-    ).distinct().filter(isLaunchable).take(limit)
+    ).distinct()
+        .filter { it != WitsPackages.SELF }
+        .filter(isLaunchable)
+        .take(limit)
 
     /**
      * Where the floating app sits, so the panel leaves that strip empty on the correct side.

@@ -135,6 +135,22 @@ class CockpitStateTest {
         assertEquals("no duplicates", rail.size, rail.distinct().size)
     }
 
+    @Test
+    fun `the companion never appears in its own rail`() {
+        // The vendor slots are plain Settings.System strings, and binding the Cockpit to the
+        // NaviApp slot is a change this project intends to make — at which point our own
+        // package arrives here. A tile for it would offer to float the panel over itself.
+        val rail = CockpitState.railPackages(
+            vendorNavigation = WitsPackages.SELF,
+            vendorMusic = null,
+            vendorVideo = null,
+            isLaunchable = { true },
+        )
+
+        assertFalse(WitsPackages.SELF in rail)
+        assertEquals(WitsPackages.MAPS, rail.first())
+    }
+
     // ------------------------------------------------------------ reservation
 
     @Test

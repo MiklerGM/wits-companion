@@ -1,9 +1,17 @@
 package io.github.miklergm.witscompanion
 
 import android.content.Intent
+import io.github.miklergm.witscompanion.carstate.Availability
 import io.github.miklergm.witscompanion.carstate.BroadcastUpdate
+import io.github.miklergm.witscompanion.carstate.CarState
+import io.github.miklergm.witscompanion.carstate.SignalSource
+import io.github.miklergm.witscompanion.carstate.SignalValue
 import io.github.miklergm.witscompanion.carstate.WitsBroadcastReceiver
+import io.github.miklergm.witscompanion.layout.LayoutEngine
+import io.github.miklergm.witscompanion.safety.ActionRateLimiter
+import io.github.miklergm.witscompanion.safety.ReverseGuard
 import io.github.miklergm.witscompanion.wits.WitsActions
+import io.github.miklergm.witscompanion.wits.WitsWindowController
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -11,6 +19,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import java.io.File
 
 /**
@@ -471,6 +480,54 @@ class ReceiverAndGenerationTest {
             src.contains("fun onActivityResumed(state: CarState): Boolean {\n        if (state.simulated) return false"),
         )
         assertTrue(src.contains("if (state.simulated) {\n            return LayoutEngine.Result.Refused"))
+    }
+
+    /**
+     * The other half of the Cockpit's app toggle had no guard at all.
+     *
+     * `floatApp` documents going through the engine "so the reverse guard, the rate limiter and
+     * the two-phase ordering all still apply". Tapping the *lit* tile called
+     * `hideFloatingApp`, which moved the floating window and grew the panel to the full display
+     * past all three — over the reverse camera, if that is what was under it.
+     */
+    @Test
+    fun `hiding the floating app is refused while reversing`() {
+        val context = RuntimeEnvironment.getApplication()
+        val engine = LayoutEngine(
+            appContext = context,
+            windowController = WitsWindowController(context),
+            reverseGuard = ReverseGuard(clock = { 2_000L }),
+            rateLimiter = ActionRateLimiter(),
+        )
+        val reversing = CarState(
+            reverse = SignalValue(true, Availability.VALID, SignalSource.PROPERTY, 1_000L, "1"),
+        )
+
+        val result = engine.hideFloatingApp("com.google.android.apps.maps", reversing)
+
+        assertTrue("got $result", result is LayoutEngine.Result.Refused)
+    }
+
+    @Test
+    fun `the refusal happens before anything is cancelled`() {
+        // A refusal that has already torn down in-flight work is not a refusal.
+        val src = sourceOf("layout/LayoutEngine.kt")
+        val body = src.substringAfter("fun hideFloatingApp(").substringBefore("\n    }")
+        assertTrue(
+            "the guard must be checked before cancelPending()",
+            body.indexOf("reverseGuard.check") < body.indexOf("cancelPending()"),
+        )
+    }
+
+    @Test
+    fun `the panel records itself hidden only when the engine agreed`() {
+        val src = sourceOf("ui/DashboardActivity.kt")
+        val body = src.substringAfter("private fun hideFloatingApp() {").substringBefore("\n    }")
+        assertTrue(
+            "cockpitLeft must be written inside the Applied branch, after the call",
+            body.indexOf("hideFloatingApp(current") < body.indexOf("cockpitLeft = CockpitLeft.Hidden"),
+        )
+        assertTrue("a refusal has to reach the user", body.contains("Result.Refused"))
     }
 
     @Test

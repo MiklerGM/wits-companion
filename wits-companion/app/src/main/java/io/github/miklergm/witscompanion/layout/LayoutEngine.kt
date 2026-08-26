@@ -72,12 +72,6 @@ class LayoutEngine(
     @Volatile
     private var layoutOwned: Boolean = false
 
-    /** One tile an apply intended to place, captured for [verifyPlacement]. */
-
-    /**
-     * @param trigger USER for a button press, AUTOMATIC for a restore
-     * @param retries how many bounded retries to schedule (0..2)
-     */
     /**
      * Packages that already have a live task, so a restore can tell "reposition" from
      * "launch". Only meaningful on the privileged path; empty otherwise, which makes the
@@ -920,9 +914,32 @@ class LayoutEngine(
      * toggle. The previously floating app is taken out of freeform so it drops behind the
      * now full-screen panel; a later [apply] (tapping any switcher tile) floats an app again.
      *
+     * Guarded like [apply], and for the same reason: this moves a real window and grows the
+     * panel to the whole display. Its sibling [io.github.miklergm.witscompanion.ui
+     * .DashboardActivity].floatApp already documented going through the engine "so the reverse
+     * guard, the rate limiter and the two-phase ordering all still apply" — and the *other half
+     * of the same toggle* went straight past all three. Tapping the lit rail tile while the
+     * reverse camera was up grew the panel over it.
+     *
+     * The check is a preflight: it refuses before [cancelPending], because a refusal that has
+     * already cancelled in-flight work is not a refusal. No rate limit, matching [apply]'s
+     * reasoning that a deliberate user tap must not be throttled.
+     *
      * @param floatingPackage the app that was floating, to un-window; null skips that step.
+     * @param state the vehicle state to check against, from the caller's snapshot.
      */
-    fun hideFloatingApp(floatingPackage: String?) {
+    fun hideFloatingApp(floatingPackage: String?, state: CarState): Result {
+        when (val verdict = reverseGuard.check(state, Trigger.USER)) {
+            is GuardVerdict.Blocked -> {
+                logger?.log(
+                    "layout", "hide_floating", floatingPackage ?: "none",
+                    result = "blocked:${verdict.reason}",
+                )
+                return Result.Refused(verdict.reason)
+            }
+            GuardVerdict.Allowed -> Unit
+        }
+
         cancelPending()
         val myGeneration = generation.get()
         val full = windowController.fullDisplayArea(appContext)
@@ -954,6 +971,7 @@ class LayoutEngine(
             "layout", "hide_floating",
             floatingPackage ?: "none", result = "panel_full",
         )
+        return Result.Applied(windows = 1, warnings = emptyList())
     }
 
     companion object {

@@ -945,11 +945,19 @@ class DashboardActivity : ComponentActivity() {
      */
     private fun hideFloatingApp() {
         val current = currentFloatingPackage()  // resolve before we clear the state
-        app.layoutRepository.cockpitLeft = CockpitLeft.Hidden
-        app.layoutEngine.hideFloatingApp(current)
-        settingsTile?.let { setTileSelected(it, selected = false) }
-        switcherTiles.forEach { (_, tile) -> setTileSelected(tile, selected = false) }
-        toast("App hidden")
+        // Ask first, then record. Writing cockpitLeft up front left the repository claiming
+        // the app was hidden whenever the engine refused — and it can now refuse, because
+        // this grows the panel over the whole display and the reverse camera can be under it.
+        when (val r = app.layoutEngine.hideFloatingApp(current, app.carStateRepository.state)) {
+            is LayoutEngine.Result.Applied -> {
+                app.layoutRepository.cockpitLeft = CockpitLeft.Hidden
+                settingsTile?.let { setTileSelected(it, selected = false) }
+                switcherTiles.forEach { (_, tile) -> setTileSelected(tile, selected = false) }
+                toast("App hidden")
+            }
+            is LayoutEngine.Result.Refused -> toast("Refused: ${r.reason}")
+            is LayoutEngine.Result.Invalid -> toast("Invalid: ${r.errors.firstOrNull()}")
+        }
     }
 
     /**
