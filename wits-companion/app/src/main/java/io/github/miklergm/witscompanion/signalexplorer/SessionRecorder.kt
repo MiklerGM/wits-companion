@@ -43,11 +43,33 @@ class SessionRecorder(
      * for the pending markers, an unsynchronized list for the markers themselves, and a
      * non-atomic `eventCount++` — all reached from several probe threads at once.
      */
+    /**
+     * Work that must not be dropped, however full the queue is.
+     *
+     * Events are droppable — losing the tail of a burst is the right failure for a research
+     * recorder. Finalization is not: [stop] queues the task that closes the open markers, writes
+     * the catalog delta and sets [finalized], and a handler that simply counted the drop and
+     * returned would discard it. The executor then terminated anyway, and [awaitFinalized] read
+     * termination as success — so an overloaded session was exported as complete while missing
+     * its closing markers.
+     */
+    private class ControlTask(private val body: () -> Unit) : Runnable {
+        override fun run() = body()
+    }
+
     private val io = ThreadPoolExecutor(
         1, 1, 0L, TimeUnit.MILLISECONDS,
         ArrayBlockingQueue(QUEUE_CAPACITY),
         { r -> Thread(r, "wits-session") },
-    ) { _, _ -> dropped.incrementAndGet() }
+    ) { r, executor ->
+        // A control task waits for room rather than being discarded. Safe to block here:
+        // `active` is already false by the time one is queued, so producers have stopped and
+        // the queue only drains from this point.
+        val queued = r is ControlTask && !executor.isShutdown &&
+            runCatching { executor.queue.offer(r, CONTROL_WAIT_MS, TimeUnit.MILLISECONDS) }
+                .getOrDefault(false)
+        if (!queued) dropped.incrementAndGet()
+    }
 
     /**
      * Events discarded because the actor could not keep up.
@@ -345,7 +367,7 @@ class SessionRecorder(
         active = false   // producers stop here; record() and recordSnapshot() are now no-ops
 
         val last = seq.get()
-        io.execute {
+        io.execute(ControlTask {
             // Close any marker still waiting for its post-window. Actor-side like every other
             // mutation, and ordered after whatever events were already queued.
             pendingMarkers.forEach { (marker, _) ->
@@ -355,13 +377,18 @@ class SessionRecorder(
             pendingMarkers.clear()
 
             runCatching {
-                File(sessionDir, "catalog-delta.json")
-                    .writeText(delta.toJson(catalog).toString(2))
+                File(sessionDir, "catalog-delta.json").writeText(
+                    delta.toJson(catalog).apply {
+                        // Overload has to be visible in the export, or a session that lost the
+                        // tail of a burst looks exactly like one that had nothing to record.
+                        put("droppedEvents", dropped.get())
+                    }.toString(2)
+                )
             }.onFailure { Log.w(TAG, "catalog delta write failed: ${it.message}") }
             finalized = true
             runCatching { onFinalized?.invoke() }
                 .onFailure { Log.w(TAG, "finalize callback failed: ${it.message}") }
-        }
+        })
         // Accept no further work; everything already queued still runs.
         io.shutdown()
     }
@@ -388,7 +415,10 @@ class SessionRecorder(
      * the full session on disk (tests, and the export path). Returns false on timeout.
      */
     fun awaitFinalized(timeoutMs: Long): Boolean =
-        runCatching { io.awaitTermination(timeoutMs, TimeUnit.MILLISECONDS) }.getOrDefault(false)
+        runCatching { io.awaitTermination(timeoutMs, TimeUnit.MILLISECONDS) }.getOrDefault(false) &&
+            // Termination alone is not finalization: the executor terminates whether or not the
+            // finalizer ran. Only [finalized] says the session is actually complete on disk.
+            finalized
 
     companion object {
         private const val TAG = "WitsSessionRecorder"
@@ -401,6 +431,9 @@ class SessionRecorder(
          * and bounded so a flood cannot outrun the recorder into the heap.
          */
         const val QUEUE_CAPACITY = 4000
+
+        /** How long a control task waits for queue space before it is given up on. */
+        const val CONTROL_WAIT_MS = 5_000L
 
         /**
          * Ceiling on one session's JSONL. Broadcast extras can carry whole byte arrays as hex,

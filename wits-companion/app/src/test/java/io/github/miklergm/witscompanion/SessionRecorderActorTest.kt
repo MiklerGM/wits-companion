@@ -1,6 +1,7 @@
 package io.github.miklergm.witscompanion
 
 import androidx.test.core.app.ApplicationProvider
+import io.github.miklergm.witscompanion.signalexplorer.CatalogStatus
 import io.github.miklergm.witscompanion.signalexplorer.DeviceInfo
 import io.github.miklergm.witscompanion.signalexplorer.EventCatalog
 import io.github.miklergm.witscompanion.signalexplorer.EventKind
@@ -9,6 +10,7 @@ import io.github.miklergm.witscompanion.signalexplorer.MarkerType
 import io.github.miklergm.witscompanion.signalexplorer.OtaPhase
 import io.github.miklergm.witscompanion.signalexplorer.SessionMetadata
 import io.github.miklergm.witscompanion.signalexplorer.SessionRecorder
+import io.github.miklergm.witscompanion.signalexplorer.SourceState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -183,5 +185,48 @@ class SessionRecorderActorTest {
         rec.stop()
         rec.awaitFinalized(5_000)
         assertTrue("flush must not block forever once the actor is gone", !rec.flush(500))
+    }
+
+    // ------------------------------------------------- finalization under load
+
+    /**
+     * A saturated recorder must not lose the end of the session.
+     *
+     * Events are droppable — losing the tail of a burst is the right failure for a research
+     * recorder. Finalization is not: it closes the open markers, writes the catalog delta and
+     * sets `finalized`. A rejection handler that counted the drop and returned discarded it, the
+     * executor terminated anyway, and awaitFinalized read termination as success — so an
+     * overloaded session was exported as complete while missing its closing markers.
+     */
+    @Test(timeout = 60_000)
+    fun `finalization survives a full queue`() {
+        val rec = recorder()
+        // Far more than the queue holds, as fast as the calling thread can push them.
+        repeat(SessionRecorder.QUEUE_CAPACITY * 3) {
+            rec.record(
+                EventKind.BROADCAST,
+                EventPayload.Broadcast("com.can.ACTION_KEY_CODE", CatalogStatus.KNOWN, emptyList()),
+                SourceState(),
+            )
+        }
+
+        rec.stop()
+
+        assertTrue("the session must actually finalize", rec.awaitFinalized(30_000))
+        assertTrue(rec.finalized)
+        assertTrue(
+            "and the delta must record what was lost",
+            File(rec.sessionDir, "catalog-delta.json").readText().contains("droppedEvents"),
+        )
+    }
+
+    @Test
+    fun `awaitFinalized reports termination without finalization as failure`() {
+        // The distinction that made the drop invisible: the executor terminates either way.
+        val rec = recorder()
+        rec.stop()
+
+        assertTrue(rec.awaitFinalized(10_000))
+        assertTrue(rec.finalized)
     }
 }
