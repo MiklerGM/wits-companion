@@ -10,8 +10,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -42,7 +43,29 @@ class SessionRecorder(
      * for the pending markers, an unsynchronized list for the markers themselves, and a
      * non-atomic `eventCount++` — all reached from several probe threads at once.
      */
-    private val io = Executors.newSingleThreadExecutor { r -> Thread(r, "wits-session") }
+    private val io = ThreadPoolExecutor(
+        1, 1, 0L, TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(QUEUE_CAPACITY),
+        { r -> Thread(r, "wits-session") },
+    ) { _, _ -> dropped.incrementAndGet() }
+
+    /**
+     * Events discarded because the actor could not keep up.
+     *
+     * The queue is bounded, which the default single-thread executor's is not. Per-event caps
+     * bound how large one capture can be; they say nothing about how many arrive. A flood of
+     * broadcasts — from a chatty app or a wedged vendor service — would otherwise queue without
+     * limit in front of a thread doing file I/O, and the ring and file caps downstream never
+     * see them because the memory is held in the queue.
+     *
+     * Dropping is the right failure for a research recorder: it loses the tail of a burst
+     * rather than the process. It is counted so a session can say it happened, because a
+     * silently short capture would be worse than a short one that admits it.
+     */
+    private val dropped = AtomicLong(0)
+
+    /** How many events were dropped for want of queue space. Read by the Debug screen. */
+    val droppedEvents: Long get() = dropped.get()
 
     /**
      * Sequence numbers are handed out on the *calling* thread, not the actor.
@@ -370,6 +393,14 @@ class SessionRecorder(
     companion object {
         private const val TAG = "WitsSessionRecorder"
         const val DEFAULT_RING_CAPACITY = 2000
+
+        /**
+         * How many events may be waiting for the actor thread.
+         *
+         * Twice the ring, so a burst that the ring would keep is never dropped by the queue,
+         * and bounded so a flood cannot outrun the recorder into the heap.
+         */
+        const val QUEUE_CAPACITY = 4000
 
         /**
          * Ceiling on one session's JSONL. Broadcast extras can carry whole byte arrays as hex,

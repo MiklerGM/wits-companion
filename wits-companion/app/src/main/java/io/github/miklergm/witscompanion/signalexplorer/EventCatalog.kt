@@ -201,17 +201,41 @@ class EventCatalog private constructor(
     }
 }
 
-/** Which catalogued actions actually fired during a session. */
+/**
+ * Which catalogued actions actually fired during a session.
+ *
+ * Every set here is **bounded**. The keys come from broadcast extras, which the sender chooses,
+ * and an indexed array alone produces one distinct `name:type` per element. This accumulates for
+ * the whole session and is not part of the ring, so the ring's 2000 events and the file's 32 MB
+ * bound nothing about it: a single chatty sender could grow the delta until the process died,
+ * with every per-event cap respected.
+ */
 class CatalogDelta {
     private val seen = LinkedHashMap<String, MutableSet<String>>()   // action -> extra "name:type"
     private val unexpected = LinkedHashMap<String, MutableSet<String>>()
     private val mismatches = LinkedHashMap<String, MutableSet<String>>()
 
+    /** True when a limit was hit, so the export can say the summary is partial. */
+    var truncated: Boolean = false
+        private set
+
+    private fun MutableSet<String>.addBounded(values: Iterable<String>) {
+        values.forEach { v ->
+            if (size >= MAX_KEYS_PER_ACTION) { truncated = true; return }
+            add(v)
+        }
+    }
+
+    private fun LinkedHashMap<String, MutableSet<String>>.setFor(action: String): MutableSet<String>? {
+        this[action]?.let { return it }
+        if (size >= MAX_ACTIONS) { truncated = true; return null }
+        return linkedSetOf<String>().also { this[action] = it }
+    }
+
     fun record(action: String, extras: List<CapturedExtra>, unexp: List<String>, mism: List<String>) {
-        val set = seen.getOrPut(action) { linkedSetOf() }
-        extras.forEach { set += "${it.name}:${it.javaType}" }
-        if (unexp.isNotEmpty()) unexpected.getOrPut(action) { linkedSetOf() } += unexp
-        if (mism.isNotEmpty()) mismatches.getOrPut(action) { linkedSetOf() } += mism
+        seen.setFor(action)?.addBounded(extras.map { "${it.name}:${it.javaType}" })
+        if (unexp.isNotEmpty()) unexpected.setFor(action)?.addBounded(unexp)
+        if (mism.isNotEmpty()) mismatches.setFor(action)?.addBounded(mism)
     }
 
     fun toJson(catalog: EventCatalog): JSONObject {
@@ -228,8 +252,17 @@ class CatalogDelta {
             put("typeMismatches", JSONObject().also { o ->
                 mismatches.forEach { (a, e) -> o.put(a, JSONArray(e.toList())) }
             })
+            if (truncated) put("truncated", "limits reached; this summary is partial")
         }
     }
 
     fun seenCount(): Int = seen.size
+
+    companion object {
+        /** Distinct extra keys kept per action. Far above any real vendor broadcast. */
+        const val MAX_KEYS_PER_ACTION = 256
+
+        /** Distinct actions kept. The catalogue itself is a fraction of this. */
+        const val MAX_ACTIONS = 512
+    }
 }

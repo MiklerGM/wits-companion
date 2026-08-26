@@ -4,6 +4,8 @@ import android.os.Bundle
 import io.github.miklergm.witscompanion.signalexplorer.AudioSnapshot
 import io.github.miklergm.witscompanion.signalexplorer.Availability
 import io.github.miklergm.witscompanion.signalexplorer.BroadcastProbe
+import io.github.miklergm.witscompanion.signalexplorer.CatalogDelta
+import io.github.miklergm.witscompanion.signalexplorer.CapturedExtra
 import io.github.miklergm.witscompanion.signalexplorer.CatalogStatus
 import io.github.miklergm.witscompanion.signalexplorer.Correlator
 import io.github.miklergm.witscompanion.signalexplorer.EventCatalog
@@ -224,6 +226,46 @@ class SignalExplorerTest {
 
         assertTrue("capture held $chars chars", chars <= BroadcastProbe.MAX_CAPTURE_CHARS + 64)
         assertTrue(extras.any { it.name == BroadcastProbe.TRUNCATION_MARKER })
+    }
+
+    @Test
+    fun `object arrays and lists obey the depth limit too`() {
+        // The gate used to sit on the Bundle branch alone, so these two — the container types
+        // that can hold each other, and the easiest to nest from an ordinary Intent extra —
+        // recursed to whatever depth the sender built.
+        var nestedArray: Any = arrayOf("leaf")
+        repeat(200) { nestedArray = arrayOf(nestedArray) }
+        val fromArray = BroadcastProbe.describe("arr", nestedArray)
+        assertTrue(fromArray.any { it.name == BroadcastProbe.TRUNCATION_MARKER })
+
+        var nestedList: Any = arrayListOf("leaf")
+        repeat(200) { nestedList = arrayListOf(nestedList) }
+        val fromList = BroadcastProbe.describe("list", nestedList)
+        assertTrue(fromList.any { it.name == BroadcastProbe.TRUNCATION_MARKER })
+
+        val deepest = fromArray.filter { it.name != BroadcastProbe.TRUNCATION_MARKER }
+            .maxOf { it.name.count { c -> c == '[' } }
+        assertTrue("followed $deepest levels", deepest <= BroadcastProbe.MAX_DEPTH + 1)
+    }
+
+    @Test
+    fun `the session-long catalogue summary is bounded and says when it was cut`() {
+        // The delta is not part of the ring, so no per-event cap bounds it. Extra keys are
+        // sender-chosen, and one indexed array yields a distinct key per element.
+        val delta = CatalogDelta()
+        repeat(50) { round ->
+            delta.record(
+                "com.can.ACTION_KEY_CODE",
+                (0 until 100).map { CapturedExtra("k${round}_$it", "int", "1") },
+                emptyList(), emptyList(),
+            )
+        }
+
+        assertTrue("5000 distinct keys must not all be kept", delta.truncated)
+        val json = delta.toJson(EventCatalog.parse(catalogJson))
+        val kept = json.getJSONObject("actionsSeen").getJSONArray("com.can.ACTION_KEY_CODE").length()
+        assertEquals(CatalogDelta.MAX_KEYS_PER_ACTION, kept)
+        assertTrue(json.has("truncated"))
     }
 
     @Test

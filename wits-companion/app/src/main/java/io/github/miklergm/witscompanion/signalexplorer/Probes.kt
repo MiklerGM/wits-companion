@@ -158,6 +158,29 @@ class BroadcastProbe(
             value: Any?,
             budget: Budget,
             depth: Int,
+        ): List<CapturedExtra> {
+            // The gate belongs here, not in one branch of the `when` below. It used to sit only
+            // on the Bundle case, so `Object[]` and `ArrayList` recursed to whatever depth the
+            // sender built — the two container types that can hold each other, and the two most
+            // easily nested from an ordinary Intent extra.
+            if (depth >= MAX_DEPTH && value.isRecursiveContainer) {
+                budget.note("depth")
+                return budget.emit(
+                    CapturedExtra(name, value!!.javaClass.name, "truncated: deeper than $MAX_DEPTH")
+                )
+            }
+            return describeValue(name, value, budget, depth)
+        }
+
+        /** Containers that can hold another container, and so make depth a real limit. */
+        private val Any?.isRecursiveContainer: Boolean
+            get() = this is Bundle || this is Array<*> || this is ArrayList<*>
+
+        private fun describeValue(
+            name: String,
+            value: Any?,
+            budget: Budget,
+            depth: Int,
         ): List<CapturedExtra> = when (value) {
             null -> budget.emit(CapturedExtra(name, "null", null))
 
@@ -178,15 +201,7 @@ class BroadcastProbe(
                 )
             }
 
-            is Bundle ->
-                if (depth >= MAX_DEPTH) {
-                    budget.note("depth")
-                    budget.emit(
-                        CapturedExtra(name, "android.os.Bundle", "truncated: deeper than $MAX_DEPTH")
-                    )
-                } else {
-                    flatten(value, name, budget, depth + 1)
-                }
+            is Bundle -> flatten(value, name, budget, depth + 1)
 
             is Array<*> -> budget.each(value.size) { i ->
                 describe("$name[$i]", value[i], budget, depth + 1)
@@ -269,7 +284,7 @@ class BroadcastProbe(
         /** Name of the reading appended to a capture that had to drop something. */
         const val TRUNCATION_MARKER = "_captureTruncated"
 
-        /** How deep nested Bundles, arrays and lists are followed. */
+        /** How deep nested Bundles, object arrays and lists are followed. */
         const val MAX_DEPTH = 8
 
         /** How many readings one broadcast may produce. */
