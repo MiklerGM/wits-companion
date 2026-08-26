@@ -159,6 +159,36 @@ however old, but requires negative evidence to be fresher than `ReverseGuard`'s
 (`reverseActive`) keeps showing the last reading, which is correct for a dashboard and wrong
 for a control decision — hence the split.
 
+**The Signal Explorer's probe is the other exported receiver**, and it is the one that reads
+*arbitrary* extras rather than named ones. `WitsBroadcastReceiver` only ever pulls the specific
+extras a `WitsProfile` signal names, one at a time, capped at 512 chars each
+(`MAX_EXTRA_CHARS`). `BroadcastProbe` deliberately dumps everything it is sent — that is what
+makes it useful for finding out what the vendor's broadcasts actually carry — so a sender
+chooses both the shape and the size of what it walks.
+
+That walk is bounded on three axes (`BroadcastProbe.flatten`), because it had been bounded on
+none: nested Bundles recursed as deep as the sender built them, a primitive array produced one
+reading per element, and a byte array produced a hex rendering twice its size plus a base64 one
+a third larger again. A broadcast near the ~1 MB Binder ceiling could expand into many
+megabytes of text, inside `onReceive` on the main thread, with 2000 events retained in the
+recorder's ring. Nothing hostile is required — a chatty app with a large payload reaches the
+same place.
+
+| Axis | Limit | What a real vendor payload uses |
+|---|---|---|
+| nesting depth | 8 | 1–2 |
+| readings per broadcast | 512 | a handful |
+| text per broadcast | 16 KB | well under 1 KB |
+| bytes rendered per blob | 1 KB | 8 (a CAN frame) |
+
+A full ring of maximal captures is then about 32 MB — deliberately the same ceiling the session
+file already had. A capture that hit a limit carries a `_captureTruncated` reading naming the
+axis, blobs keep their true `length`, and a shortened value ends in an ellipsis: the tool
+captures less rather than quietly appearing complete.
+
+The probe's receiver also exists only while a session is recording — it is created at runtime,
+never declared in the manifest, and unregistered on stop.
+
 ### 3.3 No remote control surface
 
 - No `INTERNET` permission → nothing can be uploaded or remotely triggered.

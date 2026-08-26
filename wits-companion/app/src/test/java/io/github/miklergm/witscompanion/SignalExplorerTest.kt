@@ -155,6 +155,94 @@ class SignalExplorerTest {
         assertEquals(null, extra.value)
     }
 
+    // ------------------------------------------------- bounds on what arrives
+
+    /**
+     * The probe's receiver is registered EXPORTED — it has to be, or the vendor's own
+     * broadcasts would not reach it — so any installed app can send a catalogued action with
+     * extras of its choosing. The walk that turns those extras into readings had no limit of
+     * any kind, and it runs inside `onReceive` on the main thread with 2000 events retained.
+     *
+     * These pin the three axes. None of them is reachable by a real vendor payload.
+     */
+
+    private fun deepBundle(levels: Int): Bundle {
+        var b = Bundle().apply { putInt("leaf", 1) }
+        repeat(levels) { b = Bundle().apply { putBundle("n", b) } }
+        return b
+    }
+
+    @Test
+    fun `nesting stops at the depth limit instead of recursing`() {
+        val extras = BroadcastProbe.flatten(deepBundle(200))
+
+        val marker = extras.single { it.name == BroadcastProbe.TRUNCATION_MARKER }
+        assertEquals("truncated:depth", marker.value)
+        // Nothing from below the cut: the deepest name has one segment per followed level.
+        val deepest = extras.filter { it.name != BroadcastProbe.TRUNCATION_MARKER }
+            .maxOf { it.name.count { c -> c == '.' } }
+        assertTrue("followed $deepest levels", deepest <= BroadcastProbe.MAX_DEPTH)
+    }
+
+    @Test
+    fun `a huge array does not become one reading per element`() {
+        val extras = BroadcastProbe.describe("arr", IntArray(500_000) { it })
+
+        assertTrue("got ${extras.size} readings", extras.size <= BroadcastProbe.MAX_EXTRAS + 1)
+        assertTrue(extras.any { it.name == BroadcastProbe.TRUNCATION_MARKER })
+        // What did fit is still real data, and still the start of the array.
+        assertEquals("0", extras.first { it.name == "arr[0]" }.value)
+    }
+
+    @Test
+    fun `a large blob is rendered in part and reports its true size`() {
+        val payload = ByteArray(64 * 1024) { 0x41 }
+        val extra = BroadcastProbe.describe("data", payload).first { it.name == "data" }
+
+        assertEquals("the true length must survive", 64 * 1024, extra.length)
+        assertEquals(BroadcastProbe.MAX_BINARY_BYTES * 2, extra.hex!!.length)
+        assertTrue("a partial blob must say so: ${extra.value}", extra.value!!.contains("truncated"))
+    }
+
+    @Test
+    fun `a long value is shortened and marked`() {
+        val extras = BroadcastProbe.describe("s", "x".repeat(200_000))
+        val extra = extras.first { it.name == "s" }
+
+        assertTrue(extra.value!!.length <= BroadcastProbe.MAX_VALUE_CHARS + 1)
+        assertTrue("an ellipsis marks the cut", extra.value!!.endsWith("\u2026"))
+        assertTrue(extras.any { it.name == BroadcastProbe.TRUNCATION_MARKER })
+    }
+
+    @Test
+    fun `total capture size is bounded across many extras`() {
+        val b = Bundle().apply {
+            repeat(400) { i -> putString("k$i", "y".repeat(1_000)) }
+        }
+        val extras = BroadcastProbe.flatten(b)
+        val chars = extras.sumOf { it.name.length + (it.value?.length ?: 0) }
+
+        assertTrue("capture held $chars chars", chars <= BroadcastProbe.MAX_CAPTURE_CHARS + 64)
+        assertTrue(extras.any { it.name == BroadcastProbe.TRUNCATION_MARKER })
+    }
+
+    @Test
+    fun `an ordinary vendor payload is untouched and unmarked`() {
+        // What this actually exists to capture: a CAN frame and a few small extras. Nothing
+        // here should come near a limit, or the bounds would be quietly costing evidence.
+        val b = Bundle().apply {
+            putInt("key_code", 13)
+            putString("key_status", "0")
+            putByteArray("frame", byteArrayOf(0x2D, 0x04, 0x01, 0x00, 0x11, 0x22, 0x33, 0x44))
+        }
+        val extras = BroadcastProbe.flatten(b)
+
+        assertFalse(extras.any { it.name == BroadcastProbe.TRUNCATION_MARKER })
+        assertEquals(3, extras.size)
+        assertEquals(8, extras.first { it.name == "frame" }.length)
+        assertEquals(null, extras.first { it.name == "frame" }.value)
+    }
+
     // -------------------------------------------------------------- event catalog
 
     private val catalogJson = """

@@ -89,55 +89,200 @@ class BroadcastProbe(
     }
 
     companion object {
-        /** Recursively flattens a Bundle; arrays get indexed names. */
-        fun flatten(bundle: Bundle, prefix: String = ""): List<CapturedExtra> {
+
+        /**
+         * Flattens a Bundle into named readings, **within a budget**.
+         *
+         * The receiver is registered `RECEIVER_EXPORTED`, because the whole point is to hear
+         * what the vendor's processes send. That also means any installed app can send the
+         * same actions with extras of its choosing, and this ran on whatever arrived with no
+         * limit of any kind: nested Bundles recursed to whatever depth the sender built, a
+         * primitive array became one [CapturedExtra] per element, and a byte array became a
+         * hex string twice its size plus a base64 string a third larger again. A single
+         * broadcast near the ~1 MB Binder ceiling could expand into many megabytes of text —
+         * inside `onReceive`, on the main thread — and [SessionRecorder] retains 2000 events.
+         *
+         * Nothing hostile is needed to reach it either; a chatty app with a large payload does
+         * just as well. The existing caps are on the *session file*, which is downstream of the
+         * memory this allocates.
+         *
+         * Three axes are bounded: [MAX_DEPTH] of nesting, [MAX_EXTRAS] readings, and
+         * [MAX_CAPTURE_CHARS] of text in total, with [MAX_BINARY_BYTES] of any one blob
+         * rendered. All of them sit far above any real vendor payload — the CAN broadcasts this
+         * exists to capture carry a handful of small extras and 8-byte frames — and far below
+         * anything that threatens the heap. A full ring of maximal captures is about 32 MB,
+         * which is deliberately the same ceiling the session file already has.
+         *
+         * A truncated capture **says so**. It carries a [TRUNCATION_MARKER] reading naming the
+         * axis that was hit, blobs keep their true `length`, and a shortened value ends in an
+         * ellipsis. A research tool that silently dropped evidence would be worse than one that
+         * captures less.
+         */
+        fun flatten(bundle: Bundle, prefix: String = ""): List<CapturedExtra> =
+            withBudget { budget -> flatten(bundle, prefix, budget, depth = 0) }
+
+        /** One value, described within a fresh budget. See [flatten]. */
+        fun describe(name: String, value: Any?): List<CapturedExtra> =
+            withBudget { budget -> describe(name, value, budget, depth = 0) }
+
+        private inline fun withBudget(body: (Budget) -> List<CapturedExtra>): List<CapturedExtra> {
+            val budget = Budget()
+            val out = body(budget)
+            val cut = budget.truncatedBy ?: return out
+            return out + CapturedExtra(TRUNCATION_MARKER, "marker", "truncated:$cut")
+        }
+
+        private fun flatten(
+            bundle: Bundle,
+            prefix: String,
+            budget: Budget,
+            depth: Int,
+        ): List<CapturedExtra> {
             val out = mutableListOf<CapturedExtra>()
+            // keySet() is ordered, so a truncated capture is a prefix of the full one rather
+            // than an arbitrary subset.
             for (key in bundle.keySet()) {
+                if (budget.exhausted) break
                 val name = if (prefix.isEmpty()) key else "$prefix.$key"
                 val value = runCatching {
                     @Suppress("DEPRECATION")
                     bundle.get(key)
                 }.getOrNull()
-                out += describe(name, value)
+                out += describe(name, value, budget, depth)
             }
             return out
         }
 
-        fun describe(name: String, value: Any?): List<CapturedExtra> = when (value) {
-            null -> listOf(CapturedExtra(name, "null", null))
+        private fun describe(
+            name: String,
+            value: Any?,
+            budget: Budget,
+            depth: Int,
+        ): List<CapturedExtra> = when (value) {
+            null -> budget.emit(CapturedExtra(name, "null", null))
 
-            is ByteArray -> listOf(
-                CapturedExtra(
-                    name = name,
-                    javaType = "byte[]",
-                    value = null,
-                    length = value.size,
-                    hex = value.toHex(),
-                    base64 = Base64.encodeToString(value, Base64.NO_WRAP),
+            is ByteArray -> {
+                val shown = if (value.size > MAX_BINARY_BYTES) value.copyOf(MAX_BINARY_BYTES) else value
+                budget.emit(
+                    CapturedExtra(
+                        name = name,
+                        javaType = "byte[]",
+                        // Null when whole, a note when not — the blob's true size is in `length`
+                        // either way, so a capture never understates what arrived.
+                        value = if (shown.size == value.size) null
+                        else "truncated: first ${shown.size} of ${value.size} bytes",
+                        length = value.size,
+                        hex = shown.toHex(),
+                        base64 = Base64.encodeToString(shown, Base64.NO_WRAP),
+                    )
                 )
-            )
+            }
 
-            is Bundle -> flatten(value, name)
+            is Bundle ->
+                if (depth >= MAX_DEPTH) {
+                    budget.note("depth")
+                    budget.emit(
+                        CapturedExtra(name, "android.os.Bundle", "truncated: deeper than $MAX_DEPTH")
+                    )
+                } else {
+                    flatten(value, name, budget, depth + 1)
+                }
 
-            is Array<*> -> value.flatMapIndexed { i, v -> describe("$name[$i]", v) }
-            is IntArray -> value.mapIndexed { i, v ->
-                CapturedExtra("$name[$i]", "int", v.toString())
+            is Array<*> -> budget.each(value.size) { i ->
+                describe("$name[$i]", value[i], budget, depth + 1)
             }
-            is LongArray -> value.mapIndexed { i, v ->
-                CapturedExtra("$name[$i]", "long", v.toString())
+            is IntArray -> budget.each(value.size) { i ->
+                budget.emit(CapturedExtra("$name[$i]", "int", value[i].toString()))
             }
-            is FloatArray -> value.mapIndexed { i, v ->
-                CapturedExtra("$name[$i]", "float", v.toString())
+            is LongArray -> budget.each(value.size) { i ->
+                budget.emit(CapturedExtra("$name[$i]", "long", value[i].toString()))
             }
-            is BooleanArray -> value.mapIndexed { i, v ->
-                CapturedExtra("$name[$i]", "boolean", v.toString())
+            is FloatArray -> budget.each(value.size) { i ->
+                budget.emit(CapturedExtra("$name[$i]", "float", value[i].toString()))
             }
-            is ArrayList<*> -> value.flatMapIndexed { i, v -> describe("$name[$i]", v) }
+            is BooleanArray -> budget.each(value.size) { i ->
+                budget.emit(CapturedExtra("$name[$i]", "boolean", value[i].toString()))
+            }
+            is ArrayList<*> -> budget.each(value.size) { i ->
+                describe("$name[$i]", value[i], budget, depth + 1)
+            }
 
-            else -> listOf(
-                CapturedExtra(name, value.javaClass.name, value.toString())
+            else -> budget.emit(
+                CapturedExtra(name, value.javaClass.name, budget.shorten(value.toString()))
             )
         }
+
+        /**
+         * What is left to spend on one capture.
+         *
+         * Counting readings alone would not bound anything — one reading can be a megabyte of
+         * text — and counting characters alone would allow millions of empty ones. Both, and
+         * whichever runs out first stops the walk.
+         */
+        private class Budget {
+            private var readings = MAX_EXTRAS
+            private var chars = MAX_CAPTURE_CHARS
+
+            /** The axis that first forced something to be dropped, or null if nothing was. */
+            var truncatedBy: String? = null
+                private set
+
+            val exhausted: Boolean get() = readings <= 0 || chars <= 0
+
+            fun note(axis: String) {
+                if (truncatedBy == null) truncatedBy = axis
+            }
+
+            /** Charges [extra] against the budget, or drops it and records why. */
+            fun emit(extra: CapturedExtra): List<CapturedExtra> {
+                if (readings <= 0) { note("count"); return emptyList() }
+                val cost = extra.name.length + (extra.value?.length ?: 0) +
+                    (extra.hex?.length ?: 0) + (extra.base64?.length ?: 0)
+                if (cost > chars) { note("size"); return emptyList() }
+                readings--
+                chars -= cost
+                return listOf(extra)
+            }
+
+            /** Walks [count] elements, stopping the moment the budget runs out. */
+            inline fun each(
+                count: Int,
+                element: (Int) -> List<CapturedExtra>,
+            ): List<CapturedExtra> {
+                val out = mutableListOf<CapturedExtra>()
+                for (i in 0 until count) {
+                    if (exhausted) { note("count"); break }
+                    out += element(i)
+                }
+                return out
+            }
+
+            /** [text] cut to [MAX_VALUE_CHARS], marked when it was. */
+            fun shorten(text: String): String =
+                if (text.length <= MAX_VALUE_CHARS) text
+                else {
+                    note("size")
+                    text.take(MAX_VALUE_CHARS) + "\u2026"
+                }
+        }
+
+        /** Name of the reading appended to a capture that had to drop something. */
+        const val TRUNCATION_MARKER = "_captureTruncated"
+
+        /** How deep nested Bundles, arrays and lists are followed. */
+        const val MAX_DEPTH = 8
+
+        /** How many readings one broadcast may produce. */
+        const val MAX_EXTRAS = 512
+
+        /** Total text one capture may hold, names and rendered blobs included. */
+        const val MAX_CAPTURE_CHARS = 16_384
+
+        /** Longest single rendered value. */
+        const val MAX_VALUE_CHARS = 4_096
+
+        /** How much of a blob is rendered to hex and base64; `length` still reports it all. */
+        const val MAX_BINARY_BYTES = 1_024
 
         fun ByteArray.toHex(): String =
             joinToString("") { "%02X".format(it) }
