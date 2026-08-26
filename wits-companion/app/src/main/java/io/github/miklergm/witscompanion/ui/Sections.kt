@@ -389,6 +389,7 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
         box.addView(android.widget.SeekBar(activity).apply {
             max = SPLIT_STEPS
             progress = splitToProgress(repo.split)
+            LayoutPreset.splitPercent(repo.split).let { contentDescription = "Split $it / ${100 - it}" }
             setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
                 /**
                  * Whether a touch drag is in progress.
@@ -411,6 +412,11 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
                 override fun onProgressChanged(sb: android.widget.SeekBar, p: Int, fromUser: Boolean) {
                     val split = progressToSplit(p)
                     updateGeometryLabel(split)
+                    // A SeekBar announces its own progress — here 40 of 55, which a screen
+                    // reader renders as 73%. The number that means anything is the split the
+                    // label shows, so say that instead.
+                    val left = LayoutPreset.splitPercent(split)
+                    sb.contentDescription = "Split $left / ${100 - left}"
                     if (fromUser && !dragging) repo.split = split
                 }
 
