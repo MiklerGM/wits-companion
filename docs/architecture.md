@@ -137,7 +137,7 @@ is three separate mechanisms here — see `night-mode.md`, which leads with them
 | Day/night UI | `SystemUI` | `system_ext/priv-app` | platform | `Settings.System` |
 | Launcher | `WitsLauncher` (`com.wits.launcher`) | `system/app` | platform | none (coexist) |
 | **Companion** (`debug`) | `io.github.miklergm.witscompanion` | `/data` | own debug key | — |
-| **Companion** (`platform`) | `io.github.miklergm.witscompanion` | `/data` | platform `c8a2e9bc…` | `MANAGE_ACTIVITY_TASKS` |
+| **Companion** (`platform`) | `io.github.miklergm.witscompanion` | `/data` | platform `c8a2e9bc…` | `MANAGE_ACTIVITY_TASKS`, `REMOVE_TASKS`, … |
 
 The companion is an ordinary `/data` app in both variants: it is never installed to
 `system`, never granted `android.uid.system`, and an uninstall removes it completely.
@@ -145,11 +145,19 @@ The companion is an ordinary `/data` app in both variants: it is never installed
 The two differ in **signature**, and that is not cosmetic. This ROM grants
 signature-level permissions to whatever is signed with the platform certificate, and
 that certificate is the *public* AOSP test key — so the `platform` variant, built from
-the same source, holds `MANAGE_ACTIVITY_TASKS` and reaches `IActivityTaskManager`
-directly (`resizeTask`, task removal) instead of going through the vendor
-`CHANGE_WINDOW` broadcast. The `debug` variant holds no platform permission at all and
-uses the hook. See `security.md` §3.6 and the release workflow, which pins that exact
-certificate digest.
+the same source, is granted the signature-level permissions the manifest declares and
+reaches `IActivityTaskManager` directly instead of going through the vendor
+`CHANGE_WINDOW` broadcast. They are separate grants doing separate jobs:
+
+| Permission | What it buys |
+|---|---|
+| `MANAGE_ACTIVITY_TASKS` | reading `getAllRootTaskInfos`, and `resizeTask` — moving a tile without fronting it |
+| `REMOVE_TASKS` | tearing a task down: stale-tile cleanup, and Exit's `removeRootTasksInWindowingModes` |
+| `WRITE_SECURE_SETTINGS` | the freeform / force-resizable globals the Cockpit needs set |
+| `TETHER_PRIVILEGED` | the hotspot toggle without a trip to the quick-settings shade |
+
+The `debug` variant is granted none of them and uses the vendor hook. See `security.md`
+§3.6 and the release workflow, which pins that exact certificate digest.
 
 `[CODE]` — platform cert
 `c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8` signs

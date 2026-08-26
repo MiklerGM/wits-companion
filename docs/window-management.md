@@ -364,9 +364,15 @@ Presets store normalized bounds, so side order and split ratio are pure geometry
 - `LayoutPreset.withSplit(f)` — re-splits a two-tile preset, clamped to 0.25–0.80
 - `LayoutPreset.splitFraction()` — reads the current ratio back
 
-Both are persisted per preset id in `LayoutRepository` and applied on read, so the
-built-in presets stay untouched and the tweaks survive a reinstall of the preset list.
-The Layouts tab exposes a **⇄ swap sides** button and 50/60/65/70 split buttons.
+**Superseded (2026-08).** Both were once persisted per preset id. They are now a *single
+shared* split and side order in `LayoutRepository` (`KEY_SPLIT`, `KEY_SWAPPED`), applied by
+`LayoutPreset.withGeometry()` when a preset is used — one ratio for every layout, which is
+what the Cockpit and the tiled presets both want, and one setting to explain. The built-in
+presets still stay untouched on disk.
+
+The Layouts tab exposes a **⇄ swap sides** button and a continuous slider, not the
+50/60/65/70 buttons described above; its whole-percent scale lives on
+`LayoutPreset.splitToProgress` / `progressToSplit`.
 
 ## 6.4 Mode B — the anchor panel
 

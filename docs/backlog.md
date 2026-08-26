@@ -159,6 +159,13 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       switched on. Turning it off should leave the real state reading correctly.
   - **The rail has no Cockpit tile** (only reachable once the NaviApp slot points at us, so
       really a check for later).
+  - **The split slider responds to the rotary controller.** Turn it without touching the
+      screen, leave the settings, come back: the ratio should have stuck. This is the input
+      path that never worked — persistence hung off `onStopTrackingTouch`, which only touch
+      fires — and it has no unit test, because the listener is built inline in the view code.
+      One turn of the knob is the whole check.
+  - **Anchored Maps → tiled Maps+Chrome leaves no panel covering the tiles.** The cleanup
+      branch for it was unreachable until now, so this has never actually worked on the car.
   - **The Debug screen still prints a root-task count, not `UNREADABLE (decode)`.** Task
       fields are no longer defaulted when they fail to decode, so a schema difference on this
       ROM now announces itself instead of presenting as a non-freeform invisible task. These
@@ -370,6 +377,32 @@ Things doable now, without the car.
       vertical, Exit (reset) pinned bottom; no more ScrollView/footer. Verified structurally on
       the emulator (clipped there by the freeform cascade). **Eyeball on the car** — see On-car
       checklist. Still to do: the "Cockpit" name check (§ UI).
+- [x] **Fourth review — five mediums, one pre-existing layout bug, and a crash** — *fixed
+      offline 2026-08-26, still before publication.*
+  - **A cyclic collection crashed the exported probe** (`9cfdea2`). `LinkedList` is a `List`
+      but not an `ArrayList`, so it missed the depth gate and was rendered with `toString()` —
+      which recurses forever on two mutually referencing lists, on the main thread, in a
+      receiver any installed app can reach. Reproduced in isolation. Collections and Maps are
+      traversed now, and the last-resort `toString()` is guarded.
+  - **The tiled cleanup could not run** (`bbdd996`, pre-existing). `parkStaleWindows` returns
+      early when nothing is stale, having just subtracted SELF — and the branch that removes
+      *our own* leftover tiles sat below that return. Anchored Maps → tiled Maps+Chrome left
+      the panel covering both tiles, which is verbatim the failure that branch's comment
+      records from 2026-08-08. The fix was present and guarded out by a line above it.
+  - **`queuedWork` cancelled the teardown it was written to protect** (`bbdd996`). Reverse
+      during Exit cancelled HOME and the remaining conversions — backwards, since tearing our
+      windows down uncovers the vendor screen the camera is on. Now a count of *cancellable*
+      placement work; teardown is not counted.
+  - **Finalization could be dropped, and termination was read as success** (`55f8351`).
+      Bounding the recorder's queue made the finalizer droppable too, and `awaitFinalized`
+      returned `awaitTermination`'s result — so an overloaded session exported as complete
+      without its closing markers.
+  - **Simulation was a beat late at both edges** (`fc56bce`). A repository-owned epoch checked
+      under `stateLock`, and a synchronous `onSimulationChanged` so queued work is cancelled
+      before any simulated data exists.
+  - **Anonymous tasks reached destructive cleanup** (`bbdd996`), the slider announced 73% for
+      a 65/35 split (`1507c2f`), and three doc sections had drifted.
+
 - [x] **Third review — three high-priority defects, two of them mine from the same day** —
       *fixed offline 2026-08-26, after the batch below and before any of it was published.*
       A review of the eleven-commit batch. What it found:
