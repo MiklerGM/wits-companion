@@ -159,6 +159,17 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       switched on. Turning it off should leave the real state reading correctly.
   - **The rail has no Cockpit tile** (only reachable once the NaviApp slot points at us, so
       really a check for later).
+  - **The layout refactor changed no behaviour** — the riskiest thing in the batch, since
+      `apply()` was restructured around `LayoutPlanner`. The things to watch, in order:
+    - **A tiled preset still lands as two tiles** with the same stagger; watch for one tile
+      replacing the other, which is what a collapsed schedule would look like.
+    - **A route survives a reassert.** Start navigation, trigger an automatic restore
+      (ACC off/on), and confirm Maps keeps the route — the preserved-live path must still
+      reposition rather than relaunch. `preserve_live -> no_relaunch` in the log.
+    - **Switching the floating app still parks the old one** rather than leaving it floating
+      over the new layout.
+    - **A preset whose app is missing** refuses without disturbing what is on screen. Easiest
+      with a tiled preset naming an app that is not installed.
 - [ ] **Verify the audit fixes on the vehicle** — *deployed + partly confirmed on-car
       2026-08-20.* Build installed 09:46:57; capture in `capture-20260820-postaudit/`.
   - [x] **Reverse freshness — the 5 s window is safe.** The worry was that `wits.backcar`
