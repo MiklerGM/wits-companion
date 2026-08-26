@@ -37,8 +37,15 @@ class ReverseGuard(
 
     private var lastReverseActiveAt: Long = 0L
 
-    /** Feed every new state so the guard can track the release delay. */
+    /**
+     * Feed every new state so the guard can track the release delay.
+     *
+     * Simulated states are dropped. The release delay exists to ride out the moment after a
+     * real reverse ends; starting it from a fabricated manoeuvre would hold real automatic
+     * actions off for [releaseDelayMs] after every cycle of the simulator.
+     */
     fun observe(state: CarState) {
+        if (state.simulated) return
         if (state.reverseActive == true) lastReverseActiveAt = clock()
     }
 
@@ -62,8 +69,10 @@ class ReverseGuard(
             false -> Unit
         }
 
-        // Source explicitly reports the reverse camera even if the boolean did not.
-        if (state.source.isKnown && state.source.value == WitsSource.BACKCAR) {
+        // Source explicitly reports the reverse camera even if the boolean did not. Not from a
+        // simulated snapshot: reverseActiveForControl has already declined to read it, and this
+        // is the same fiction arriving by a different field.
+        if (!state.simulated && state.source.isKnown && state.source.value == WitsSource.BACKCAR) {
             return GuardVerdict.Blocked("source is BACKCAR")
         }
 
@@ -98,6 +107,13 @@ class SourceGuard(private val reverseGuard: ReverseGuard) {
      * @param target the source id we want to switch to
      */
     fun check(state: CarState, target: Int, trigger: Trigger): GuardVerdict {
+        // A source switch is a real, physical change to what the head unit shows, and every
+        // test below reads `state.source` — which under simulation is a fabricated value on a
+        // 90 s cycle. There is no reading of the real source to decide on, so decide nothing.
+        if (state.simulated) {
+            return GuardVerdict.Blocked("simulation is active; the real source is unknown")
+        }
+
         val reverse = reverseGuard.check(state, trigger)
         if (!reverse.isAllowed) return reverse
 

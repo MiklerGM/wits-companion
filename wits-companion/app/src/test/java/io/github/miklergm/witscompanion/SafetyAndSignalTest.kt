@@ -145,6 +145,84 @@ class SafetyAndSignalTest {
         assertTrue(guard.check(notYet, Trigger.AUTOMATIC).isAllowed)
     }
 
+    // ------------------------------------------------- simulated telemetry
+
+    /**
+     * Simulation drives the dashboard from fabricated data — a 90 s loop that indicates,
+     * brakes, parks and reverses, or a replayed capture file. None of it is evidence.
+     *
+     * Nothing on the control path used to notice: `CarState.simulated` existed but was read in
+     * exactly one place, a banner on the Debug screen. So the guards were deciding real
+     * actions on fiction in both directions.
+     */
+    @Test
+    fun `simulated telemetry is never control-grade`() {
+        // Field for field this is what a genuine property reading produces.
+        val fabricated = reverseFromProperty(false, at = 1_000L).copy(simulated = true)
+        val guard = ReverseGuard(releaseDelayMs = 0L, controlMaxAgeMs = 5_000L, clock = { 2_000L })
+
+        assertNull(
+            "a fabricated negative must not authorise anything",
+            fabricated.reverseActiveForControl(now = 2_000L, maxAgeMs = 5_000L),
+        )
+        assertFalse(guard.check(fabricated, Trigger.AUTOMATIC).isAllowed)
+        assertTrue(
+            "an explicit user action is still the user's, as for any unknown",
+            guard.check(fabricated, Trigger.USER).isAllowed,
+        )
+    }
+
+    @Test
+    fun `a fabricated reverse does not block a real user action`() {
+        // The simulator reverses for 11 s of every 90 and sets source=BACKCAR with it, so the
+        // Cockpit refused the user's own taps roughly an eighth of the time, by two separate
+        // routes, on a vehicle that was standing still.
+        val fabricated = CarState(
+            simulated = true,
+            reverse = valid(true, src = SignalSource.SIMULATION),
+            source = valid(WitsSource.BACKCAR, src = SignalSource.SIMULATION),
+        )
+        val guard = ReverseGuard(releaseDelayMs = 0L, clock = { 2_000L })
+
+        assertTrue(guard.check(fabricated, Trigger.USER).isAllowed)
+        assertFalse(
+            "automatic actions still fail closed — unknown, not safe",
+            guard.check(fabricated, Trigger.AUTOMATIC).isAllowed,
+        )
+    }
+
+    @Test
+    fun `a fabricated reverse does not start the release delay`() {
+        var now = 1_000L
+        val guard = ReverseGuard(releaseDelayMs = 1_500L, controlMaxAgeMs = 5_000L, clock = { now })
+
+        guard.observe(CarState(simulated = true, reverse = valid(true, src = SignalSource.SIMULATION)))
+        now = 1_100L
+
+        assertNull("the settle timer must not have started", guard.sinceReverseMs())
+        assertTrue(
+            "so a real automatic restore is not held off by a manoeuvre that never happened",
+            guard.check(reverseFromProperty(false, at = now), Trigger.AUTOMATIC).isAllowed,
+        )
+    }
+
+    @Test
+    fun `a source switch is refused outright while simulation is active`() {
+        // Every test in SourceGuard reads state.source, and under simulation that is a value on
+        // a timer. A source switch physically changes what the head unit shows; with no reading
+        // of the real source there is nothing to decide on.
+        val guard = SourceGuard(ReverseGuard(releaseDelayMs = 0L, clock = { 0L }))
+        val fabricated = CarState(
+            simulated = true,
+            source = valid(WitsSource.LAUNCHER, src = SignalSource.SIMULATION),
+            reverseFromProperty = valid(false),
+        )
+
+        val verdict = guard.check(fabricated, WitsSource.CAN, Trigger.USER)
+        assertFalse(verdict.isAllowed)
+        assertTrue("$verdict", verdict.reasonOrNull!!.contains("simulation"))
+    }
+
     // --------------------------------------------------------- source guard
 
     @Test

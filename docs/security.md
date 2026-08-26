@@ -202,6 +202,30 @@ never declared in the manifest, and unregistered on stop.
 whenever reverse is active or reverse state is unknown-and-the-action-is-automatic
 ("fail closed"). Inputs and rules: `source-switching.md` §5.
 
+**Simulated telemetry is not evidence.** The Debug screen can drive the dashboard from
+`CarStateSimulator` — a 90 s synthetic loop that indicates, brakes, parks and reverses, or a
+replayed capture file. `CarState.simulated` marked those snapshots from the start, but until
+2026-08-26 it was read in exactly one place: a banner on the Debug screen. The guards were
+deciding real actions on fabricated data, in both directions.
+
+- `reverseActiveForControl()` now returns *unknown* for a simulated snapshot, whatever the
+  fields say. Automatic actions fail closed; a deliberate user action is still the user's, as
+  for any unknown.
+- `ReverseGuard.observe()` ignores them, so a fabricated manoeuvre does not start the
+  post-reverse settle timer and hold real automatic actions off after every cycle.
+- `SourceGuard` refuses outright while simulation is active. Every test it makes reads
+  `state.source`, which is then a value on a timer, and a source switch physically changes
+  what the head unit shows.
+- `LayoutRecoveryCoordinator` drops simulated states before anything acts on them, keeping the
+  last *real* readings as the edge-detection baseline. This is the one that mattered in
+  practice: the layout triggers were already blocked downstream for want of control-grade
+  evidence, but `restoreHotspotIfEnabled` consults no guard at all, so a fabricated ACC OFF→ON
+  edge switched on a real Wi-Fi hotspot. That edge is reachable by ordinary use — observe a
+  real engine-off state, turn simulation on, and the simulator's first frame reports ACC on.
+
+The cost is that a genuine transition occurring while simulation is running is missed. For a
+debug mode that is the right way round.
+
 ### 3.5 Rate limiting
 
 `safety/ActionRateLimiter.kt` — token bucket per action class:

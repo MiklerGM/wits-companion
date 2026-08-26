@@ -35,8 +35,33 @@ class LayoutRecoveryCoordinator(
     private var lastAndroidSource: Boolean? = null
     private var lastReverse: Boolean? = null
     private var lastApplyAt: Long = 0L
+    private var announcedSimulation = false
 
+    /**
+     * Every automatic trigger in this class is an edge in the vehicle's telemetry, and under
+     * simulation that telemetry is fabricated on a 90 s loop by [CarStateSimulator] — or, in
+     * replay mode, read from a file. Acting on it moves real windows and, because
+     * [restoreHotspotIfEnabled] consults no guard at all, switches on a real Wi-Fi hotspot.
+     *
+     * An ACC OFF→ON edge is reachable in exactly the way you would stumble into it: observe a
+     * real engine-off state, turn simulation on from the Debug screen, and the simulator's
+     * first frame — which always reports ACC on — reads as an ignition.
+     *
+     * So a simulated snapshot ends the pass here. The last *real* values stay as the baseline,
+     * which is what makes the first real state after simulation ends compare against reality
+     * rather than against fiction. The cost is that a genuine transition occurring while
+     * simulation is running is missed, which is the correct trade for a debug mode.
+     */
     override fun onCarState(state: CarState) {
+        if (state.simulated) {
+            if (!announcedSimulation) {
+                announcedSimulation = true
+                logger?.log("layout", "auto_restore_skipped", result = "simulation")
+            }
+            return
+        }
+        announcedSimulation = false
+
         reverseGuard.observe(state)
         // Let the engine re-check safety at fire time and abort in-flight sequences.
         engine.onCarState(state)
@@ -83,6 +108,7 @@ class LayoutRecoveryCoordinator(
      * leaving its full-screen config peeking behind the tiles.
      */
     fun onActivityResumed(state: CarState): Boolean {
+        if (state.simulated) return false
         if (!repository.restoreOnResume) return false
         return attempt("activity_resume", state)
     }
@@ -114,6 +140,9 @@ class LayoutRecoveryCoordinator(
 
     /** Explicit user action; bypasses the debounce but not the safety guards. */
     fun restoreNow(state: CarState): LayoutEngine.Result {
+        if (state.simulated) {
+            return LayoutEngine.Result.Refused("simulation is active; vehicle state is fabricated")
+        }
         val preset = repository.lastAppliedPreset()
             ?: return LayoutEngine.Result.Refused("no layout has been applied yet")
         lastApplyAt = nowMs()

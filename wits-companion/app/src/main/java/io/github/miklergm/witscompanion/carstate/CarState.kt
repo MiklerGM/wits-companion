@@ -94,6 +94,14 @@ data class CarState(
      * the right behaviour.
      */
     fun reverseActiveForControl(now: Long, maxAgeMs: Long): Boolean? {
+        // Simulated telemetry is never control-grade, in either direction. The simulator
+        // fabricates a reverse manoeuvre once every 90 s cycle and sets `source` to BACKCAR
+        // with it, so acting on it would block a real user's tap for a reverse that is not
+        // happening — and, worse, a fabricated `false` would authorise automatic actions while
+        // the app has no idea what the vehicle is doing. Unknown is the honest answer: it
+        // fails automatic actions closed and leaves a deliberate user action to the user.
+        if (simulated) return null
+
         // Positive evidence counts from ANY transport and never expires. A broadcast may
         // always raise the alarm — worst case a hostile app blocks our own automation, which
         // fails safe.

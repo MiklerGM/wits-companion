@@ -444,6 +444,35 @@ class ReceiverAndGenerationTest {
         assertTrue(body.contains("cancelPending()"))
     }
 
+    /**
+     * Simulated telemetry must not reach the automatic triggers at all.
+     *
+     * The layout triggers were already blocked downstream — an automatic apply needs
+     * control-grade reverse evidence, which a simulated snapshot cannot supply — but
+     * `restoreHotspotIfEnabled` consults no guard whatsoever, so a fabricated ACC OFF→ON edge
+     * switched on a real Wi-Fi hotspot. That edge is reachable by ordinary use: observe a real
+     * engine-off state, turn simulation on, and the simulator's first frame reports ACC on.
+     */
+    @Test
+    fun `the recovery coordinator ignores simulated telemetry`() {
+        val src = sourceOf("layout/LayoutRecoveryCoordinator.kt")
+        val body = src.substringAfter("override fun onCarState(state: CarState) {")
+            .substringBefore("\n    }")
+
+        val bail = body.indexOf("if (state.simulated)")
+        assertTrue("onCarState must check state.simulated", bail >= 0)
+        assertTrue(
+            "and must do it before anything acts on the state",
+            bail < body.indexOf("reverseGuard.observe(state)"),
+        )
+        assertTrue("the pass has to end there", body.substringAfter("if (state.simulated)").contains("return"))
+        assertTrue(
+            "the other two state entry points refuse it too",
+            src.contains("fun onActivityResumed(state: CarState): Boolean {\n        if (state.simulated) return false"),
+        )
+        assertTrue(src.contains("if (state.simulated) {\n            return LayoutEngine.Result.Refused"))
+    }
+
     @Test
     fun `leaving the Android source cancels pending work`() {
         val f = listOf(
