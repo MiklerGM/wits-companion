@@ -59,17 +59,41 @@ class LayoutEngine(
     private var pendingRetries = 0
 
     /**
-     * Whether any delayed send is still queued.
+     * How much cancellable placement work is still queued.
      *
-     * [onCarState] used to ask `pendingRetries > 0`, which is a different question: it is zero
-     * for every delayed send that is not a retry, and [cancelPending] sets it to zero on the way
-     * in. So the "abort the moment reverse engages" path was silently inert for exactly the
-     * sequence that needed it — [hideFloatingApp] cancels, then queues a full-display panel
-     * raise 250 ms out. Fire-time [stillValid] is what makes that safe; this is what makes the
-     * early abort real as well.
+     * [onCarState] first asked `pendingRetries > 0`, which is a different question — that
+     * counter is zero for every delayed send that is not a retry, and [cancelPending] zeroes it
+     * on the way in, so the "abort the moment reverse engages" path was inert for exactly the
+     * sequence that needed it. A boolean fixed that and introduced two more: it was set by
+     * [unwindowTiles] as well, so reverse during Exit cancelled the rest of the teardown —
+     * the opposite of what that path wants, since tearing our windows down *uncovers* the
+     * vendor screen the camera is drawn on — and it was never cleared, so every later reverse
+     * logged a cancellation of nothing.
+     *
+     * A count, incremented at post time and decremented when the work runs, answers the
+     * question that was being asked. **Teardown is deliberately not counted**: it is not
+     * cancellable by this path.
      */
-    @Volatile
-    private var queuedWork = false
+    private val placementsInFlight = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /**
+     * Posts cancellable placement work.
+     *
+     * [cancelPending] drops the queue without running the bodies, so it resets the count rather
+     * than relying on the decrements below.
+     */
+    private fun postPlacement(delayMs: Long, token: Any? = null, body: () -> Unit) {
+        placementsInFlight.incrementAndGet()
+        val runnable = Runnable {
+            try {
+                body()
+            } finally {
+                placementsInFlight.updateAndGet { (it - 1).coerceAtLeast(0) }
+            }
+        }
+        if (token != null) handler.postDelayed(runnable, token, delayMs)
+        else handler.postDelayed(runnable, delayMs)
+    }
 
     /**
      * Every scheduled broadcast belongs to a generation. A new apply, a cancel, or an
@@ -246,18 +270,14 @@ class LayoutEngine(
         // the launch it repairs at 1300 ms.
         val base = LayoutSchedule.preparation(parked, plan.anchored)
         if (plan.anchored) {
-            handler.postDelayed(
-                {
-                    if (stillValid(myGeneration, "anchor", WitsPackages.SELF)) {
-                        bringAnchorToFront(plan.panelBounds)
-                    }
-                },
-                parked * LayoutSchedule.PARK_DELAY_MS,
-            )
+            postPlacement(parked * LayoutSchedule.PARK_DELAY_MS) {
+                if (stillValid(myGeneration, "anchor", WitsPackages.SELF)) {
+                    bringAnchorToFront(plan.panelBounds)
+                }
+            }
         }
 
         plan.steps.forEach { step -> dispatch(step, base, myGeneration) }
-        queuedWork = true
 
         lastAppliedPackages = plan.keep
         layoutOwned = true
@@ -322,7 +342,9 @@ class LayoutEngine(
                 //  - Unprivileged: launch only. CHANGE_WINDOW is exclusive — re-sending it
                 //    would hide the other tiles and flash the layout — whereas an inclusive
                 //    launch carries the bounds itself and repairs a tile that never appeared.
-                handler.postDelayed({
+                postPlacement(
+                    passStart + step.index * LayoutSchedule.LAUNCH_DELAY_MS, RETRY_TOKEN,
+                ) {
                     if (stillValid(myGeneration, "retry_visible", step.packageName) &&
                         windowController.isLaunchable(step.packageName)
                     ) {
@@ -338,9 +360,9 @@ class LayoutEngine(
                             )
                         }
                     }
-                }, RETRY_TOKEN, passStart + step.index * LayoutSchedule.LAUNCH_DELAY_MS)
+                }
             }
-            handler.postDelayed({
+            postPlacement(passStart, RETRY_TOKEN) {
                 if (myGeneration == generation.get()) {
                     logger?.log(
                         "layout", "retry",
@@ -348,7 +370,7 @@ class LayoutEngine(
                         result = "sent",
                     )
                 }
-            }, RETRY_TOKEN, passStart)
+            }
         }
     }
 
@@ -366,7 +388,7 @@ class LayoutEngine(
                 if (step.preserveLive) {
                     logger?.log("layout", "preserve_live", step.packageName, result = "no_relaunch")
                 }
-                handler.postDelayed({
+                postPlacement(base + step.offsetMs) {
                     if (stillValid(myGeneration, "geometry", step.packageName)) {
                         windowController.applyWindow(
                             WitsWindowController.WindowRequest(
@@ -376,14 +398,14 @@ class LayoutEngine(
                             bringToFront = step.bringToFront,
                         )
                     }
-                }, base + step.offsetMs)
+                }
             }
 
-            LayoutPlan.Phase.LAUNCH -> handler.postDelayed({
+            LayoutPlan.Phase.LAUNCH -> postPlacement(base + step.offsetMs) {
                 if (stillValid(myGeneration, "make_visible", step.packageName)) {
                     windowController.launchPackage(step.packageName, step.bounds, step.windowMode)
                 }
-            }, base + step.offsetMs)
+            }
         }
     }
 
@@ -413,11 +435,9 @@ class LayoutEngine(
         if (attempt >= LayoutSchedule.VERIFY_DELAYS_MS.size) return
         // Measured from the end of the pass, like the retries, so the two never overlap.
         val delay = base + LayoutSchedule.verificationAt(windowCount, attempt)
-        handler.postDelayed(
-            { verifyPlacement(preset, expected, myGeneration, attempt) },
-            RETRY_TOKEN,
-            delay,
-        )
+        postPlacement(delay, RETRY_TOKEN) {
+            verifyPlacement(preset, expected, myGeneration, attempt)
+        }
     }
 
     /**
@@ -537,8 +557,6 @@ class LayoutEngine(
         val liveTasks = windowController.observeTasks().tasksOrEmpty
             .filter { it.windowingMode == WitsWindowMode.FREEFORM }
         val liveFreeform = liveTasks.mapNotNull { it.packageName }
-        val stale = (lastAppliedPackages + liveFreeform - keep) - WitsPackages.SELF
-        if (stale.isEmpty()) return 0
 
         // Tiled layouts (parkMode = FULLSCREEN) have no floating tile to hide a stale app behind,
         // so the old path tried to un-freeform it — but `setTaskWindowingMode` is absent on this
@@ -554,14 +572,17 @@ class LayoutEngine(
             // `[RUNTIME]` 2026-08-08). Remove every live freeform task that is not in the new layout,
             // SELF included. The config task that triggered this apply is torn down after its call
             // returns (the removal is posted), like the Settings button.
-            val toRemove = liveTasks.filter { it.packageName !in keep }
+            // Never a task we cannot name. An anonymous freeform task is one whose identity we
+            // failed to resolve, not one we know to be foreign — and this branch *deletes*. The
+            // cost of skipping one is a stray window; the cost of removing one is whatever it
+            // was, gone.
+            val toRemove = liveTasks.filter { it.packageName != null && it.packageName !in keep }
+            if (toRemove.isEmpty()) return 0
             toRemove.forEachIndexed { index, task ->
                 val pkg = task.packageName ?: "task:${task.taskId}"
-                handler.postDelayed(
-                    { if (stillValid(myGeneration, "remove_stale", pkg)) remover.remove(task.taskId) },
-                    RETRY_TOKEN,
-                    index * LayoutSchedule.PARK_DELAY_MS,
-                )
+                postPlacement(index * LayoutSchedule.PARK_DELAY_MS, RETRY_TOKEN) {
+                    if (stillValid(myGeneration, "remove_stale", pkg)) remover.remove(task.taskId)
+                }
             }
             logger?.log(
                 "layout", "remove_stale",
@@ -573,16 +594,28 @@ class LayoutEngine(
             return toRemove.size
         }
 
+        // Everything left to clear away: what we last placed, plus any live freeform tile that
+        // is not in the incoming layout. SELF is excluded here because this path *parks* rather
+        // than removes, and the companion is the anchor — the tiled branch above is the one that
+        // clears our own tiles, which is why it has to run before this test and not after it.
+        //
+        // It did not. Anchored Maps → tiled Maps+Chrome leaves the panel as the only stale
+        // window: `stale` is {SELF} before the subtraction and empty after it, so the function
+        // returned 0 and the removal branch below was never reached — the exact failure its
+        // comment describes, reintroduced by the guard placed above it.
+        val stale = (lastAppliedPackages + liveFreeform - keep) - WitsPackages.SELF
+        if (stale.isEmpty()) return 0
+
         // Anchored (freeform park to the floating tile) / unprivileged: move stale apps in place.
         stale.forEachIndexed { index, pkg ->
             if (!windowController.isLaunchable(pkg)) return@forEachIndexed
-            handler.postDelayed({
+            postPlacement(index * LayoutSchedule.PARK_DELAY_MS, RETRY_TOKEN) {
                 if (stillValid(myGeneration, "park_stale", pkg)) {
                     windowController.applyWindow(
                         WitsWindowController.WindowRequest(pkg, parkBounds, parkMode)
                     )
                 }
-            }, RETRY_TOKEN, index * LayoutSchedule.PARK_DELAY_MS)
+            }
         }
         logger?.log(
             "layout", "park_stale",
@@ -706,7 +739,7 @@ class LayoutEngine(
      */
     fun onCarState(state: CarState) {
         latestState = state
-        if (state.reverseActive == true && queuedWork) {
+        if (state.reverseActive == true && placementsInFlight.get() > 0) {
             logger?.log("layout", "cancel_pending", result = "reverse_engaged")
             cancelPending()
         }
@@ -718,7 +751,7 @@ class LayoutEngine(
      * preset.
      */
     fun cancelPending() {
-        queuedWork = false
+        placementsInFlight.set(0)
         generation.incrementAndGet()
         handler.removeCallbacksAndMessages(RETRY_TOKEN)
         handler.removeCallbacksAndMessages(null)
@@ -751,11 +784,10 @@ class LayoutEngine(
      */
     fun unwindowTiles(thenGoHome: Boolean) {
         cancelPending()
-        // Exit queues work too, and the abort flag has to know. Deliberately not given the
-        // fire-time safety guard: this *removes* our windows, so it fails toward the vendor
-        // screen — which is where the reverse camera is drawn. Refusing it during reverse would
-        // leave our tiles on top, the opposite of what the guard is for.
-        queuedWork = true
+        // Deliberately not counted as placement work, and deliberately not given the fire-time
+        // safety guard. This *removes* our windows, so it fails toward the vendor screen — which
+        // is where the reverse camera is drawn. Cancelling it partway, or refusing it, would
+        // leave our tiles on top: the opposite of what the guard is for.
         // The user is taking the screen back: stop owning it, so no verification "repairs" the
         // layout they just exited (the last preset is still remembered).
         layoutOwned = false
@@ -886,15 +918,11 @@ class LayoutEngine(
         //    the reverse camera can come up inside that window — a generation check alone would
         //    then paint the panel over it. Every other delayed send in this class goes through
         //    stillValid for the same reason.
-        handler.postDelayed(
-            {
-                if (stillValid(myGeneration, "hide_anchor", WitsPackages.SELF)) {
-                    bringAnchorToFront(full)
-                }
-            },
-            LayoutSchedule.PARK_DELAY_MS,
-        )
-        queuedWork = true
+        postPlacement(LayoutSchedule.PARK_DELAY_MS) {
+            if (stillValid(myGeneration, "hide_anchor", WitsPackages.SELF)) {
+                bringAnchorToFront(full)
+            }
+        }
         lastAppliedPackages = setOf(WitsPackages.SELF)
         logger?.log(
             "layout", "hide_floating",

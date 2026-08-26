@@ -19,6 +19,7 @@ import io.github.miklergm.witscompanion.wits.WitsActions
 import io.github.miklergm.witscompanion.wits.WitsPackages
 import io.github.miklergm.witscompanion.wits.WitsWindowController
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -258,8 +259,10 @@ class ReceiverAndGenerationTest {
         assertTrue("the unprivileged path re-parks in place", park.contains("WindowRequest(pkg, parkBounds, parkMode)"))
 
         // Neither may fire unguarded: stillValid() re-checks both the generation and the
-        // vehicle state at fire time.
-        val delayed = park.occurrences("handler.postDelayed")
+        // vehicle state at fire time. Delayed placement work goes through postPlacement, which
+        // also keeps the count of in-flight work honest for the abort-on-reverse path.
+        val delayed = park.occurrences("postPlacement(")
+        assertTrue("cleanup is still delayed work", delayed > 0)
         assertEquals("every delayed mutation must be gated", delayed, park.occurrences("stillValid("))
 
         // ...and each must be cancellable by the next apply, which clears RETRY_TOKEN.
@@ -613,6 +616,71 @@ class ReceiverAndGenerationTest {
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(500))
 
         assertNotNull(Shadows.shadowOf(context).nextStartedActivity)
+    }
+
+    /**
+     * Exit must survive reverse engaging halfway through it.
+     *
+     * The "abort on reverse" path cancels queued work, and marking the teardown as queued put
+     * Exit under it — so reverse during Exit cancelled the rest of the teardown, leaving our
+     * tiles on screen. That is backwards: removing our windows *uncovers* the vendor screen the
+     * reverse camera is drawn on, so the teardown is the one thing reverse should not stop.
+     */
+    @Test
+    fun `reverse during Exit does not cancel the teardown`() {
+        val context = RuntimeEnvironment.getApplication()
+        val engine = LayoutEngine(
+            appContext = context,
+            windowController = WitsWindowController(context),
+            reverseGuard = ReverseGuard(releaseDelayMs = 0L, clock = { 2_000L }),
+            rateLimiter = ActionRateLimiter(),
+        )
+        Shadows.shadowOf(context).clearNextStartedActivities()
+
+        engine.unwindowTiles(thenGoHome = true)
+        engine.onCarState(
+            CarState(reverse = SignalValue(true, Availability.VALID, SignalSource.PROPERTY, 1_000L, "1"))
+        )
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(1_000))
+
+        val started = Shadows.shadowOf(context).nextStartedActivity
+        assertNotNull("Exit must still reach HOME", started)
+        assertTrue(started!!.hasCategory(Intent.CATEGORY_HOME))
+    }
+
+    @Test
+    fun `only placement work is counted as cancellable`() {
+        val src = sourceOf("layout/LayoutEngine.kt")
+        val teardown = src.substringAfter("fun unwindowTiles(").substringBefore("\n    }")
+        assertFalse(
+            "teardown must not go through postPlacement, or reverse will cancel it",
+            teardown.contains("postPlacement("),
+        )
+        assertTrue("and everything else must", src.contains("postPlacement(base + step.offsetMs)"))
+    }
+
+    /**
+     * The tiled-removal branch exists to clear our *own* leftover Cockpit tiles, which is why
+     * it has to run before the staleness test and not after it. It ran after.
+     *
+     * Anchored Maps → tiled Maps+Chrome leaves the panel as the only stale window. `stale` is
+     * {SELF} before the subtraction below and empty after it, so parkStaleWindows returned 0 and
+     * the removal branch was never reached — reintroducing the exact failure its own comment
+     * records ("Maps and Chrome didn't open because it was Cockpit before").
+     */
+    @Test
+    fun `the tiled removal branch runs before the staleness shortcut`() {
+        val body = sourceOf("layout/LayoutEngine.kt")
+            .substringAfter("private fun parkStaleWindows(").substringBefore("\n    }")
+
+        assertTrue(
+            "removal must come first",
+            body.indexOf("val toRemove") < body.indexOf("if (stale.isEmpty()) return 0"),
+        )
+        assertTrue(
+            "and it must never delete a task it cannot name",
+            body.contains("it.packageName != null && it.packageName !in keep"),
+        )
     }
 
     @Test
