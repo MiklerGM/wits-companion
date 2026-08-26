@@ -3,7 +3,10 @@ package io.github.miklergm.witscompanion.carstate
 import android.util.Log
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Reads Android system properties from an ordinary (non-system) app.
@@ -28,7 +31,15 @@ import java.util.concurrent.TimeUnit
  * Thread-safety: [get] may be called from any thread. [refreshBulk] performs the
  * subprocess call and must not be called from the main thread.
  */
-class PropertyReader {
+class PropertyReader(
+    /**
+     * The bulk dump command. A constructor parameter only so a test can point it at a
+     * process that deliberately wedges; the app always takes the default.
+     */
+    private val bulkCommand: List<String> = listOf("getprop"),
+    /** Wall-clock ceiling on one bulk dump, the read included. See [refreshBulkInternal]. */
+    private val bulkTimeoutMs: Long = DEFAULT_BULK_TIMEOUT_MS,
+) {
 
     enum class Strategy { REFLECTION, GETPROP_BULK, UNAVAILABLE }
 
@@ -121,31 +132,69 @@ class PropertyReader {
         }
     }
 
+    /**
+     * Runs one bulk dump and replaces the cache with it.
+     *
+     * **The read happens on a throwaway thread and the caller waits with a deadline.** That
+     * shape is the whole point, and the obvious arrangement does not work: a `waitFor(timeout)`
+     * placed after — or in a `finally` around — a `readLine()` loop cannot bound anything,
+     * because the loop only returns once the child closes stdout. A child that wedges mid-dump
+     * blocks the reader forever and the timed wait is never reached. The bound has to sit
+     * beside the read, not after it.
+     *
+     * That matters because [probe] runs this from the constructor, and the app constructs the
+     * reader on the main thread during `Application.onCreate` — on a unit whose vendor watchdog
+     * reboots into a recovery WIPE if the system does not report ready within 80 s
+     * (docs/security.md §1.7).
+     *
+     * On timeout the process is force-killed and the partial dump is **discarded**. A truncated
+     * dump is not a cheap half-answer: it would replace the whole cache, so properties that
+     * were being read a second ago would silently start reading as absent. Reporting nothing
+     * keeps the previous cache, and [CarSignalReducer] treats an absent property as *no new
+     * information* rather than as a negative reading — which is what stops a wedged subprocess
+     * from being able to clear a safety signal.
+     *
+     * The kill unblocks the abandoned reader by closing the pipe. A child that had forked and
+     * handed the write end to a grandchild would keep it open; `getprop` does not fork, and the
+     * reader is a daemon thread either way, so the caller returns on schedule regardless.
+     *
+     * @throws TimeoutException if the dump did not complete within [bulkTimeoutMs].
+     */
     private fun refreshBulkInternal(): Int {
-        val process = ProcessBuilder("getprop").redirectErrorStream(true).start()
+        val process = ProcessBuilder(bulkCommand).redirectErrorStream(true).start()
         val parsed = HashMap<String, String>()
-        try {
-            BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
-                reader.lineSequence().forEach { line ->
-                    // Format: [name]: [value]
-                    val m = GETPROP_LINE.matchEntire(line.trim()) ?: return@forEach
-                    parsed[m.groupValues[1]] = m.groupValues[2]
+        val failure = AtomicReference<Throwable?>()
+        val finished = CountDownLatch(1)
+
+        Thread({
+            try {
+                BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
+                    reader.lineSequence().forEach { line ->
+                        // Format: [name]: [value]
+                        val m = GETPROP_LINE.matchEntire(line.trim()) ?: return@forEach
+                        parsed[m.groupValues[1]] = m.groupValues[2]
+                    }
                 }
+            } catch (t: Throwable) {
+                failure.set(t)
+            } finally {
+                finished.countDown()
             }
-        } finally {
-            // Bounded wait. probe() runs this from the constructor when the reflection strategy
-            // is unavailable, and the app constructs the reader on the main thread — an
-            // unbounded waitFor() there would hang startup on a wedged subprocess, on a unit
-            // whose vendor watchdog reboots into a recovery WIPE if the system does not report
-            // ready in 80 s (docs/security.md §1.7).
-            runCatching {
-                if (!process.waitFor(GETPROP_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                    Log.w(TAG, "getprop did not exit within ${GETPROP_TIMEOUT_MS}ms; killing it")
-                    process.destroyForcibly()
-                }
-            }
-            runCatching { process.destroy() }
+        }, READER_THREAD).apply { isDaemon = true }.start()
+
+        val completed = finished.await(bulkTimeoutMs, TimeUnit.MILLISECONDS)
+        // Either way we are done with it: on success the child has already exited, and on
+        // timeout this is what releases the reader we are about to walk away from.
+        runCatching { process.destroyForcibly() }
+
+        if (!completed) {
+            Log.w(TAG, "$bulkCommand did not finish within ${bulkTimeoutMs}ms; discarding it")
+            throw TimeoutException("bulk property dump exceeded ${bulkTimeoutMs}ms")
         }
+        failure.get()?.let { throw it }
+
+        // `parsed` is only read after await() returned true, which orders the reader's writes
+        // before this thread — no lock needed on it, and none taken inside the loop.
         synchronized(bulkCache) {
             bulkCache.clear()
             bulkCache.putAll(parsed)
@@ -162,9 +211,15 @@ class PropertyReader {
 
     private companion object {
         const val TAG = "WitsPropertyReader"
+        const val READER_THREAD = "wits-getprop"
 
-        /** Ceiling on the bulk `getprop` subprocess. See [refreshBulkInternal]. */
-        const val GETPROP_TIMEOUT_MS = 2_000L
+        /**
+         * Ceiling on one bulk dump.
+         *
+         * Only the fallback strategy pays it, and only once per poll on a unit where
+         * reflection is blocked — this one reads properties in-process, so it never gets here.
+         */
+        const val DEFAULT_BULK_TIMEOUT_MS = 2_000L
         val GETPROP_LINE = Regex("""\[([^\]]*)]:\s*\[(.*)]""")
     }
 }
