@@ -168,8 +168,11 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       reposition rather than relaunch. `preserve_live -> no_relaunch` in the log.
     - **Switching the floating app still parks the old one** rather than leaving it floating
       over the new layout.
-    - **A preset whose app is missing** refuses without disturbing what is on screen. Easiest
-      with a tiled preset naming an app that is not installed.
+    - **A *tiled* preset whose apps are all missing** refuses without disturbing what is on
+      screen. An **anchored** preset with a missing app deliberately does not refuse — the
+      panel is the Cockpit and comes up either way, so it reports one tile rather than two.
+      That asymmetry is the reason the old code refused twice, the second time after it had
+      already started tearing the previous layout down.
 - [ ] **Verify the audit fixes on the vehicle** — *deployed + partly confirmed on-car
       2026-08-20.* Build installed 09:46:57; capture in `capture-20260820-postaudit/`.
   - [x] **Reverse freshness — the 5 s window is safe.** The worry was that `wits.backcar`

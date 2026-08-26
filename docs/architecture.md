@@ -136,10 +136,22 @@ is three separate mechanisms here — see `night-mode.md`, which leads with them
 | Window mgmt | `services.jar` → `ActivityTaskManagerService` | `system/framework` | platform | `CHANGE_WINDOW` |
 | Day/night UI | `SystemUI` | `system_ext/priv-app` | platform | `Settings.System` |
 | Launcher | `WitsLauncher` (`com.wits.launcher`) | `system/app` | platform | none (coexist) |
-| **Companion** | `io.github.miklergm.witscompanion` | `/data` | own debug key | — |
+| **Companion** (`debug`) | `io.github.miklergm.witscompanion` | `/data` | own debug key | — |
+| **Companion** (`platform`) | `io.github.miklergm.witscompanion` | `/data` | platform `c8a2e9bc…` | `MANAGE_ACTIVITY_TASKS` |
 
-The companion is an ordinary `/data` app. It holds **no** platform permissions and
-cannot be granted `android.uid.system`. `[CODE]` — platform cert
+The companion is an ordinary `/data` app in both variants: it is never installed to
+`system`, never granted `android.uid.system`, and an uninstall removes it completely.
+
+The two differ in **signature**, and that is not cosmetic. This ROM grants
+signature-level permissions to whatever is signed with the platform certificate, and
+that certificate is the *public* AOSP test key — so the `platform` variant, built from
+the same source, holds `MANAGE_ACTIVITY_TASKS` and reaches `IActivityTaskManager`
+directly (`resizeTask`, task removal) instead of going through the vendor
+`CHANGE_WINDOW` broadcast. The `debug` variant holds no platform permission at all and
+uses the hook. See `security.md` §3.6 and the release workflow, which pins that exact
+certificate digest.
+
+`[CODE]` — platform cert
 `c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8` signs
 `android` + all Wits apps (`analysis/out/signing-certificates.csv`).
 
