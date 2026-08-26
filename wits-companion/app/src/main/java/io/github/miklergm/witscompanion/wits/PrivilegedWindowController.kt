@@ -175,7 +175,14 @@ class PrivilegedWindowController(
             @Suppress("UNCHECKED_CAST")
             val infos = svc.javaClass.getMethod("getAllRootTaskInfos").invoke(svc) as? List<Any?>
                 ?: return TaskObservation.Unavailable("not_a_list")
-            TaskObservation.Observed(infos.mapNotNull { info -> info?.let { readSnapshot(it) } })
+            val snapshots = infos.map { info -> info?.let { readSnapshot(it) } }
+            // One task we could not decode makes the whole reading untrustworthy, not shorter.
+            // Dropping it silently is what turns a schema change into "that window is gone".
+            if (snapshots.any { it == null }) {
+                Log.d(TAG, "a root task did not decode; treating the reading as unavailable")
+                return TaskObservation.Unavailable("decode")
+            }
+            TaskObservation.Observed(snapshots.filterNotNull())
         }.getOrElse {
             Log.d(TAG, "getAllRootTaskInfos failed: ${it.javaClass.simpleName}")
             TaskObservation.Unavailable("reflection:${it.javaClass.simpleName}")
@@ -194,18 +201,38 @@ class PrivilegedWindowController(
 
     // ------------------------------------------------------------------ internals
 
-    private fun readSnapshot(info: Any): TaskSnapshot? = runCatching {
+    /**
+     * One `RootTaskInfo`, or null when it did not decode.
+     *
+     * **No field is defaulted.** Each of these used to fall back to a plausible-looking value —
+     * `getWindowingMode` to FULLSCREEN, `isVisible` to false, `bounds` to an empty Rect — which
+     * meant a task whose fields could not be read presented as a *non-freeform, invisible,
+     * zero-bounds* task. That is not a degraded reading, it is a specific and wrong one, and
+     * both consumers act on it: [LayoutVerification][io.github.miklergm.witscompanion.layout
+     * .LayoutVerification]`.misplaced` calls it misplaced and re-applies over a live route, and
+     * [place] reads "not freeform" as licence to **remove the task** before relaunching. A
+     * reflection failure could therefore tear down a running app.
+     *
+     * The package name is the one field allowed to be null: `topActivity` is legitimately
+     * absent for some tasks, which is what [firstChildPackage] exists for, and callers already
+     * treat a null package as "not one of ours".
+     *
+     * Internal rather than private so the decoding can be tested against a stand-in that is
+     * missing fields — the failure mode is a schema difference, which is unreachable from a
+     * real `RootTaskInfo`.
+     */
+    internal fun readSnapshot(info: Any): TaskSnapshot? = runCatching {
         val cls = info.javaClass
         val taskId = cls.getField("taskId").getInt(info)
         val topActivity = runCatching { cls.getField("topActivity").get(info) }.getOrNull()
         val pkg = topActivity?.let {
             runCatching { it.javaClass.getMethod("getPackageName").invoke(it) as? String }.getOrNull()
         } ?: firstChildPackage(info, cls)
-        val mode = runCatching {
-            cls.getMethod("getWindowingMode").invoke(info) as? Int
-        }.getOrNull() ?: WitsWindowMode.FULLSCREEN
-        val visible = runCatching { cls.getField("isVisible").getBoolean(info) }.getOrDefault(false)
-        val bounds = runCatching { cls.getField("bounds").get(info) as? Rect }.getOrNull() ?: Rect()
+        val mode = cls.getMethod("getWindowingMode").invoke(info) as? Int
+            ?: return@runCatching null
+        val visible = cls.getField("isVisible").getBoolean(info)
+        val bounds = cls.getField("bounds").get(info) as? Rect
+            ?: return@runCatching null
         TaskSnapshot(taskId, pkg, mode, visible, bounds)
     }.getOrNull()
 

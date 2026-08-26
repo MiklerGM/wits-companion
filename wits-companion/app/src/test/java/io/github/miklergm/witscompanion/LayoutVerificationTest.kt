@@ -4,11 +4,13 @@ import android.graphics.Rect
 import io.github.miklergm.witscompanion.layout.ExpectedTile
 import io.github.miklergm.witscompanion.layout.LayoutVerdict
 import io.github.miklergm.witscompanion.layout.LayoutVerification
+import io.github.miklergm.witscompanion.wits.PrivilegedWindowController
 import io.github.miklergm.witscompanion.wits.PrivilegedWindowController.TaskSnapshot
 import io.github.miklergm.witscompanion.wits.TaskObservation
 import io.github.miklergm.witscompanion.wits.WitsWindowController
 import io.github.miklergm.witscompanion.wits.WitsWindowMode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -210,5 +212,65 @@ class LayoutVerificationTest {
                 + "latter cannot tell an unread screen from an empty one",
             body.contains("misplacedTiles("),
         )
+    }
+
+    // --------------------------------------------- decoding one task at a time
+
+    /** Stands in for the platform's `RootTaskInfo`, which a unit test cannot construct. */
+    @Suppress("unused")
+    class FakeTaskInfo(
+        @JvmField val taskId: Int = 7,
+        @JvmField val isVisible: Boolean = true,
+        @JvmField val bounds: Rect? = Rect(0, 99, 1560, 900),
+        private val mode: Int? = WitsWindowMode.FREEFORM,
+        @JvmField val childTaskNames: Array<String> = arrayOf("com.google.android.apps.maps/.Main"),
+    ) {
+        fun getWindowingMode(): Int? = mode
+    }
+
+    /** A schema that no longer carries the fields the decoder needs. */
+    @Suppress("unused")
+    class ChangedTaskInfo(@JvmField val taskId: Int = 7)
+
+    @Test
+    fun `a task that decodes is read exactly, not approximated`() {
+        val snapshot = PrivilegedWindowController(RuntimeEnvironment.getApplication())
+            .readSnapshot(FakeTaskInfo())
+
+        assertEquals(7, snapshot!!.taskId)
+        assertEquals(maps, snapshot.packageName)
+        assertEquals(WitsWindowMode.FREEFORM, snapshot.windowingMode)
+        assertTrue(snapshot.visible)
+        assertEquals(Rect(0, 99, 1560, 900), snapshot.bounds)
+    }
+
+    /**
+     * Every one of these fields used to have a fallback, and together they made an undecodable
+     * task look like a real one that was non-freeform, invisible and zero-sized. The verifier
+     * calls that misplaced and re-applies over a live route; `place()` reads "not freeform" as
+     * licence to remove the task before relaunching. A reflection failure could tear down a
+     * running app.
+     */
+    @Test
+    fun `a task that does not decode is null, not a plausible default`() {
+        val controller = PrivilegedWindowController(RuntimeEnvironment.getApplication())
+
+        assertNull("a missing schema must not become FULLSCREEN/invisible/empty",
+            controller.readSnapshot(ChangedTaskInfo()))
+        assertNull("nor may an unreadable windowing mode",
+            controller.readSnapshot(FakeTaskInfo(mode = null)))
+        assertNull("nor unreadable bounds",
+            controller.readSnapshot(FakeTaskInfo(bounds = null)))
+    }
+
+    @Test
+    fun `a task with no resolvable package still decodes`() {
+        // The one field that is legitimately absent; callers already read a null package as
+        // "not one of ours", and failing the whole reading over it would be too strict.
+        val snapshot = PrivilegedWindowController(RuntimeEnvironment.getApplication())
+            .readSnapshot(FakeTaskInfo(childTaskNames = emptyArray()))
+
+        assertNull(snapshot!!.packageName)
+        assertEquals(WitsWindowMode.FREEFORM, snapshot.windowingMode)
     }
 }
