@@ -417,11 +417,17 @@ Things doable now, without the car.
   - **Lint** (`c62773a`). Both modules now clean. The ten API-30 `WindowMetrics` errors never
       affected the vehicle (Android 13; minSdk 29 is for the emulator) but the version handling
       was implicit — now an explicit gate with a real API-29 fallback.
-  - **Not done — the architectural refactor.** The review also recommends splitting
-      `LayoutEngine` into planner/scheduler/executor/verifier, replacing the privileged boolean
-      with per-operation capability interfaces, and a richer apply result
-      (accepted/executing/verified/partial/failed/cancelled). Those are rewrites, not fixes,
-      and are deliberately left for a separate pass.
+  - **The architectural refactor — done, in four passes.** The review also recommended
+      splitting `LayoutEngine` into planner/scheduler/executor/verifier, replacing the
+      privileged boolean with per-operation capability interfaces, and a richer apply result.
+      Deliberately deferred at the time as rewrites rather than fixes, then taken one at a
+      time: capability interfaces (`WindowCapabilities.kt`), the verifier
+      (`LayoutVerification.kt` — which was where the blind post-apply check turned out to be
+      hiding), and finally the planner, scheduler and geometry (`6e754c7`). The engine is
+      1009 → 847 lines and the part that shrank is the part that was reasoning; `LayoutPlanner`
+      returns what an apply has decided as a value, so it can be asserted instead of watched
+      on a vehicle. The richer apply result is **not** done and is not currently wanted:
+      `Applied/Invalid/Refused` is what the callers act on.
 - [ ] **Volume: read-only probe scaffolding** (verify-first), no active pinning yet (§ Volume).
 - [x] **Refresh Brightness values** — *done 2026-08-06* (`25f9fe6`): the label refreshes on
       resume and observes `SCREEN_BRIGHTNESS`, so a system day/night change is reflected live.

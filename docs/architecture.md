@@ -166,7 +166,9 @@ flowchart TD
     C["WitsBroadcastReceiver<br/>registered EXPORTED (must be)"] --> B
     D["PropertyReader<br/>reflection + getprop fallback<br/>(background executor, throttled)"] --> B
     B --> E["StateFlow-like observers"]
-    F["LayoutEngine"] --> G["WitsWindowController<br/>(sendBroadcast)"]
+    P["LayoutPlanner<br/>pure: what an apply decides"] --> F["LayoutEngine<br/>executes it, generation-gated"]
+    F --> G["WitsWindowController<br/>(sendBroadcast)"]
+    F --> V["LayoutVerification<br/>pure: did it land?"]
     H["ReverseGuard"] -.->|"vetoes"| F
     H -.->|"vetoes"| I["WitsSourceController"]
     J["EventLogger<br/>JSONL, redacted"] --- F

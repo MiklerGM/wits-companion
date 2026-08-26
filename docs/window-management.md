@@ -296,7 +296,7 @@ Both tiles collapse into a corner. Guarded by
 window applied becomes the topmost / focused one**. `[HYP]` (follows from AOSP
 semantics; needs `[RUNTIME]` confirmation).
 
-Companion strategy (`LayoutEngine`):
+Companion strategy (`LayoutPlanner` decides it, `LayoutEngine` carries it out):
 
 1. Resolve display bounds and insets from **maximum** window metrics (§6.0.1).
 2. Sort windows by `focusOrder` **ascending**.
@@ -694,8 +694,10 @@ leaves whichever package went last on top — exactly the reported "Maps opens, 
 closes, Spotify opens".
 
 Fix: retry passes stagger and start only after the initial pass finishes, and the default
-drops from 2 retries to 1. `LayoutEngine.scheduleFor()` exposes the schedule and
-`LayoutScheduleTest` asserts that no two broadcasts ever share an instant.
+drops from 2 retries to 1. `LayoutSchedule.scheduleFor()` exposes the schedule and
+`LayoutScheduleTest` asserts that no two broadcasts ever share an instant. (The schedule
+moved out of `LayoutEngine` in `6e754c7`: it is arithmetic, and asking about it no longer
+needs a Context, a window controller and two guards constructed first.)
 
 **This was a real bug, but it was not the cause of the tiles replacing each other.** After
 it was fixed the symptom persisted: the user reported seeing Spotify with the OEM dashboard
