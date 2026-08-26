@@ -141,6 +141,24 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
 - [ ] **One-line confirmations:** the emulator cascade is absent on the car (§ Emulator-only);
       `SensorManager` has no `TYPE_LIGHT` (§ Brightness).
 
+- [ ] **Verify the 2026-08-26 offline batch on the vehicle** — *nothing in it has been driven
+      with; it should not be tagged until it has.* Most of it is invisible when it works, so
+      the checks are mostly "nothing got worse":
+  - **The split slider reads 65 / 35** on opening the layout settings, and still does after
+      opening it three times without touching the slider. This is the one with a visible
+      symptom and the easiest to confirm.
+  - **Hiding the floating app still works** — tap the lit rail tile, the panel fills the
+      display. It now goes through the reverse guard, so it can refuse; a "Refused:" toast
+      while stationary would mean the guard is reading something wrong.
+  - **The Cockpit still comes up and stays up.** `layout/verify -> ok` in the log as before,
+      and no new `skipped:unverifiable:*` lines — one would mean task observation is failing
+      on this ROM, which the old code hid by reporting an empty screen.
+  - **The Debug screen still lists root tasks** with a count, not `UNREADABLE (...)`.
+  - **Simulation mode moves nothing.** Turn it on from the Debug screen with the engine
+      running: the dashboard should animate, and no layout should be applied and no hotspot
+      switched on. Turning it off should leave the real state reading correctly.
+  - **The rail has no Cockpit tile** (only reachable once the NaviApp slot points at us, so
+      really a check for later).
 - [ ] **Verify the audit fixes on the vehicle** — *deployed + partly confirmed on-car
       2026-08-20.* Build installed 09:46:57; capture in `capture-20260820-postaudit/`.
   - [x] **Reverse freshness — the 5 s window is safe.** The worry was that `wits.backcar`
@@ -330,6 +348,45 @@ Things doable now, without the car.
       vertical, Exit (reset) pinned bottom; no more ScrollView/footer. Verified structurally on
       the emulator (clipped there by the freeform cascade). **Eyeball on the car** — see On-car
       checklist. Still to do: the "Cockpit" name check (§ UI).
+- [x] **Second audit — the remaining findings, plus four smaller ones** — *fixed offline
+      2026-08-26; **none of it has been driven with yet**.* Findings #4, #5 and #6 of the
+      second review, which had been carried in conversation rather than written down, and the
+      small items that had accumulated beside them. What each one was:
+  - **A screen that was never read is not an empty screen** (`f75fe7a`, #4). `rootTasks()`
+      returned an empty list for three different answers — cannot observe, reflection threw,
+      genuinely nothing there. `verify()` read the first two as the third, so a reflection
+      failure reported every tile missing and re-applied the layout, tearing down a correct
+      Cockpit and any live route on a reading that never happened. `TaskObservation` and
+      `LayoutVerdict` make the answers distinct; the three sites that legitimately degrade to
+      empty say so by name (`tasksOrEmpty`).
+  - **The other half of the Cockpit's app toggle had no guard** (`f35b943`, #5). `floatApp`
+      goes through the engine "so the reverse guard, the rate limiter and the two-phase
+      ordering all still apply"; `hideFloatingApp` moved the window and grew the panel to the
+      full display past all three. Now a preflight refusal ahead of `cancelPending()`, and
+      the panel records itself hidden only once the engine agreed. Same commit: the companion
+      is filtered out of its own rail.
+  - **Bounded ingestion for the exported probe** (`1f99ade`, #6). `BroadcastProbe` must be
+      EXPORTED to hear the vendor at all, and dumps whatever it is sent. The walk had no
+      limit on depth, count or size, so one broadcast near the Binder ceiling could expand
+      into megabytes of text inside `onReceive` with 2000 events retained. Three axes now,
+      all far above any real vendor payload, and a truncated capture says so.
+  - **The bulk `getprop` timeout bounded nothing** (`7147351`). `waitFor(timeout)` sat in a
+      `finally` around the read loop, so it could only run once the child closed stdout —
+      the one thing a wedged child never does. `probe()` runs this from the constructor on
+      the main thread, on a unit whose watchdog wipes to recovery at 80 s. The read moved to
+      a throwaway thread with the deadline on the caller.
+  - **Simulated telemetry was treated as evidence** (`d138f76`). `CarState.simulated` was
+      read in exactly one place, a banner. A fabricated ACC OFF→ON edge switched on a real
+      Wi-Fi hotspot (`restoreHotspotIfEnabled` consults no guard), and the simulator's
+      11-in-90-seconds reverse phase blocked the user's own taps. The guards and the recovery
+      coordinator now refuse it.
+  - **The split slider lost a percent per visit** (`bffc63c`). `(0.65f - 0.25f) * 100` is
+      39.999996, truncated to step 39 — so the settings showed "64 / 36" for a stored 0.65 and
+      releasing the slider wrote 0.64 back.
+  - **The release pinned a subject line, not a certificate** (`3d0d61c`). `grep CN=Android`
+      passes for any self-signed key with that subject; a wrong keystore secret would have
+      published an APK with none of the privileges the release claims. Now the full SHA-256,
+      verified against the local key and a real signed build.
 - [x] **Code audit — critical and high-priority findings** — *fixed offline 2026-08-20; **all
       five want on-car confirmation**, see On-car checklist.* An external review of the app,
       docs and deployment tooling. What it found and what was done:
