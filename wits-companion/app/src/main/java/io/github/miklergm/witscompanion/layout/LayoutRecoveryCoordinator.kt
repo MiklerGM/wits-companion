@@ -56,6 +56,11 @@ class LayoutRecoveryCoordinator(
         if (state.simulated) {
             if (!announcedSimulation) {
                 announcedSimulation = true
+                // Work queued before simulation started would still fire, on the last *real*
+                // state — an automatic restore that was authorised by telemetry the user has
+                // since replaced with a fabrication. Entering simulation is a boundary, so
+                // clear what is in flight rather than letting it land during it.
+                engine.cancelPending()
                 logger?.log("layout", "auto_restore_skipped", result = "simulation")
             }
             return

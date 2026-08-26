@@ -33,12 +33,14 @@ class CarStateSimulator(
 
     fun start() {
         if (thread != null) return
+        running = true
         val t = HandlerThread("wits-simulator").also { it.start() }
         thread = t
         handler = Handler(t.looper).also { it.post(loop) }
     }
 
     fun stop() {
+        running = false
         handler?.removeCallbacksAndMessages(null)
         thread?.quitSafely()
         thread = null
@@ -70,10 +72,23 @@ class CarStateSimulator(
         return events.size
     }
 
+    /**
+     * Fences [onState] against a callback that was already running when [stop] was called.
+     *
+     * `quitSafely()` lets the message the looper is currently processing finish, so a tick that
+     * had already begun would publish a simulated snapshot *after* the repository had reset to
+     * real data — putting fabricated values back into a state the caller believes is live.
+     */
+    @Volatile
+    private var running = false
+
     private val loop = object : Runnable {
         override fun run() {
+            if (!running) return
             tick++
-            onState(if (replay != null) nextReplayState() else nextSyntheticState())
+            val next = if (replay != null) nextReplayState() else nextSyntheticState()
+            if (!running) return
+            onState(next)
             handler?.postDelayed(this, TICK_MS)
         }
     }
