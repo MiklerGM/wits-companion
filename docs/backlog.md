@@ -159,6 +159,14 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       switched on. Turning it off should leave the real state reading correctly.
   - **The rail has no Cockpit tile** (only reachable once the NaviApp slot points at us, so
       really a check for later).
+  - **The Debug screen still prints a root-task count, not `UNREADABLE (decode)`.** Task
+      fields are no longer defaulted when they fail to decode, so a schema difference on this
+      ROM now announces itself instead of presenting as a non-freeform invisible task. These
+      fields have read cleanly for weeks, so this should stay silent — but it is the one
+      change that could newly disable verification, and it is visible in one glance.
+  - **A restore after a `getprop` failure does nothing rather than something wrong.** Hard to
+      provoke deliberately; watch for `carstate/poll_skipped` in the log, which should be
+      absent on this unit because it reads properties in-process.
   - **The layout refactor changed no behaviour** — the riskiest thing in the batch, since
       `apply()` was restructured around `LayoutPlanner`. The things to watch, in order:
     - **A tiled preset still lands as two tiles** with the same stagger; watch for one tile
@@ -362,6 +370,38 @@ Things doable now, without the car.
       vertical, Exit (reset) pinned bottom; no more ScrollView/footer. Verified structurally on
       the emulator (clipped there by the freeform cascade). **Eyeball on the car** — see On-car
       checklist. Still to do: the "Cockpit" name check (§ UI).
+- [x] **Third review — three high-priority defects, two of them mine from the same day** —
+      *fixed offline 2026-08-26, after the batch below and before any of it was published.*
+      A review of the eleven-commit batch. What it found:
+  - **A failed `getprop` kept stale safety evidence fresh** (`b08fd0c`). The sharpest one, and
+      a correction to `7147351`, whose commit message asserted the opposite of what the code
+      did. Retaining the cache on a failed dump looked conservative; the poll loop then read
+      that cache and stamped it with the current time, so one successful `reverse=0` stayed
+      control-grade for as long as `getprop` kept failing — the exact state the freshness rule
+      exists for. Typed refresh result, reduce only real readings, empty the cache on failure,
+      and require a zero exit.
+  - **The hide toggle's panel raise outlived its own check** (`801df19`). `f35b943` added the
+      preflight and stopped; the raise lands 250 ms later and the camera can come up inside
+      that window. The early-abort path could not help because it asked `pendingRetries > 0`,
+      which `cancelPending()` had just zeroed. Fire-time guard plus an honest "is anything
+      queued" flag, with a paused-looper race test confirmed to fail against the old code.
+  - **An undecodable task looked like a real, wrong one** (`532729d`). `f75fe7a` typed the
+      outer failure and left `readSnapshot` defaulting mode to FULLSCREEN, visible to false and
+      bounds to empty — so a schema failure presented as a non-freeform invisible task, which
+      the verifier re-applies over and `place()` removes. No defaults now, and one bad decode
+      makes the whole reading unavailable.
+  - **Retries could precede the launch they repair** (`801df19`). Preparation time — parking,
+      the anchor settle — shifted initial placement but not retries or verification. One
+      anchored window with one stale window: retry at 1200 ms, launch at 1300 ms. Pre-existing;
+      the refactor is what gave it a single `base` to thread through.
+  - **The probe's limits did not bound the process** (`1039018`). The depth gate covered only
+      `Bundle`, not object arrays or lists; the recorder's actor queue was unbounded; and
+      `CatalogDelta` retained every sender-chosen key for the session outside the ring.
+  - **The split slider ignored every input that is not a finger** (`6d7ba35`). Persisted in
+      `onStopTrackingTouch`, which never fires for the rotary controller this unit has.
+  - **Simulation was not a transaction boundary** (`97933c0`), and two doc claims had stopped
+      being true (`c0fd339`).
+
 - [x] **Second audit — the remaining findings, plus four smaller ones** — *fixed offline
       2026-08-26; **none of it has been driven with yet**.* Findings #4, #5 and #6 of the
       second review, which had been carried in conversation rather than written down, and the
