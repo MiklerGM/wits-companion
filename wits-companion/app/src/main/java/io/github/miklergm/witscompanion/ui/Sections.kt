@@ -204,7 +204,9 @@ class DashboardSection(private val app: WitsCompanionApp) : MainActivity.Section
         val tileWidth = activity.dp(360)
         repo.allPresets().filter { it.windows.size >= 2 && it.kind == PresetKind.TILED }.forEach { preset ->
             val installed = preset.windows.all { app.windowController.isLaunchable(it.packageName) }
-            val ratio = preset.splitFraction()?.let { "${(it * 100).toInt()}/${100 - (it * 100).toInt()}" }
+            val ratio = preset.splitFraction()
+            ?.let { LayoutPreset.splitPercent(it) }
+            ?.let { "$it/${100 - it}" }
             val card = activity.launchTile(
                 title = tileTitle(preset),
                 subtitle = if (!installed) "not installed" else ratio,
@@ -440,7 +442,9 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
     /** A saved layout as a card: icons + title + ratio, tap to apply, Delete if custom. */
     private fun presetCard(activity: MainActivity, preset: LayoutPreset): View {
         val installed = preset.windows.all { app.windowController.isLaunchable(it.packageName) }
-        val ratio = preset.splitFraction()?.let { "${(it * 100).toInt()}/${100 - (it * 100).toInt()}" }
+        val ratio = preset.splitFraction()
+            ?.let { LayoutPreset.splitPercent(it) }
+            ?.let { "$it/${100 - it}" }
         val title = preset.windows.sortedBy { it.bounds.left }.joinToString("  +  ") {
             if (it.packageName == WitsPackages.SELF) "Panel" else app.appCatalog.labelFor(it.packageName)
         }
@@ -466,7 +470,7 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
 
     private fun updateGeometryLabel(split: Float) {
         if (!::geometryLabel.isInitialized) return
-        val left = (split * 100).toInt()
+        val left = LayoutPreset.splitPercent(split)
         val swapped = app.layoutRepository.swapped
         geometryLabel.text = if (swapped) {
             "${100 - left} / $left   (primary app on the right)"
@@ -504,15 +508,13 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
     private fun fmt(v: Float) = String.format("%.2f", v)
 
     private companion object {
-        /** One step per percent between MIN_SPLIT and MAX_SPLIT. */
-        val SPLIT_STEPS =
-            ((LayoutPreset.MAX_SPLIT - LayoutPreset.MIN_SPLIT) * 100).toInt()
+        // The scale itself lives on LayoutPreset, where it can be tested: truncating instead of
+        // rounding here cost a percent every time the settings were opened.
+        val SPLIT_STEPS = LayoutPreset.SPLIT_STEPS
 
-        fun progressToSplit(progress: Int): Float =
-            LayoutPreset.MIN_SPLIT + progress / 100f
+        fun progressToSplit(progress: Int): Float = LayoutPreset.progressToSplit(progress)
 
-        fun splitToProgress(split: Float): Int =
-            ((split - LayoutPreset.MIN_SPLIT) * 100).toInt().coerceIn(0, SPLIT_STEPS)
+        fun splitToProgress(split: Float): Int = LayoutPreset.splitToProgress(split)
     }
 }
 

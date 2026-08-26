@@ -5,6 +5,7 @@ import io.github.miklergm.witscompanion.wits.WitsPackages
 import io.github.miklergm.witscompanion.wits.WitsWindowMode
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.math.roundToInt
 
 /**
  * Resolution-independent bounds, 0.0 .. 1.0 of the usable display area.
@@ -233,6 +234,27 @@ data class LayoutPreset(
         const val DEFAULT_SPLIT = 0.65f
         const val MIN_SPLIT = 0.25f
         const val MAX_SPLIT = 0.80f
+
+        /**
+         * The split slider's whole-percent scale, one step per percent from [MIN_SPLIT].
+         *
+         * Here rather than beside the SeekBar so it can be tested, because it was wrong in a
+         * way that could not be seen from the widget. `(0.65f - 0.25f) * 100` is 39.999996 in
+         * float, and truncating that put the default split on step 39 — so opening the layout
+         * settings showed "64 / 36" for a stored 0.65, and touching the slider at all wrote
+         * 0.64 back. A silent percent lost per visit. Rounding is the whole fix; it is only
+         * worth a named function because the truncation was invisible until it round-tripped.
+         */
+        val SPLIT_STEPS = ((MAX_SPLIT - MIN_SPLIT) * 100).roundToInt()
+
+        fun splitToProgress(split: Float): Int =
+            ((split - MIN_SPLIT) * 100).roundToInt().coerceIn(0, SPLIT_STEPS)
+
+        fun progressToSplit(progress: Int): Float =
+            MIN_SPLIT + progress.coerceIn(0, SPLIT_STEPS) / 100f
+
+        /** A split as the whole percent the UI shows for it. */
+        fun splitPercent(split: Float): Int = (split * 100).roundToInt()
 
         /** How far from the left edge still counts as flush against it. */
         const val EDGE_TOLERANCE = 0.01f

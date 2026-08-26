@@ -579,4 +579,53 @@ class PresetKindAndCustomisationTest {
         )
         assertEquals(LayoutPreset.MAX_ANCHOR_RESERVED, p.anchorReservedLeftFraction(), 0.001f)
     }
+
+    // ------------------------------------------------------- the split scale
+
+    /**
+     * The slider round-trip, which used to lose a percent per visit.
+     *
+     * `(0.65f - 0.25f) * 100` is 39.999996 in float, so truncating put the default split on
+     * step 39. Opening the layout settings therefore showed "64 / 36" for a stored 0.65, and
+     * releasing the slider without moving it wrote 0.64 back — a percent gone each time, and
+     * nothing on screen to suggest the widget rather than the setting was at fault.
+     */
+    @Test
+    fun `the default split survives the slider round trip`() {
+        val step = LayoutPreset.splitToProgress(LayoutPreset.DEFAULT_SPLIT)
+
+        assertEquals(40, step)
+        assertEquals(
+            65,
+            LayoutPreset.splitPercent(LayoutPreset.progressToSplit(step)),
+        )
+    }
+
+    @Test
+    fun `every whole percent in range round trips to itself`() {
+        for (step in 0..LayoutPreset.SPLIT_STEPS) {
+            val split = LayoutPreset.progressToSplit(step)
+            assertEquals(
+                "step $step -> $split -> back",
+                step,
+                LayoutPreset.splitToProgress(split),
+            )
+        }
+    }
+
+    @Test
+    fun `the scale spans the allowed range and clamps outside it`() {
+        assertEquals(55, LayoutPreset.SPLIT_STEPS)
+        assertEquals(LayoutPreset.MIN_SPLIT, LayoutPreset.progressToSplit(0))
+        assertEquals(LayoutPreset.MAX_SPLIT, LayoutPreset.progressToSplit(LayoutPreset.SPLIT_STEPS), 0.0001f)
+        assertEquals(0, LayoutPreset.splitToProgress(0.10f))
+        assertEquals(LayoutPreset.SPLIT_STEPS, LayoutPreset.splitToProgress(0.99f))
+    }
+
+    @Test
+    fun `split percent rounds rather than truncating`() {
+        assertEquals(65, LayoutPreset.splitPercent(0.65f))
+        assertEquals(64, LayoutPreset.splitPercent(0.6449f))
+        assertEquals(50, LayoutPreset.splitPercent(0.5f))
+    }
 }
