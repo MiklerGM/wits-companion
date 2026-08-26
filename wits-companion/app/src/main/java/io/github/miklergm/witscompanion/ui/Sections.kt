@@ -390,10 +390,32 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
             max = SPLIT_STEPS
             progress = splitToProgress(repo.split)
             setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: android.widget.SeekBar, p: Int, fromUser: Boolean) =
-                    updateGeometryLabel(progressToSplit(p))
-                override fun onStartTrackingTouch(sb: android.widget.SeekBar) = Unit
+                /**
+                 * Whether a touch drag is in progress.
+                 *
+                 * The split used to be persisted in `onStopTrackingTouch` alone, which only ever
+                 * fires for touch. A rotary controller — which this head unit has — a D-pad, a
+                 * keyboard or an accessibility service all move the bar through
+                 * `onProgressChanged` and never end a touch, so the label followed the user and
+                 * the setting silently did not. Apply then used the old ratio.
+                 *
+                 * A discrete change is written as it happens; a drag is written once at the end,
+                 * so a swipe across the bar is one preference write rather than fifty.
+                 */
+                private var dragging = false
+
+                override fun onStartTrackingTouch(sb: android.widget.SeekBar) {
+                    dragging = true
+                }
+
+                override fun onProgressChanged(sb: android.widget.SeekBar, p: Int, fromUser: Boolean) {
+                    val split = progressToSplit(p)
+                    updateGeometryLabel(split)
+                    if (fromUser && !dragging) repo.split = split
+                }
+
                 override fun onStopTrackingTouch(sb: android.widget.SeekBar) {
+                    dragging = false
                     repo.split = progressToSplit(sb.progress)
                 }
             })
