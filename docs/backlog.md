@@ -141,8 +141,16 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
 - [ ] **One-line confirmations:** the emulator cascade is absent on the car (§ Emulator-only);
       `SensorManager` has no `TYPE_LIGHT` (§ Brightness).
 
-- [ ] **Verify the 2026-08-26 offline batch on the vehicle** — *nothing in it has been driven
-      with; it should not be tagged until it has.* Most of it is invisible when it works, so
+- [ ] **Verify the 2026-08-26 offline batch on the vehicle** — *deployed and partly confirmed
+      on-car 2026-08-31; released as v0.5.0 on what was confirmed.* Confirmed: `root tasks : 6`
+      (the decode change is clean — this was the riskiest item, and the one that could have
+      disabled verification outright), `property strategy : REFLECTION` so the bulk `getprop`
+      path is not exercised on this unit at all, `window path : PRIVILEGED`, the split slider
+      reading the ratio it stores, and **anchored Maps → tiled Maps+Chrome leaving no panel over
+      the tiles** — the cleanup written in August and unreachable until `bbdd996`, working on the
+      vehicle for the first time. Still unverified: the rotary controller against the slider,
+      hide/show via the rail tile, a route surviving an ignition cycle, Exit reaching the vendor
+      launcher, and simulation moving nothing. Most of it is invisible when it works, so
       the checks are mostly "nothing got worse":
   - **The split slider reads 65 / 35** on opening the layout settings, and still does after
       opening it three times without touching the slider. This is the one with a visible
@@ -159,6 +167,13 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       switched on. Turning it off should leave the real state reading correctly.
   - **The rail has no Cockpit tile** (only reachable once the NaviApp slot points at us, so
       really a check for later).
+  - **Split changes take a beat to propagate** — *observed and accepted 2026-08-31.* Changing
+      the ratio and opening Settings showed the config tile at the new split while the panel
+      still had the old one; switching to Maps and back settled it within about a second. The
+      panel resizes its own task from `cockpitPanelBounds` while the engine places the tile from
+      the plan, so the two are read at different moments — the geometry agrees, the timing lags.
+      Not worth chasing: it converges on its own and only shows if you change the split and
+      switch tiles immediately.
   - **The split slider responds to the rotary controller.** Turn it without touching the
       screen, leave the settings, come back: the ratio should have stuck. This is the input
       path that never worked — persistence hung off `onStopTrackingTouch`, which only touch
@@ -188,6 +203,19 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       panel is the Cockpit and comes up either way, so it reports one tile rather than two.
       That asymmetry is the reason the old code refused twice, the second time after it had
       already started tearing the previous layout down.
+- [ ] **A tiled layout has no way back into the app** — *`[RUNTIME]` 2026-08-31, and it is a
+      design gap rather than a regression.* A tiled preset carries no companion window by
+      design, so once it is applied there is no gear and no rail on screen. Reopening the app
+      from the launcher does not help either: `MainActivity.onResume` calls
+      `onActivityResumed`, which re-applies the layout and then `yieldToCockpit()` pushes the
+      config straight to the back. The only ways out are the vendor Home button and opening the
+      app **twice within `DEBOUNCE_MS` (3 s)**, where the second attempt is debounced, returns
+      false, and the config stays up. That is a trick, not an answer.
+  - Likely fix: a standalone open should not yield when the layout it just restored contains
+      **no companion window** — there is nothing for the config to be peeking behind. `yieldToCockpit`
+      already guards on `isCockpitTile`; the missing condition is "the restored preset has a panel
+      at all". Cheap, and testable against `LayoutPlan.anchored`.
+  - Until then the recovery is in this entry, which is the point of writing it down.
 - [ ] **Verify the audit fixes on the vehicle** — *deployed + partly confirmed on-car
       2026-08-20.* Build installed 09:46:57; capture in `capture-20260820-postaudit/`.
   - [x] **Reverse freshness — the 5 s window is safe.** The worry was that `wits.backcar`

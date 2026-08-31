@@ -13,8 +13,8 @@ android {
         // on ordinary phones/tablets and emulators for Simulation mode.
         minSdk = 29
         targetSdk = 34
-        versionCode = 3
-        versionName = "0.4.0"
+        versionCode = 4
+        versionName = "0.5.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         resourceConfigurations += listOf("en", "ru")
