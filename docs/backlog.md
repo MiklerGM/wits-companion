@@ -181,6 +181,10 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       One turn of the knob is the whole check.
   - **Anchored Maps → tiled Maps+Chrome leaves no panel covering the tiles.** The cleanup
       branch for it was unreachable until now, so this has never actually worked on the car.
+      *Confirmed working 2026-08-31.*
+  - **Opening the app while a tiled layout is the last applied one shows the config**, not the
+      tiles — and the Reset card on that screen closes them. Previously the config went straight
+      behind the tiles and the only way out was the vendor Home button.
   - **The Debug screen still prints a root-task count, not `UNREADABLE (decode)`.** Task
       fields are no longer defaulted when they fail to decode, so a schema difference on this
       ROM now announces itself instead of presenting as a non-freeform invisible task. These
@@ -203,19 +207,33 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       panel is the Cockpit and comes up either way, so it reports one tile rather than two.
       That asymmetry is the reason the old code refused twice, the second time after it had
       already started tearing the previous layout down.
-- [ ] **A tiled layout has no way back into the app** — *`[RUNTIME]` 2026-08-31, and it is a
-      design gap rather than a regression.* A tiled preset carries no companion window by
+- [x] **A tiled layout has no way back into the app** — *`[RUNTIME]` 2026-08-31, fixed offline
+      the same day; **wants on-car confirmation**.* A tiled preset carries no companion window by
       design, so once it is applied there is no gear and no rail on screen. Reopening the app
       from the launcher does not help either: `MainActivity.onResume` calls
       `onActivityResumed`, which re-applies the layout and then `yieldToCockpit()` pushes the
       config straight to the back. The only ways out are the vendor Home button and opening the
       app **twice within `DEBOUNCE_MS` (3 s)**, where the second attempt is debounced, returns
       false, and the config stays up. That is a trick, not an answer.
-  - Likely fix: a standalone open should not yield when the layout it just restored contains
-      **no companion window** — there is nothing for the config to be peeking behind. `yieldToCockpit`
-      already guards on `isCockpitTile`; the missing condition is "the restored preset has a panel
-      at all". Cheap, and testable against `LayoutPlan.anchored`.
-  - Until then the recovery is in this entry, which is the point of writing it down.
+  - **The fix first written here was wrong.** It proposed not *yielding* when the restored
+      layout has no companion window. That would not have helped: a freeform task draws over a
+      fullscreen one on this ROM, so re-applying the tiles buries the fullscreen config whether
+      or not it is moved to the back. Declining to yield only hides it more slowly.
+  - **What was done instead:** the re-apply itself is skipped. `LayoutPreset.showsCompanion()`
+      asks whether applying a preset leaves anything of ours on screen — true for anchored, where
+      the planner adds the panel, and for a tiled preset the user built around the companion —
+      and `onActivityResumed` declines to restore when it is false, logging
+      `would_leave_no_way_back`. The config then stays up, and its landing screen already carries
+      a **Reset** card ("close the tiles, show the launcher") plus the preset list, so both
+      recovery and re-applying are one tap.
+  - Only the resume trigger is restricted. ACC-on, boot and source restores of a tiled layout
+      are what the user asked for, and nobody is reaching for the app at those moments.
+  - The cost: with "open last layout" on and a tiled layout last applied, tapping the icon shows
+      the config rather than the tiles. One extra tap, and the only version in which the app is
+      always reachable.
+  - The old recovery — opening the app twice inside `DEBOUNCE_MS` (3 s), where the second attempt
+      is debounced and the config survives by accident — is kept here because it still works and
+      is worth knowing if this ever regresses.
 - [ ] **Verify the audit fixes on the vehicle** — *deployed + partly confirmed on-car
       2026-08-20.* Build installed 09:46:57; capture in `capture-20260820-postaudit/`.
   - [x] **Reverse freshness — the 5 s window is safe.** The worry was that `wits.backcar`

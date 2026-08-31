@@ -209,6 +209,43 @@ class LayoutGeometryTest {
             assertEquals(a.bounds.right, b.bounds.right, 0.0001f)
         }
     }
+    // ------------------------------------------------------ a way back into the app
+
+    /**
+     * Whether applying a preset leaves anything of ours on screen.
+     *
+     * A tiled layout puts two foreign apps on the display and nothing else — no panel, no rail,
+     * no gear. That is what a tiled layout *is*; it becomes a trap only when something
+     * re-applies it automatically while the user is trying to reach the app, which is what
+     * opening the companion from the launcher used to do. `[RUNTIME]` 2026-08-31.
+     */
+    @Test
+    fun `an anchored preset always leaves a way back`() {
+        // The panel is not one of its windows — the planner adds it — so this cannot be
+        // answered by looking at the window list alone.
+        val anchored = DefaultPresets.anchoredFor(WitsPackages.MAPS, "Maps")
+
+        assertTrue(anchored.windows.none { it.packageName == WitsPackages.SELF })
+        assertTrue(anchored.showsCompanion())
+    }
+
+    @Test
+    fun `a tiled preset of two foreign apps does not`() {
+        assertFalse(
+            DefaultPresets.tiledFor(WitsPackages.MAPS, WitsPackages.CHROME, "Maps", "Chrome")
+                .showsCompanion(),
+        )
+    }
+
+    @Test
+    fun `a tiled preset that includes the companion does`() {
+        // The user can build one; it is a perfectly good layout and needs no special case.
+        assertTrue(
+            DefaultPresets.tiledFor(WitsPackages.SELF, WitsPackages.MAPS, "Cockpit", "Maps")
+                .showsCompanion(),
+        )
+    }
+
     // ------------------------------------------------- the two tiles, together
 
     /**

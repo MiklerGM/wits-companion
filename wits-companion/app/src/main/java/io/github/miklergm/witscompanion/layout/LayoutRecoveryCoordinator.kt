@@ -116,10 +116,35 @@ class LayoutRecoveryCoordinator(
      * Called from MainActivity.onResume. Returns true if it actually brought a layout / the Cockpit
      * up, so a standalone MainActivity can yield ([android.app.Activity.moveTaskToBack]) instead of
      * leaving its full-screen config peeking behind the tiles.
+     *
+     * **Never restores a layout that would leave no way back into the app.** A tiled preset puts
+     * two foreign apps on the display and nothing of ours — no panel, no rail, no gear. Opening
+     * the companion from the launcher was then self-defeating: this re-applied that layout and
+     * MainActivity yielded to it, so the config the user had just asked for went straight behind
+     * the tiles. The only escapes were the vendor Home button and opening the app twice inside
+     * [DEBOUNCE_MS], where the second attempt is debounced and the config survives by accident.
+     * `[RUNTIME]` 2026-08-31, found on the vehicle.
+     *
+     * Declining to yield would not have been enough, which was the first thing I tried on paper:
+     * a freeform task draws over a fullscreen one on this ROM, so re-applying the tiles buries
+     * the config whether or not it is moved to the back. The re-apply itself is the problem.
+     *
+     * Only this trigger is restricted. ACC-on, boot and source restores of a tiled layout are
+     * exactly what the user asked for, and nobody is trying to reach the app at those moments.
      */
     fun onActivityResumed(state: CarState): Boolean {
         if (state.simulated) return false
         if (!repository.restoreOnResume) return false
+
+        val preset = repository.lastAppliedPreset()
+        if (preset != null && !preset.showsCompanion()) {
+            logger?.log(
+                "layout", "auto_restore_skipped",
+                extras = mapOf("preset" to preset.id),
+                result = "would_leave_no_way_back",
+            )
+            return false
+        }
         return attempt("activity_resume", state)
     }
 

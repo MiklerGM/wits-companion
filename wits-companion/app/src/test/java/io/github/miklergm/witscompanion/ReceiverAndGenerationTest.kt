@@ -683,6 +683,34 @@ class ReceiverAndGenerationTest {
         )
     }
 
+    /**
+     * Opening the app must not be the thing that hides it.
+     *
+     * A standalone open re-applied the last layout and then yielded to it. With a tiled layout
+     * that means two foreign apps and nothing of ours on screen, so the config the user had just
+     * asked for went straight behind the tiles — and the only escapes were the vendor Home
+     * button and opening the app twice inside the debounce.
+     */
+    @Test
+    fun `the resume restore is skipped for a layout with no way back`() {
+        val src = sourceOf("layout/LayoutRecoveryCoordinator.kt")
+        val resume = src.substringAfter("fun onActivityResumed(state: CarState): Boolean {")
+            .substringBefore("\n    }")
+
+        assertTrue("the preset has to be consulted", resume.contains("showsCompanion()"))
+        assertTrue(
+            "and the restore skipped before it is attempted",
+            resume.indexOf("showsCompanion()") < resume.indexOf("""attempt("activity_resume""""),
+        )
+        assertTrue("with a reason in the log", resume.contains("would_leave_no_way_back"))
+
+        // The other triggers are deliberately unrestricted: nobody is reaching for the app when
+        // the ignition comes on.
+        val onCarState = src.substringAfter("override fun onCarState(state: CarState) {")
+            .substringBefore("\n    }")
+        assertFalse(onCarState.contains("showsCompanion()"))
+    }
+
     @Test
     fun `the refusal happens before anything is cancelled`() {
         // A refusal that has already torn down in-flight work is not a refusal.

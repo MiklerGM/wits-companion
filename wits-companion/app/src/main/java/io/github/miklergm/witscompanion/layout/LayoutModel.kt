@@ -132,6 +132,22 @@ data class LayoutPreset(
     }
 
     /**
+     * Whether applying this leaves a companion window on screen — and therefore a way back
+     * into the app.
+     *
+     * An anchored preset always does: the panel is not one of its windows, but the planner adds
+     * it. A tiled preset carries only the apps it names, so unless the user built one that
+     * includes the companion itself, applying it puts two foreign apps on the display and
+     * nothing of ours.
+     *
+     * That is a design property, not a defect — a tiled layout is two apps, full stop. It
+     * becomes a trap only when something *automatically* re-applies it while the user is trying
+     * to reach the app; see `LayoutRecoveryCoordinator.onActivityResumed`.
+     */
+    fun showsCompanion(): Boolean =
+        kind == PresetKind.ANCHORED || windows.any { it.packageName == WitsPackages.SELF }
+
+    /**
      * Mirrors every tile horizontally, so a left/right pair swaps sides.
      * `[0.00,0.65]` and `[0.65,1.00]` become `[0.35,1.00]` and `[0.00,0.35]`.
      */
