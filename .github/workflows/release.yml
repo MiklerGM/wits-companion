@@ -88,11 +88,25 @@ jobs:
           # Wits app (docs/architecture.md §5). It is the public AOSP platform test key, so
           # this is a published constant, not a secret.
           expected=c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8
-          actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' /tmp/certs.txt | tr 'A-Z' 'a-z')
+
+          # Match the digest wherever it appears, not at a fixed prefix. apksigner labels these
+          # lines differently across build-tools versions — "Signer #1 certificate SHA-256
+          # digest:" on one, "V3.0 Signer: certificate SHA-256 digest:" on another — and this
+          # step deliberately uses whichever version the runner image happens to carry. Anchoring
+          # on one of them failed the v0.5.0 release against a correctly signed APK.
+          #
+          # Every signer must match, not merely the first: an APK carrying a second signing
+          # scheme under a different certificate is exactly the thing worth refusing.
+          actual=$(sed -n 's/.*certificate SHA-256 digest: *//p' /tmp/certs.txt \
+            | tr 'A-Z' 'a-z' | tr -d '\r' | sort -u)
+          if [ -z "$actual" ]; then
+            echo "!! no certificate digest in the apksigner output — cannot verify the signature"
+            exit 1
+          fi
           if [ "$actual" != "$expected" ]; then
             echo "!! wrong signing certificate"
             echo "   expected $expected"
-            echo "   got      ${actual:-<none found>}"
+            echo "   got      $actual"
             echo "   The PLATFORM_KEYSTORE secret is not the key this ROM trusts."
             exit 1
           fi
