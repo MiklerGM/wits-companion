@@ -7,10 +7,10 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
-import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import com.google.android.material.switchmaterial.SwitchMaterial
 import io.github.miklergm.witscompanion.app.WitsCompanionApp
 import io.github.miklergm.witscompanion.carstate.CarState
 import io.github.miklergm.witscompanion.carstate.PropertyReader
@@ -38,35 +38,106 @@ private fun Context.column(): LinearLayout = LinearLayout(this).apply {
 
 private fun Context.dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
+/**
+ * Sizes for the configuration screens.
+ *
+ * These are read at arm's length in a car, often while the vehicle is moving, and the screens
+ * started life as a debugging surface: 14sp body text, default-height buttons and bare
+ * checkboxes. Everything below is sized for a glance and a thumb rather than a cursor.
+ */
+private object ConfigMetrics {
+    /** Nothing tappable is shorter than this. */
+    const val TOUCH_DP = 56
+
+    /** A settings row carrying a title and a line of explanation. */
+    const val ROW_DP = 72
+    const val BODY_SP = 16f
+    const val MONO_SP = 13f
+    const val HEADING_SP = 20f
+    const val BUTTON_SP = 16f
+    const val SUBTITLE_SP = 13f
+}
+
 private fun Context.heading(text: String) = TextView(this).apply {
     this.text = text
-    textSize = 16f
+    textSize = ConfigMetrics.HEADING_SP
     setTypeface(typeface, Typeface.BOLD)
-    setPadding(0, dp(16), 0, dp(6))
+    setPadding(0, dp(20), 0, dp(8))
 }
 
 private fun Context.body(text: String, mono: Boolean = false) = TextView(this).apply {
     this.text = text
-    textSize = if (mono) 12f else 14f
+    textSize = if (mono) ConfigMetrics.MONO_SP else ConfigMetrics.BODY_SP
     if (mono) typeface = Typeface.MONOSPACE
-    setPadding(0, dp(2), 0, dp(2))
+    setPadding(0, dp(3), 0, dp(3))
 }
 
 private fun Context.button(text: String, onClick: () -> Unit) = Button(this).apply {
     this.text = text
     isAllCaps = false
+    textSize = ConfigMetrics.BUTTON_SP
+    minHeight = dp(ConfigMetrics.TOUCH_DP)
+    minimumHeight = dp(ConfigMetrics.TOUCH_DP)
     setOnClickListener { onClick() }
     layoutParams = LinearLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-    ).apply { topMargin = dp(6) }
+    ).apply { topMargin = dp(8) }
 }
 
-private fun Context.check(text: String, initial: Boolean, onChange: (Boolean) -> Unit) =
-    CheckBox(this).apply {
-        this.text = text
+/**
+ * A settings toggle as a full-width row: what it does, one line of why, and a switch.
+ *
+ * Replaces a bare [CheckBox], whose tappable area was the label's own height and whose box is
+ * a few millimetres across on this display. The whole row toggles, so the target is the width
+ * of the screen and [ConfigMetrics.ROW_DP] tall.
+ *
+ * [subtitle] is not decoration. Several of these decide whether the app moves windows on its
+ * own, and the screen previously offered no way to find out what any individual one did short
+ * of reading a paragraph underneath the group.
+ */
+private fun Context.switchRow(
+    title: String,
+    subtitle: String,
+    initial: Boolean,
+    onChange: (Boolean) -> Unit,
+): View {
+    val toggle = SwitchMaterial(this).apply {
         isChecked = initial
-        setOnCheckedChangeListener { _, v -> onChange(v) }
+        isClickable = false          // the row owns the click
+        isFocusable = false
     }
+    val labels = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        addView(TextView(this@switchRow).apply {
+            text = title
+            textSize = ConfigMetrics.BODY_SP
+        })
+        addView(TextView(this@switchRow).apply {
+            text = subtitle
+            textSize = ConfigMetrics.SUBTITLE_SP
+            setTextColor(attrColor(android.R.attr.textColorSecondary, Color.GRAY))
+            setPadding(0, dp(2), 0, 0)
+        })
+    }
+    return LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        minimumHeight = dp(ConfigMetrics.ROW_DP)
+        setPadding(dp(4), dp(10), dp(4), dp(10))
+        background = roundedRipple(
+            Color.TRANSPARENT, dp(12).toFloat(),
+            attrColor(com.google.android.material.R.attr.colorControlHighlight, Color.LTGRAY),
+        )
+        addView(labels)
+        addView(toggle)
+        isClickable = true
+        setOnClickListener {
+            toggle.isChecked = !toggle.isChecked
+            onChange(toggle.isChecked)
+        }
+    }
+}
 
 private fun Context.scroll(content: View) = ScrollView(this).apply { addView(content) }
 
@@ -386,10 +457,26 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
         // Proportion, inline. Persisted only on release; the label updates live.
         geometryLabel = activity.body("", mono = true).apply { setPadding(0, activity.dp(10), 0, 0) }
         box.addView(geometryLabel)
-        box.addView(android.widget.SeekBar(activity).apply {
+        // The split control: a bar you can drag or turn, flanked by nudge buttons.
+        //
+        // A SeekBar alone is a poor control in a moving car — it wants fine motor precision for
+        // a one-percent change — so ± buttons do the precise part and the bar does the coarse.
+        // The bar is kept because the rotary controller drives it, which is the one input that
+        // works without looking at the screen at all.
+        val slider = android.widget.SeekBar(activity).apply {
             max = SPLIT_STEPS
             progress = splitToProgress(repo.split)
-            LayoutPreset.splitPercent(repo.split).let { contentDescription = "Split $it / ${100 - it}" }
+            minimumHeight = activity.dp(ConfigMetrics.TOUCH_DP)
+            // A thumb big enough to find, and vertical padding so the whole strip is tappable
+            // rather than just the track.
+            thumb = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.OVAL
+                setSize(activity.dp(28), activity.dp(28))
+                setColor(activity.attrColor(com.google.android.material.R.attr.colorPrimary, Color.DKGRAY))
+            }
+            splitTrack = false
+            setPadding(activity.dp(16), activity.dp(14), activity.dp(16), activity.dp(14))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
                 /**
                  * Whether a touch drag is in progress.
@@ -425,7 +512,34 @@ class LayoutsSection(private val app: WitsCompanionApp) : MainActivity.Section {
                     repo.split = progressToSplit(sb.progress)
                 }
             })
-        })
+            LayoutPreset.splitPercent(repo.split).let { contentDescription = "Split $it / ${100 - it}" }
+        }
+
+        val sliderRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            fun step(label: String, by: Int) = Button(activity).apply {
+                text = label
+                textSize = 20f
+                isAllCaps = false
+                minWidth = activity.dp(ConfigMetrics.TOUCH_DP)
+                minimumWidth = activity.dp(ConfigMetrics.TOUCH_DP)
+                minHeight = activity.dp(ConfigMetrics.TOUCH_DP)
+                minimumHeight = activity.dp(ConfigMetrics.TOUCH_DP)
+                contentDescription = if (by < 0) "Narrower" else "Wider"
+                // setProgress drives the bar's listener, so persistence, the label and the
+                // announcement all happen in one place rather than three.
+                setOnClickListener {
+                    slider.progress = (slider.progress + by).coerceIn(0, SPLIT_STEPS)
+                    repo.split = progressToSplit(slider.progress)
+                    updateGeometryLabel(repo.split)
+                }
+            }
+            addView(step("−", -1))
+            addView(slider)
+            addView(step("+", 1))
+        }
+        box.addView(sliderRow)
         swapButton = activity.button("") {
             repo.swapped = !repo.swapped
             updateGeometryLabel(repo.split)
@@ -633,20 +747,25 @@ class SettingsSection(private val app: WitsCompanionApp) : MainActivity.Section 
 
         // ----------------------------------------------------------- autostart
         c.addView(activity.heading("Autostart (opt-in)"))
-        c.addView(activity.check("Auto-start the Cockpit on power-up (ignition / boot)", repo.autostartOnPower) {
-            repo.autostartOnPower = it
-        })
-        c.addView(activity.check("Open the last layout when the app is opened", repo.restoreOnResume) {
-            repo.restoreOnResume = it
-        })
-        c.addView(activity.check("Re-enable the hotspot if it was on before", repo.restoreHotspot) {
-            repo.restoreHotspot = it
-        })
+        c.addView(activity.switchRow(
+            "Start on power-up",
+            "Re-applies the last layout on ignition or a cold boot.",
+            repo.autostartOnPower,
+        ) { repo.autostartOnPower = it })
+        c.addView(activity.switchRow(
+            "Restore when the app is opened",
+            "A tiled layout is skipped, so these settings stay reachable.",
+            repo.restoreOnResume,
+        ) { repo.restoreOnResume = it })
+        c.addView(activity.switchRow(
+            "Bring the hotspot back",
+            "A short stop turns it off. Only ever switches it on, never off.",
+            repo.restoreHotspot,
+        ) { repo.restoreHotspot = it })
         c.addView(activity.body(
-            "On power-up (ignition, or a cold boot) the last layout is re-applied — the Cockpit if " +
-                "that is what you last used. Autostart is refused while reverse is active (the head " +
-                "unit shows the camera itself) and never switches the video source. An active Maps " +
-                "route survives a deep-sleep wake: running apps are repositioned, not relaunched."
+            "Autostart is refused while reverse is active — the head unit shows the camera itself — " +
+                "and never switches the video source. An active Maps route survives a deep-sleep " +
+                "wake: running apps are repositioned, not relaunched."
         ))
 
         // ------------------------------------------------------------- media
@@ -789,8 +908,11 @@ class DebugSection(private val app: WitsCompanionApp) : MainActivity.Section {
         text = activity.body("—", mono = true)
         c.addView(text)
 
-        c.addView(activity.check("Simulation mode (no vendor broadcasts)",
-            app.layoutRepository.simulationEnabled) { on ->
+        c.addView(activity.switchRow(
+            "Simulation mode",
+            "Fabricated vehicle data for testing. No layout is applied and no hotspot switched on.",
+            app.layoutRepository.simulationEnabled,
+        ) { on ->
             app.layoutRepository.simulationEnabled = on
             app.carStateRepository.setSimulationEnabled(on)
             activity.toast(if (on) "Simulation ON" else "Simulation OFF")

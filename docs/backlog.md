@@ -174,6 +174,16 @@ Things whose next step needs the car — verify a fix, or run a probe that only 
       the plan, so the two are read at different moments — the geometry agrees, the timing lags.
       Not worth chasing: it converges on its own and only shows if you change the split and
       switch tiles immediately.
+  - **The reworked settings screens read at arm's length.** Toggles are full-width switch rows
+      with a line of explanation, buttons and the split bar are at least 56dp, body text is 16sp.
+      Eyeball the Settings and Layouts tabs; the thing to judge is whether a toggle can be hit
+      and understood without leaning in.
+  - **The split bar's − / + buttons move it one percent** and the ratio sticks.
+  - **The play button does not move** when a track's like state resolves. Play something with a
+      collection action (Spotify) and something without, and watch whether ⏯ stays put — it used
+      to slide 39dp when the fourth button appeared.
+  - **README screenshots are now stale** — the settings screen and the transport row both
+      changed. Worth regrabbing next time the Cockpit is up: `adb exec-out screencap -p`.
   - **The split slider responds to the rotary controller.** Turn it without touching the
       screen, leave the settings, come back: the ratio should have stuck. This is the input
       path that never worked — persistence hung off `onStopTrackingTouch`, which only touch

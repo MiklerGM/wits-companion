@@ -326,6 +326,12 @@ class DashboardActivity : ComponentActivity() {
             val c = model.state.value.media.collection ?: return@transportButton
             if (!app.mediaRepository.sendCustomAction(c.action)) toast("Player did not accept it")
         }
+        // An empty slot balancing the optional one, so prev/play/next keep the row's centre
+        // whether or not the player offers a collection action. See [TransportMetrics]: without
+        // it the row re-centred over four buttons and play moved 39dp left, so where you reach
+        // for play depended on which app was playing. The slot is also where a second optional
+        // control (shuffle) would go, without moving anything.
+        transport.addView(transportSlot())
         transport.addView(prevButton)
         transport.addView(playPauseButton)
         transport.addView(nextButton)
@@ -762,7 +768,9 @@ class DashboardActivity : ComponentActivity() {
     private fun renderCollection(c: CockpitUiState.CollectionAction?) {
         if (!::collectionButton.isInitialized) return
         if (c == null) {
-            collectionButton.visibility = View.GONE
+            // INVISIBLE, never GONE: the slot has to keep its width, or losing the button
+            // re-centres the row and slides play out from under the thumb.
+            collectionButton.visibility = View.INVISIBLE
             return
         }
         collectionButton.visibility = View.VISIBLE
@@ -1203,12 +1211,20 @@ class DashboardActivity : ComponentActivity() {
             includeFontPadding = false
             textSize = if (emphasised) 24f else 21f
             setTextColor(if (emphasised) Color.WHITE else palette.foreground)
-            val size = if (emphasised) pad(66) else pad(54)
-            layoutParams = LinearLayout.LayoutParams(size, size)
-                .apply { leftMargin = pad(12); rightMargin = pad(12) }
+            val size = pad(if (emphasised) TransportMetrics.EMPHASISED_DP else TransportMetrics.BUTTON_DP)
+            layoutParams = LinearLayout.LayoutParams(size, size).apply {
+                leftMargin = pad(TransportMetrics.MARGIN_DP)
+                rightMargin = pad(TransportMetrics.MARGIN_DP)
+            }
             isClickable = true
             setOnClickListener { onClick() }
         }
+
+    /** An empty flank the width of one optional control. See [TransportMetrics]. */
+    private fun transportSlot() = View(this).apply {
+        layoutParams = LinearLayout.LayoutParams(pad(TransportMetrics.SLOT_DP), 1)
+        isClickable = false
+    }
 
     private fun pad(dp: Int) = (dp * resources.displayMetrics.density).toInt()
 
